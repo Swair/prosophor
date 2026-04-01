@@ -6,8 +6,6 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
-**[快速开始](#-快速开始) • [功能对比](#-相比-claude-code 的优势) • [架构设计](#-架构设计) • [配置指南](#-配置) • [文档](#-文档)**
-
 </div>
 
 ---
