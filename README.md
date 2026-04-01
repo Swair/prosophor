@@ -1,0 +1,560 @@
+# AiCode
+
+<div align="center">
+
+[![C++17](https://img.shields.io/badge/C%2B%2B-17-blue?logo=cplusplus&logoColor=white)](https://en.cppreference.com/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
+
+**[快速开始](#-快速开始) • [功能对比](#-相比-claude-code 的优势) • [架构设计](#-架构设计) • [配置指南](#-配置) • [文档](#-文档)**
+
+</div>
+
+---
+
+## 🎯 项目概述
+
+AiCode 是一个**基于claude code开源代码的，C++ 开发的智能编码助手 CLI 工具**，采用"思考 - 行动 - 观察"闭环的 Agent 架构，通过 MCP 工具集直接操作终端与文件系统，调用 Claude/Qwen/Ollama API 完成自主代码开发与调试。
+
+### 核心定位
+
+| 特性 | 说明 |
+|------|------|
+| **本质** | 基于 C++ 开发的命令行智能体（Agentic CLI） |
+| **运行环境** | C++ 原生编译，无运行时依赖 |
+| **核心能力** | 自主规划、工具调用、环境感知、迭代验证 |
+
+### 架构分层
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ CLI 交互层 → 原生终端输入输出、信号处理（Ctrl+C）             │
+├─────────────────────────────────────────────────────────────┤
+│ 意图解析层 → 指令解析、上下文加载（文件/目录/Git）            │
+├─────────────────────────────────────────────────────────────┤
+│ Agent 调度层 → 理解 → 规划 → 工具调用 → 观察 → 验证 → 迭代    │
+├─────────────────────────────────────────────────────────────┤
+│ 工具执行层 → 文件系统、Shell 命令、网络搜索 (30+ 工具)         │
+├─────────────────────────────────────────────────────────────┤
+│ 环境反馈层 → 捕获命令输出、错误、状态更新                     │
+├─────────────────────────────────────────────────────────────┤
+│ 输出验证层 → 代码校验、测试执行、任务终止                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🆚 相比 Claude Code 的优势
+
+| 特性 | AiCode | Claude Code |
+|:-----|:------:|:------------:|
+| **多 LLM 支持** | ✅ Anthropic、Qwen、Ollama | ❌ 仅 Claude |
+| **本地部署** | ✅ 完全本地运行，数据可控 | ❌ 依赖云端 API |
+| **配置文件** | ✅ JSON 配置，灵活定制 | ❌ 配置选项有限 |
+| **权限管理** | ✅ 细粒度规则（工具/命令/路径） | ❌ 基础权限控制 |
+| **技能系统** | ✅ SKILL.md 可扩展技能 | ❌ 固定功能 |
+| **MCP 协议** | ✅ 完整支持 | ✅ 支持 |
+| **LSP 集成** | ✅ 多语言服务器支持 | ⚠️ 有限支持 |
+| **会话管理** | ✅ 保存/加载/恢复 | ⚠️ 基础支持 |
+| **计划模式** | ✅ 结构化任务跟踪 | ⚠️ 基础支持 |
+| **上下文压缩** | ✅ 三种策略可选 | ⚠️ 固定策略 |
+| **开源许可** | ✅ Apache 2.0 | ❌ 专有许可 |
+| **运行时** | ✅ C++ 高性能 | ⚠️ Node.js |
+
+### 核心优势详解
+
+#### 1. 多 LLM 提供者支持 🔄
+AiCode 不绑定单一模型，支持：
+- **Anthropic (Claude)** - 通过官方 API 或兼容接口
+- **Qwen (通义千问)** - 阿里云 DashScope
+- **Ollama** - 本地模型部署
+- 易于扩展新的提供者（继承 `LLMProvider` 接口即可）
+
+#### 2. 完全本地可控 🔒
+- 配置文件存储在 `~/.aicode/config.json`，完全可控
+- 支持自定义 API 端点（包括本地代理）
+- 可配置路径白名单/黑名单，精细控制文件访问
+- 可配置命令白名单/黑名单，精细控制命令执行
+
+#### 3. 灵活的权限系统 ⚖️
+```json
+{
+  "permission_rules": [
+    {
+      "tool_name": "bash",
+      "command_pattern": "git *",
+      "default_level": "allow"
+    },
+    {
+      "tool_name": "read_file",
+      "path_pattern": "/etc/*",
+      "default_level": "deny"
+    }
+  ]
+}
+```
+
+#### 4. 可扩展技能系统 🧩
+通过 `SKILL.md` 文件定义技能，支持：
+- 环境门控（二进制、环境变量、OS 限制）
+- 自动安装依赖
+- 自定义命令注册
+
+#### 5. 高性能 C++ 实现 ⚡
+- 原生编译，无 Node.js 运行时依赖
+- 更低的内存占用
+- 更快的启动速度
+
+#### 6. 完善的 LSP 支持 💻
+- 多语言服务器并发管理
+- 诊断、跳转定义、查找引用、悬停信息
+- 文档符号、工作区符号、格式化
+
+#### 7. 开源许可 📄
+- Apache License 2.0 - 可商用、可修改、可分发
+- 社区驱动，透明开发
+
+---
+
+## ✨ 核心特性
+
+### 🏃 REACT 范式 - "思考 - 行动 - 观察"闭环
+
+```
+理解 → 规划 → 工具调用 → 观察 → 验证 → 迭代/终止
+```
+
+AiCode 采用 **REACT（Reason + Act）范式**，自主生成任务序列（如：读文件 → 改代码 → 运行测试 → 修复报错），支持多轮迭代。
+
+### 🛠️ 工具系统 - 30+ 内置工具
+
+| 类别 | 工具 |
+|------|------|
+| **文件操作** | `read_file`、`write_file`、`edit_file` |
+| **Shell 执行** | `exec`、`bash` |
+| **搜索** | `glob`、`grep` |
+| **Git** | `git_status`、`git_diff`、`git_log`、`git_commit`、`git_add`、`git_branch` |
+| **LSP** | `lsp_diagnostics`、`lsp_go_to_definition`、`lsp_find_references`、`lsp_get_hover` |
+| **Web** | `web_search`、`web_fetch` |
+| **交互** | `ask_user_question`、`todo_write` |
+| **MCP** | `mcp_list_tools`、`mcp_call_tool`、`mcp_read_resource` |
+| **Agent** | `agent`、`plan_mode` |
+
+### 🧠 技能系统
+
+技能通过 `SKILL.md` 文件定义，支持环境门控和自动安装：
+
+```markdown
+---
+name: git
+description: Git version control operations
+required_bins: [git]
+required_envs: []
+any_bins: []
+config_files: []
+os_restrict: []
+always: false
+emoji: 🦆
+---
+
+# Git Skill
+
+You are a git expert. Help users with git operations...
+```
+
+### 🔐 权限管理
+
+三种权限级别：
+- **Allow** - 自动批准
+- **Deny** - 自动拒绝
+- **Ask** - 需要用户确认
+
+规则匹配支持工具名、命令模式、路径模式，失败回退逻辑（3 次拒绝后自动批准）。
+
+### 💾 上下文压缩
+
+三种压缩策略：
+- **Summary** - 生成旧消息的 AI 摘要
+- **Truncate** - 仅保留最近 N 条消息
+- **Hybrid** - 摘要 + 保留最近消息（默认）
+
+### 🧩 MCP 协议
+
+支持 MCP (Model Context Protocol) 服务器集成：
+- stdio 传输
+- SSE/WebSocket 传输
+- 工具发现和执行
+- 资源读取
+
+---
+
+## 🚀 快速开始
+
+### 环境要求
+
+| 组件 | 要求 | 说明 |
+|------|------|------|
+| 编译器 | C++17 或更高版本 | 支持现代 C++ 特性 |
+| CMake | 3.20+ | 构建系统 |
+| 依赖 | nlohmann/json、spdlog、libcurl | 自动下载 |
+
+### 构建
+
+```bash
+# 克隆仓库
+git clone https://github.com/your-repo/aicode.git
+cd aicode
+
+# 创建构建目录
+mkdir -p build && cd build
+
+# 配置
+cmake .. -DCMAKE_BUILD_TYPE=Release
+
+# 编译
+make -j8
+
+# 安装
+make install
+```
+
+### 运行
+
+```bash
+# 使用 Makefile
+make run
+
+# 或直接运行
+./build/install/bin/aicode
+```
+
+### 配置
+
+首次运行时，配置文件将生成在 `~/.aicode/config.json`：
+
+```json
+{
+  "log_level": "info",
+  "default_provider": "anthropic",
+  "default_agent": "default",
+  
+  "providers": {
+    "anthropic": {
+      "api_key": "YOUR_API_KEY",
+      "base_url": "https://api.anthropic.com",
+      "api_type": "anthropic-messages",
+      "timeout": 30,
+      "agents": {
+        "default": {
+          "model": "claude-sonnet-4-6",
+          "temperature": 0.7,
+          "max_tokens": 8192
+        }
+      }
+    },
+    "qwen": {
+      "api_key": "YOUR_DASHSCOPE_KEY",
+      "base_url": "https://dashscope.aliyuncs.com",
+      "api_type": "openai-completions",
+      "timeout": 60,
+      "agents": {
+        "default": {
+          "model": "qwen-max",
+          "temperature": 0.7,
+          "max_tokens": 8192
+        }
+      }
+    }
+  },
+  
+  "security": {
+    "permission_level": "auto",
+    "allow_local_execute": true
+  },
+  
+  "tools": {
+    "enabled": true,
+    "timeout": 60
+  },
+  
+  "skills": {
+    "path": "~/.aicode/skills",
+    "auto_approve": ["read_file", "grep"]
+  }
+}
+```
+
+### 环境变量
+
+可通过以下环境变量覆盖配置：
+
+| 变量 | 说明 |
+|------|------|
+| `AICODE_CONFIG_PATH` | 自定义配置文件路径 |
+| `AICODE_LOG_LEVEL` | 日志级别 |
+| `ANTHROPIC_API_KEY` | Anthropic API 密钥 |
+| `QWEN_API_KEY` | 通义千问 API 密钥 |
+
+---
+
+## 📋 使用方式
+
+### 基本交互
+
+启动 AiCode 后，可以直接输入自然语言指令：
+
+```
+$ aicode
+AiCode v1.0.0
+
+> 帮我查看当前目录的文件结构
+> 创建一个计算斐波那契数列的函数
+> 运行测试并修复失败的用例
+```
+
+### 内置命令
+
+| 命令 | 功能 |
+|------|------|
+| `/help` | 显示帮助信息 |
+| `/clear` | 清除对话历史 |
+| `/plan` | 进入/退出计划模式 |
+| `/compact` | 手动压缩上下文 |
+| `/model` | 切换使用的模型 |
+| `/provider` | 切换 LLM 提供者 |
+| `/session` | 管理会话（保存/加载/列表） |
+| `/mcp` | MCP 服务器管理 |
+| `/skill` | 技能管理 |
+| `/exit` | 退出程序 |
+
+### 会话管理
+
+```bash
+# 保存当前会话
+/session save my-session
+
+# 列出所有会话
+/session list
+
+# 加载会话
+/session load my-session
+
+# 删除会话
+/session delete my-session
+```
+
+---
+
+## 🏗️ 架构设计
+
+### 系统架构图
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    CLI Layer (cli/)                      │
+│   CommandRegistry  │  InputHandler  │  UI               │
+└─────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────┐
+│                 AgentCommander (core/)                   │
+│           用户交互、命令处理、Agent 执行编排               │
+└─────────────────────────────────────────────────────────┘
+                            │
+            ┌───────────────┼───────────────┐
+            ▼               ▼               ▼
+┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+│   AgentCore     │ │ MemoryManager   │ │  SkillLoader    │
+│ 消息处理/工具   │ │ 工作空间文件/   │ │ 技能加载/解析   │
+│ 执行/LLM 交互   │ │ 会话管理        │ │                 │
+└─────────────────┘ └─────────────────┘ └─────────────────┘
+            │               │               │
+            ▼               ▼               ▼
+┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+│  ToolRegistry   │ │ LspManager      │ │ McpClient       │
+│  工具注册/执行  │ │ LSP 语言服务    │ │ MCP 协议客户端  │
+└─────────────────┘ └─────────────────┘ └─────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────┐
+│              LLM Providers (providers/)                  │
+│   AnthropicProvider  │  QwenProvider  │  LLMProvider   │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 核心模块
+
+| 模块 | 职责 |
+|------|------|
+| `AgentCommander` | 系统入口，编排用户交互和 Agent 执行（单例模式） |
+| `AgentCore` | 消息处理、工具执行、LLM 交互的核心循环 |
+| `MemoryManager` | 工作空间文件管理、每日记忆存储、文件变化监听 |
+| `SkillLoader` | SKILL.md 解析、技能门控检查、自动安装依赖 |
+| `ToolRegistry` | 工具注册、Schema 生成、执行路由 |
+| `LLMProvider` | LLM API 抽象接口（Anthropic/Qwen） |
+| `CompactService` | 上下文压缩，管理长对话历史（单例模式） |
+| `PermissionManager` | 工具调用授权（allow/deny/ask，单例模式） |
+| `PlanModeManager` | 结构化任务规划和跟踪（单例模式） |
+| `LspManager` | LSP 语言服务器管理、JSON-RPC 通信（单例模式） |
+| `McpClient` | MCP 协议客户端，支持外部工具集成（单例模式） |
+| `SessionManager` | 会话创建/保存/加载/恢复 |
+
+### 设计模式
+
+| 模式 | 应用 |
+|------|------|
+| **单例模式** | `AgentCommander`、`CompactService`、`PermissionManager`、`PlanModeManager`、`LspManager`、`McpClient`、`SessionManager` |
+| **策略模式** | `LLMProvider` 接口（`AnthropicProvider`、`QwenProvider`） |
+| **工厂模式** | `ToolRegistry` 注册和创建工具执行器、`SkillLoader` 解析和实例化技能 |
+| **观察者模式** | `AgentEventCallback`（流式响应事件）、`FileChangeCallback`（文件变化监听） |
+
+---
+
+## 📁 项目结构
+
+```
+AiCode/
+├── main_src/
+│   ├── cli/                    # CLI 交互层
+│   │   ├── command_registry.*  # 命令注册和执行
+│   │   └── input_handler.*     # 终端输入处理
+│   ├── common/                 # 通用工具
+│   │   ├── config.*            # 配置系统
+│   │   ├── constants.h         # 常量定义
+│   │   ├── curl_client.*       # HTTP 客户端
+│   │   └── log_wrapper.h       # 日志封装
+│   ├── core/                   # 核心业务逻辑
+│   │   ├── agent_commander.*   # 主入口/编排器
+│   │   ├── agent_core.*        # Agent 核心循环
+│   │   ├── compact_service.*   # 上下文压缩
+│   │   ├── memory_manager.*    # 文件/记忆管理
+│   │   ├── permission_manager.*# 权限管理
+│   │   ├── plan_mode.*         # 计划模式
+│   │   ├── skill_loader.*      # 技能加载
+│   │   ├── system_prompt.*     # 系统提示构建
+│   │   └── session_manager.*   # 会话管理
+│   ├── providers/              # LLM 提供者
+│   │   ├── llm_provider.*      # 抽象接口
+│   │   ├── anthropic_provider.*# Anthropic API
+│   │   └── qwen_provider.*     # Qwen API
+│   ├── tools/                  # 工具实现
+│   │   ├── tool_registry.*     # 工具注册表
+│   │   ├── glob_tool.*
+│   │   ├── grep_tool.*
+│   │   ├── lsp_tool.*
+│   │   └── ...
+│   ├── mcp/                    # MCP 协议
+│   │   └── mcp_client.*        # MCP 客户端
+│   ├── managers/               # 管理器
+│   │   ├── buddy_manager.*     # Buddy 系统
+│   │   └── token_tracker.*     # Token 追踪
+│   └── services/               # 外部服务
+│       ├── lsp_manager.*       # LSP 管理
+│       └── cron_scheduler.*    # 定时任务
+├── config/                     # 配置文件
+├── tests/                      # 测试代码
+├── docs/                       # 技术文档
+├── CMakeLists.txt              # 构建配置
+└── Makefile                    # 快捷构建脚本
+```
+
+---
+
+## 📚 配置详解
+
+### 顶层配置
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `log_level` | string | "info" | 日志级别：debug/info/warn/error |
+| `default_provider` | string | "anthropic" | 默认 LLM 提供者 |
+| `default_agent` | string | "default" | 默认 Agent 配置名 |
+
+### Agent 配置
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `model` | string | "claude-sonnet-4-6" | 使用的模型 |
+| `temperature` | float | 0.7 | 温度参数 |
+| `max_tokens` | int | 8192 | 最大输出 Token 数 |
+| `context_window` | int | 128000 | 上下文窗口大小 |
+| `thinking` | string | "off" | Thinking 模式：off/low/medium/high |
+| `use_tools` | boolean | true | 是否启用工具 |
+| `auto_compact` | boolean | true | 是否自动压缩上下文 |
+
+### Security 配置
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `permission_level` | string | "auto" | 权限模式：auto/default/bypass |
+| `allow_local_execute` | boolean | true | 是否允许本地命令执行 |
+
+### Tools 配置
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `enabled` | boolean | true | 是否启用工具 |
+| `allowed_paths` | array | [] | 允许访问的路径白名单 |
+| `denied_paths` | array | [] | 禁止访问的路径黑名单 |
+| `allowed_cmds` | array | [] | 允许执行的命令白名单 |
+| `denied_cmds` | array | [] | 禁止执行的命令黑名单 |
+| `timeout` | int | 60 | 工具执行超时（秒） |
+
+---
+
+## 📖 文档
+
+| 文档 | 描述 |
+|------|------|
+| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | 系统架构设计文档 |
+| [docs/FEATURES.md](./docs/FEATURES.md) | 核心功能清单 |
+| [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) | 配置指南 |
+| [docs/API_REFERENCE.md](./docs/API_REFERENCE.md) | API 接口规范 |
+
+---
+
+## 🔧 故障排查
+
+### 常见问题
+
+**1. API 密钥错误**
+- 检查 `api_key` 是否正确
+- 确认环境变量优先级
+
+**2. 工具执行失败**
+- 检查 `allowed_cmds` 白名单
+- 确认路径在 `allowed_paths` 内
+
+**3. 技能未加载**
+- 检查 `required_bins` 是否存在
+- 确认 `os_restrict` 匹配当前系统
+
+**4. LSP 无法启动**
+- 确认语言服务器已安装
+- 检查 `command` 路径是否正确
+
+---
+
+## 📄 许可证
+
+Licensed under the Apache License, Version 2.0.
+
+See [LICENSE](./LICENSE) for details.
+
+---
+
+## 🙏 致谢
+
+- **Anthropic** - Claude 大模型的创造者
+- **C++ 社区** - 优秀的系统编程语言和工具链
+- **所有贡献者** - 感谢每一位为项目做出贡献的开发者
+
+---
+
+<div align="center">
+
+**Made with ❤️ and C++ 🦾**
+
+如果这个项目对你有帮助，请给一个 ⭐️ Star 支持一下！
+
+</div>

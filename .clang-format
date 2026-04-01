@@ -1,0 +1,6 @@
+# Google C++ Style Guide Configuration
+BasedOnStyle: Google
+IndentWidth: 4
+ColumnLimit: 150
+AccessModifierOffset: -4
+AlignAfterOpenBracket: Align

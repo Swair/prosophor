@@ -1,0 +1,46 @@
+{
+  "log_level": "debug",
+  "default_provider": "dashscope",
+  "default_agent": "default",
+  "show_buddy": true,
+
+  "providers": {
+    "dashscope": {
+      "api_key": "sk-sp-xxxxxxxxxxxxxxxxxxxxxx", // key
+      "base_url": "https://coding.dashscope.aliyuncs.com/apps/anthropic",
+      "api_type": "qwen",
+      "timeout": 60,
+      "agents": {
+        "default": {
+          "model": "qwen3.5-plus",
+          "temperature": 0.7,
+          "max_tokens": 8192,
+          "context_window": 128000,
+          "use_tools": true,
+          "thinking": "off"
+        },
+        "fast": {
+          "model": "qwen-turbo",
+          "temperature": 0.1,
+          "max_tokens": 1024,
+          "use_tools": true
+        }
+      }
+    }
+  },
+
+  "security": {
+    "permission_level": "auto",
+    "allow_local_execute": true
+  },
+
+  "tools": {
+    "enabled": true,
+    "timeout": 60
+  },
+
+  "skills": {
+    "path": "./skills",
+    "auto_approve": ["read_file", "grep"]
+  }
+}

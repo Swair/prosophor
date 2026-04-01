@@ -1,0 +1,472 @@
+// Copyright 2026 AiCode Contributors
+// SPDX-License-Identifier: Apache-2.0
+
+#include "common/config.h"
+
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <regex>
+#include <stdexcept>
+
+#include <nlohmann/json.hpp>
+
+#include "common/constants.h"
+#include "common/log_wrapper.h"
+
+namespace aicode {
+
+std::string AiCodeConfig::config_path_override_;
+AiCodeConfig* AiCodeConfig::instance_ = nullptr;
+
+AiCodeConfig& AiCodeConfig::GetInstance() {
+    static AiCodeConfig instance;
+    static bool initialized = false;
+
+    if (!initialized) {
+        std::string config_path = DefaultConfigPath();
+        CreateDefaultConfig(config_path);
+
+        try {
+            instance = LoadFromFile(config_path);
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load config, using defaults: {}", e.what());
+        }
+        initialized = true;
+    }
+
+    return instance;
+}
+
+const AgentConfig& AiCodeConfig::GetAgentConfig() const {
+    auto prov_it = providers.find(default_provider);
+    if (prov_it != providers.end()) {
+        return prov_it->second.GetDefaultAgent();
+    }
+    static AgentConfig default_agent;
+    return default_agent;
+}
+
+const ProviderConfig& AiCodeConfig::GetProvider(const std::string& name) const {
+    auto it = providers.find(name);
+    if (it != providers.end()) {
+        return it->second;
+    }
+    static ProviderConfig default_provider;
+    return default_provider;
+}
+
+const AgentConfig& ProviderConfig::GetDefaultAgent() const {
+    auto it = agents.find("default");
+    if (it != agents.end()) {
+        return it->second;
+    }
+    static AgentConfig default_agent;
+    return default_agent;
+}
+
+// Substitutes environment variables in the form ${VAR_NAME}
+static std::string SubstituteEnvVars(const std::string& input) {
+    static const std::regex env_re(R"(\$\{([^}]+)\})");
+    std::string result;
+    auto begin = std::sregex_iterator(input.begin(), input.end(), env_re);
+    auto end = std::sregex_iterator();
+
+    size_t last_pos = 0;
+    for (auto it = begin; it != end; ++it) {
+        auto& match = *it;
+        result.append(input, last_pos, match.position() - last_pos);
+        std::string var_name = match[1].str();
+        const char* env_val = std::getenv(var_name.c_str());
+        if (env_val) {
+            result.append(env_val);
+        }
+        last_pos = match.position() + match.length();
+    }
+    result.append(input, last_pos, std::string::npos);
+    return result;
+}
+
+// Strips comments and trailing commas from JSON5
+static std::string StripJson5(const std::string& input) {
+    std::string out;
+    out.reserve(input.size());
+    size_t i = 0;
+    const size_t len = input.size();
+
+    while (i < len) {
+        if (input[i] == '"') {
+            out += '"';
+            ++i;
+            while (i < len && input[i] != '"') {
+                if (input[i] == '\\' && i + 1 < len) {
+                    out += input[i];
+                    out += input[i + 1];
+                    i += 2;
+                } else {
+                    out += input[i];
+                    ++i;
+                }
+            }
+            if (i < len) {
+                out += '"';
+                ++i;
+            }
+            continue;
+        }
+
+        if (i + 1 < len && input[i] == '/' && input[i + 1] == '/') {
+            i += 2;
+            while (i < len && input[i] != '\n') ++i;
+            continue;
+        }
+
+        if (i + 1 < len && input[i] == '/' && input[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < len && !(input[i] == '*' && input[i + 1] == '/')) ++i;
+            if (i + 1 < len) i += 2;
+            continue;
+        }
+
+        out += input[i];
+        ++i;
+    }
+
+    std::string result;
+    result.reserve(out.size());
+    for (size_t j = 0; j < out.size(); ++j) {
+        if (out[j] == ',') {
+            size_t k = j + 1;
+            while (k < out.size() && (out[k] == ' ' || out[k] == '\t' ||
+                                      out[k] == '\n' || out[k] == '\r')) {
+                ++k;
+            }
+            if (k < out.size() && (out[k] == '}' || out[k] == ']')) {
+                continue;
+            }
+        }
+        result += out[j];
+    }
+
+    return result;
+}
+
+// Expands environment variables in JSON
+static void ExpandEnvInJson(nlohmann::json& j) {
+    if (j.is_string()) {
+        auto& s = j.get_ref<std::string&>();
+        if (s.find("${") != std::string::npos) {
+            s = SubstituteEnvVars(s);
+        }
+    } else if (j.is_object()) {
+        for (auto& [key, value] : j.items()) {
+            ExpandEnvInJson(value);
+        }
+    } else if (j.is_array()) {
+        for (auto& element : j) {
+            ExpandEnvInJson(element);
+        }
+    }
+}
+
+AgentConfig AgentConfig::FromJson(const nlohmann::json& json) {
+    AgentConfig config;
+    config.name = json.value("name", "default");
+    config.model = json.value("model", "claude-sonnet-4-6");
+    config.temperature = json.value("temperature", kDefaultTemperature);
+    config.max_tokens = json.value("max_tokens", json.value("maxTokens", kDefaultMaxTokens));
+    config.context_window = json.value("context_window", json.value("contextWindow", kDefaultContextWindow));
+    config.thinking = json.value("thinking", "off");
+    config.use_tools = json.value("use_tools", json.value("useTools", true));
+    config.auto_compact = json.value("auto_compact", json.value("autoCompact", true));
+    config.compact_max_messages = json.value("compact_max_messages", json.value("compactMaxMessages", kDefaultCompactMaxMessages));
+    config.compact_keep_recent = json.value("compact_keep_recent", json.value("compactKeepRecent", kDefaultCompactKeepRecent));
+    config.compact_max_tokens = json.value("compact_max_tokens", json.value("compactMaxTokens", kDefaultCompactMaxTokens));
+    return config;
+}
+
+ModelCost ModelCost::FromJson(const nlohmann::json& json) {
+    ModelCost c;
+    c.input = json.value("input", 0.0);
+    c.output = json.value("output", 0.0);
+    c.cache_read = json.value("cacheRead", json.value("cache_read", 0.0));
+    c.cache_write = json.value("cacheWrite", json.value("cache_write", 0.0));
+    return c;
+}
+
+ModelDefinition ModelDefinition::FromJson(const nlohmann::json& json) {
+    ModelDefinition m;
+    m.id = json.value("id", "");
+    m.name = json.value("name", "");
+    m.reasoning = json.value("reasoning", false);
+    m.input = json.value("input", std::vector<std::string>{"text"});
+    if (json.contains("cost") && json["cost"].is_object()) {
+        m.cost = ModelCost::FromJson(json["cost"]);
+    }
+    m.context_window = json.value("contextWindow", json.value("context_window", 0));
+    m.max_tokens = json.value("maxTokens", json.value("max_tokens", 0));
+    return m;
+}
+
+ProviderConfig ProviderConfig::FromJson(const nlohmann::json& json) {
+    ProviderConfig config;
+    config.api_key = json.value("api_key", json.value("apiKey", ""));
+    config.base_url = json.value("base_url", json.value("baseUrl", ""));
+    config.api_type = json.value("api_type", json.value("apiType", json.value("api", "")));
+    config.timeout = json.value("timeout", kDefaultProviderTimeoutSec);
+
+    // Parse agents (nested under provider)
+    if (json.contains("agents") && json["agents"].is_object()) {
+        const auto& agents_json = json["agents"];
+        for (const auto& [key, value] : agents_json.items()) {
+            AgentConfig agent = AgentConfig::FromJson(value);
+            agent.name = key;
+            config.agents[key] = agent;
+        }
+    }
+
+    if (json.contains("models") && json["models"].is_array()) {
+        for (const auto& m : json["models"]) {
+            config.models.push_back(ModelDefinition::FromJson(m));
+        }
+    }
+    return config;
+}
+
+ToolConfig ToolConfig::FromJson(const nlohmann::json& json) {
+    ToolConfig config;
+    config.enabled = json.value("enabled", true);
+    config.allowed_paths = json.value("allowed_paths", std::vector<std::string>{});
+    config.denied_paths = json.value("denied_paths", std::vector<std::string>{});
+    config.allowed_cmds = json.value("allowed_cmds", std::vector<std::string>{});
+    config.denied_cmds = json.value("denied_cmds", std::vector<std::string>{});
+    config.timeout = json.value("timeout", kDefaultToolTimeoutSec);
+    return config;
+}
+
+SkillEntryConfig SkillEntryConfig::FromJson(const nlohmann::json& json) {
+    SkillEntryConfig config;
+    config.enabled = json.value("enabled", true);
+    return config;
+}
+
+SkillsLoadConfig SkillsLoadConfig::FromJson(const nlohmann::json& json) {
+    SkillsLoadConfig config;
+    config.extra_dirs = json.value("extraDirs", std::vector<std::string>{});
+    return config;
+}
+
+SkillsConfig SkillsConfig::FromJson(const nlohmann::json& json) {
+    SkillsConfig config;
+    config.path = json.value("path", "");
+    config.auto_approve = json.value("auto_approve", json.value("autoApprove", std::vector<std::string>{}));
+    if (json.contains("configs") && json["configs"].is_object()) {
+        config.configs = json["configs"];
+    }
+    if (json.contains("load") && json["load"].is_object()) {
+        config.load = SkillsLoadConfig::FromJson(json["load"]);
+    }
+    if (!config.path.empty() && config.load.extra_dirs.empty()) {
+        config.load.extra_dirs.push_back(config.path);
+    }
+    if (json.contains("entries") && json["entries"].is_object()) {
+        for (const auto& [key, value] : json["entries"].items()) {
+            config.entries[key] = SkillEntryConfig::FromJson(value);
+        }
+    }
+    return config;
+}
+
+AiCodeConfig AiCodeConfig::FromJson(const nlohmann::json& json) {
+    nlohmann::json expanded = json;
+    ExpandEnvInJson(expanded);
+
+    AiCodeConfig config;
+    config.log_level = json.value("log_level", json.value("logLevel", "info"));
+    config.default_provider = json.value("default_provider", json.value("defaultProvider", "anthropic"));
+    config.default_agent = json.value("default_agent", json.value("defaultAgent", "default"));
+    config.show_buddy = json.value("show_buddy", json.value("showBuddy", true));
+
+    if (json.contains("providers") && json["providers"].is_object()) {
+        for (const auto& [key, value] : json["providers"].items()) {
+            config.providers[key] = ProviderConfig::FromJson(value);
+        }
+    }
+    if (json.contains("security") && json["security"].is_object()) {
+        config.security = SecurityConfig::FromJson(json["security"]);
+    }
+    if (json.contains("tools") && json["tools"].is_object()) {
+        config.tools = ToolConfig::FromJson(json["tools"]);
+    }
+    if (json.contains("skills") && json["skills"].is_object()) {
+        config.skills = SkillsConfig::FromJson(json["skills"]);
+    }
+    return config;
+}
+
+AiCodeConfig AiCodeConfig::LoadFromFile(const std::string& filepath) {
+    std::string expanded_path = ExpandHome(filepath);
+
+    if (!std::filesystem::exists(expanded_path)) {
+        throw std::runtime_error("Config file not found: " + expanded_path);
+    }
+
+    std::ifstream file(expanded_path);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to open config file: " + expanded_path);
+    }
+
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    file.close();
+
+    std::string clean = StripJson5(content);
+    nlohmann::json json = nlohmann::json::parse(clean);
+
+    return FromJson(json);
+}
+
+std::string AiCodeConfig::ExpandHome(const std::string& path) {
+    std::string expanded = path;
+    if (expanded.size() >= 2 && expanded.substr(0, 2) == "~/") {
+        const char* home = std::getenv("HOME");
+#ifdef _WIN32
+        if (!home) home = std::getenv("USERPROFILE");
+#endif
+        if (home) {
+            expanded = std::string(home) + expanded.substr(1);
+        }
+    }
+    return expanded;
+}
+
+std::string AiCodeConfig::DefaultConfigPath() {
+    if (!config_path_override_.empty()) {
+        return config_path_override_;
+    }
+    // Support environment variable override: export AI_CODE_CONFIG="/path/to/config.json"
+    const char* env_path = std::getenv("AI_CODE_CONFIG");
+    if (env_path != nullptr && env_path[0] != '\0') {
+        return env_path;
+    }
+    return ExpandHome("~/.aicode/settings.json");
+}
+
+std::filesystem::path AiCodeConfig::BaseDir() {
+    // Support environment variable override
+    const char* env_path = std::getenv("AI_CODE_CONFIG");
+    if (env_path != nullptr && env_path[0] != '\0') {
+        return std::filesystem::path(env_path).parent_path();
+    }
+    return ExpandHome("~/.aicode");
+}
+
+// Creates a default config file with documentation comments
+void AiCodeConfig::CreateDefaultConfig(const std::string& filepath) {
+    std::string expanded_path = ExpandHome(filepath);
+
+    // Create directory if it doesn't exist
+    std::filesystem::path parent_dir = std::filesystem::path(expanded_path).parent_path();
+    std::filesystem::create_directories(parent_dir);
+
+    // Don't overwrite existing config
+    if (std::filesystem::exists(expanded_path)) {
+        return;
+    }
+
+    // Check if there's a demo config at config/.aicode/settings.json
+    std::string demo_config_path = "config/.aicode/settings.json";
+    if (std::filesystem::exists(demo_config_path)) {
+        // Copy demo config to ~/.aicode/settings.json
+        try {
+            std::filesystem::copy_file(demo_config_path, expanded_path,
+                                        std::filesystem::copy_options::overwrite_existing);
+            LOG_INFO("Created config from demo: {}", demo_config_path);
+            return;
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to copy demo config: {}", e.what());
+            // Fall through to create default config
+        }
+    }
+
+    std::ofstream file(expanded_path);
+    if (!file.is_open()) {
+        throw std::runtime_error("Failed to create config file: " + expanded_path);
+    }
+
+    // Write config template with comments
+    file << R"(// AiCode Configuration File
+// Path: ~/.aicode/settings.json
+//
+// Structure:
+//   providers.<provider_name>.agents.<agent_name> = { model, temperature, ... }
+//
+// Example:
+//   providers.anthropic.agents.default.model = "qwen3.5-plus"
+//   providers.anthropic.agents.fast.model = "qwen3.5-lite"
+
+{
+  "log_level": "info",
+  "default_provider": "anthropic",
+  "default_agent": "default",
+  "show_buddy": true,
+
+  // Provider configuration
+  "providers": {
+    "anthropic": {
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "base_url": "https://api.anthropic.com",
+      "api_type": "anthropic-messages",
+      "timeout": 60,
+
+      // Multiple agent configurations
+      "agents": {
+        "default": {
+          "model": "qwen3.5-plus",
+          "temperature": 0.7,
+          "max_tokens": 8192,
+          "context_window": 128000,
+          "use_tools": true,
+          "thinking": "off"
+        },
+        "fast": {
+          "model": "qwen3.5-lite",
+          "temperature": 0.1,
+          "max_tokens": 1024,
+          "use_tools": true
+        }
+      }
+    }
+  },
+
+  "security": {
+    "permission_level": "auto",
+    "allow_local_execute": true
+  },
+
+  "tools": {
+    "enabled": true,
+    "timeout": 60
+  },
+
+  "skills": {
+    "path": "./skills",
+    "auto_approve": ["read_file", "grep"]
+  }
+}
+)";
+
+    file.close();
+}
+
+int AgentConfig::DynamicMaxIterations() const {
+    if (context_window <= kContextWindow32K) return kMinMaxIterations;
+    if (context_window >= kContextWindow200K) return kMaxMaxIterations;
+
+    double ratio = static_cast<double>(context_window - kContextWindow32K) /
+                   (kContextWindow200K - kContextWindow32K);
+    return kMinMaxIterations +
+           static_cast<int>(ratio * (kMaxMaxIterations - kMinMaxIterations));
+}
+
+}  // namespace aicode
