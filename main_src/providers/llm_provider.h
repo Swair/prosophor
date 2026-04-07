@@ -12,8 +12,8 @@
 #include "common/log_wrapper.h"
 #include "tools/tool_registry.h"
 #include "common/config.h"
-#include "core/system_prompt.h"
 #include "core/messages_schema.h"
+#include "core/agent_state.h"  // For SystemSchema
 
 namespace aicode {
 
@@ -114,15 +114,6 @@ struct ChatResponse {
 
 // Token tracking
 void RecordTokenUsage(const std::string& model, const TokenUsageSchema& usage);
-
-// Internal helper functions for Qwen serialization (used by QwenProvider)
-std::pair<std::string, nlohmann::json> SerializeMessagesToQwen(
-    const std::vector<MessageSchema>& messages);
-int ThinkingBudgetTokens(const std::string& level);
-void ApplyThinkingParams(nlohmann::json& payload_json,
-     const ChatRequest& request);
-nlohmann::json ConvertToolsToAnthropic(const std::vector<ToolsSchema>& tools);
-nlohmann::json ConvertToolsToQwen(const std::vector<ToolsSchema>& tools);
 
 /// Abstract interface for LLM providers
 class LLMProvider {

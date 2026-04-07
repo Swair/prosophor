@@ -11,6 +11,7 @@
 
 #include "common/log_wrapper.h"
 #include "core/agent_core.h"
+#include "core/agent_commander.h"
 #include "managers/token_tracker.h"
 #include "agents/task_manager.h"
 #include "managers/session_manager.h"
@@ -340,10 +341,13 @@ void CommandRegistry::Initialize() {
         Command cmd;
         cmd.name = "model";
         cmd.description = "Show or change the current model";
-        cmd.usage = "/model [model_name]";
+        cmd.usage = "/model [provider/agent|model_name]";
         cmd.aliases = {"mdl"};
         cmd.handler = [this](const CommandContext& ctx, const std::vector<std::string>& args) {
             return CmdModel(ctx, args);
+        };
+        cmd.completer = [this](const std::string& partial) {
+            return CompleteModel(partial);
         };
         RegisterCommand(cmd);
     }
@@ -469,6 +473,46 @@ std::vector<std::string> CommandRegistry::CompleteCommand(const std::string& par
 
         if (name.find(partial) == 0) {
             completions.push_back(name);
+        }
+    }
+
+    return completions;
+}
+
+std::vector<std::string> CommandRegistry::CompleteModel(const std::string& partial) const {
+    std::vector<std::string> completions;
+    auto& config = AiCodeConfig::GetInstance();
+
+    // Check if partial contains a slash (provider/agent format)
+    size_t slash_pos = partial.find('/');
+    if (slash_pos != std::string::npos) {
+        // Complete agent name for given provider
+        std::string provider = partial.substr(0, slash_pos);
+        std::string agent_partial = partial.substr(slash_pos + 1);
+
+        auto provider_it = config.providers.find(provider);
+        if (provider_it != config.providers.end()) {
+            for (const auto& [agent_name, agent_config] : provider_it->second.agents) {
+                if (agent_name.find(agent_partial) == 0) {
+                    completions.push_back(provider + "/" + agent_name);
+                }
+            }
+        }
+    } else {
+        // Complete provider names
+        for (const auto& [provider_name, provider_config] : config.providers) {
+            if (provider_name.find(partial) == 0) {
+                completions.push_back(provider_name + "/");
+            }
+        }
+        // Also suggest model names from current provider
+        auto current_it = config.providers.find(config.default_provider);
+        if (current_it != config.providers.end()) {
+            for (const auto& [agent_name, agent_config] : current_it->second.agents) {
+                if (agent_config.model.find(partial) == 0) {
+                    completions.push_back(agent_config.model);
+                }
+            }
         }
     }
 
@@ -1957,13 +2001,33 @@ CommandResult CommandRegistry::CmdModel(const CommandContext& ctx, const std::ve
         oss << "  Default provider: " << config.default_provider << "\n";
         oss << "  Default agent: " << config.default_agent << "\n";
 
-        auto provider_it = config.providers.find(config.default_provider);
-        if (provider_it != config.providers.end()) {
-            auto default_agent = provider_it->second.GetDefaultAgent();
-            oss << "  Current model: " << default_agent.model << "\n";
-            oss << "  Temperature: " << default_agent.temperature << "\n";
-            oss << "  Max tokens: " << default_agent.max_tokens << "\n";
+        // Show actual runtime config from AgentState
+        if (ctx.agent_state) {
+            oss << "  Current model: " << ctx.agent_state->model << "\n";
+            oss << "  Temperature: " << ctx.agent_state->temperature << "\n";
+            oss << "  Max tokens: " << ctx.agent_state->max_tokens << "\n";
+            oss << "  Max iterations: " << ctx.agent_state->max_iterations << "\n";
+        } else {
+            auto provider_it = config.providers.find(config.default_provider);
+            if (provider_it != config.providers.end()) {
+                auto default_agent = provider_it->second.GetDefaultAgent();
+                oss << "  Current model: " << default_agent.model << "\n";
+                oss << "  Temperature: " << default_agent.temperature << "\n";
+                oss << "  Max tokens: " << default_agent.max_tokens << "\n";
+            }
         }
+
+        // List available providers and agents
+        oss << "\nAvailable providers and agents:\n";
+        for (const auto& [provider_name, provider_config] : config.providers) {
+            oss << "  " << provider_name << ":\n";
+            for (const auto& [agent_name, agent_config] : provider_config.agents) {
+                std::string marker = (provider_name == config.default_provider && agent_name == config.default_agent) ? " >" : "";
+                oss << marker << "    " << agent_name << ": " << agent_config.model << "\n";
+            }
+        }
+        oss << "\nUsage: /model [provider/agent]  e.g., /model ollama/default\n";
+        oss << "       /model <model_name>       e.g., /model qwen2.5:7b\n";
 
         return CommandResult::Ok(oss.str());
     }
@@ -1971,33 +2035,94 @@ CommandResult CommandRegistry::CmdModel(const CommandContext& ctx, const std::ve
     // Change model at runtime
     std::string new_model = args[0];
 
-    // Update AgentCore if available (for immediate effect)
-    if (ctx.agent_core) {
-        ctx.agent_core->SetModel(new_model);
-    }
+    std::string new_provider, new_agent;
+    size_t slash_pos = new_model.find('/');
 
-    // Also update config for persistence
-    auto provider_it = config.providers.find(config.default_provider);
-    if (provider_it != config.providers.end()) {
-        auto& agents = const_cast<std::unordered_map<std::string, AgentConfig>&>(provider_it->second.agents);
-        auto agent_it = agents.find("default");
-        if (agent_it != agents.end()) {
-            agent_it->second.model = new_model;
+    if (slash_pos != std::string::npos) {
+        // Format: provider/agent
+        new_provider = new_model.substr(0, slash_pos);
+        new_agent = new_model.substr(slash_pos + 1);
+
+        // Validate provider
+        auto provider_it = config.providers.find(new_provider);
+        if (provider_it == config.providers.end()) {
+            return CommandResult::Fail("Unknown provider: " + new_provider);
+        }
+
+        // Validate agent
+        auto agent_it = provider_it->second.agents.find(new_agent);
+        if (agent_it == provider_it->second.agents.end()) {
+            return CommandResult::Fail("Unknown agent '" + new_agent + "' for provider '" + new_provider + "'");
+        }
+
+        // Update default provider and agent in config
+        auto& mutable_config = AiCodeConfig::GetInstance();
+        mutable_config.default_provider = new_provider;
+        mutable_config.default_agent = new_agent;
+
+        // Update AgentCommander's provider and agent (this updates agent_state_)
+        auto& agent_commander = AgentCommander::GetInstance();
+        agent_commander.SwitchProvider(new_provider, new_agent);
+
+        // Save config to file
+        mutable_config.SaveToFile();
+
+        std::ostringstream oss;
+        oss << "Switched to: " << new_provider << "/" << new_agent << "\n";
+        oss << "  Model: " << agent_it->second.model << "\n";
+        oss << "  Temperature: " << agent_it->second.temperature << "\n";
+        oss << "  Max tokens: " << agent_it->second.max_tokens << "\n";
+        oss << "Applied to current session.\n";
+        oss << "Configuration saved.";
+        return CommandResult::Ok(oss.str());
+
+    } else {
+        // Just model name - search across all providers and agents
+        bool found = false;
+        for (const auto& [provider_name, provider_config] : config.providers) {
+            for (const auto& [agent_name, agent_config] : provider_config.agents) {
+                if (agent_config.model == new_model) {
+                    new_provider = provider_name;
+                    new_agent = agent_name;
+                    found = true;
+                    break;
+                }
+            }
+            if (found) break;
+        }
+
+        if (found) {
+            // Found matching agent - switch to it
+            auto& mutable_config = AiCodeConfig::GetInstance();
+            mutable_config.default_provider = new_provider;
+            mutable_config.default_agent = new_agent;
+
+            auto& agent_commander = AgentCommander::GetInstance();
+            agent_commander.SwitchProvider(new_provider, new_agent);
+
+            mutable_config.SaveToFile();
+
+            std::ostringstream oss;
+            oss << "Switched to: " << new_provider << "/" << new_agent << "\n";
+            oss << "  Model: " << new_model << "\n";
+            oss << "Applied to current session.\n";
+            oss << "Configuration saved.";
+            return CommandResult::Ok(oss.str());
+
+        } else {
+            // Model not found in config - just update current session's model directly
+            if (ctx.agent_state) {
+                ctx.agent_state->model = new_model;
+                std::ostringstream oss;
+                oss << "Model updated to: " << new_model << "\n";
+                oss << "Note: This change applies to current session only.\n";
+                oss << "Configuration not saved (model not in config).";
+                return CommandResult::Ok(oss.str());
+            } else {
+                return CommandResult::Fail("Model not found in config and no active session");
+            }
         }
     }
-
-    // Save config to file
-    config.SaveToFile();
-
-    std::ostringstream oss;
-    oss << "Model changed to: " << new_model << "\n";
-    if (ctx.agent_core) {
-        oss << "Applied to current session.\n";
-    } else {
-        oss << "Change will take effect in next session.\n";
-    }
-    oss << "Configuration saved.\n";
-    return CommandResult::Ok(oss.str());
 }
 
 CommandResult CommandRegistry::CmdPermissions(const CommandContext&, const std::vector<std::string>& args) {

@@ -449,6 +449,27 @@ You are a git expert. Help users with:
 }
 ```
 
+### 5. Ollama 本地模型配置
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "base_url": "http://localhost:11434",
+      "api_type": "openai-completions",
+      "timeout": 120,
+      "agents": {
+        "default": {
+          "model": "qwen2.5-coder:32b",
+          "temperature": 0.7,
+          "max_tokens": 8192
+        }
+      }
+    }
+  }
+}
+```
+
 ---
 
 ## 故障排查

@@ -8,6 +8,9 @@
 #include <unordered_map>
 #include <nlohmann/json.hpp>
 
+#include "common/noncopyable.h"
+#include "core/agent_state.h"
+
 namespace aicode {
 
 class AgentCore;  // Forward declaration
@@ -18,6 +21,7 @@ struct CommandContext {
     std::string session_id;
     void* user_data = nullptr;  // For custom context data
     class AgentCore* agent_core = nullptr;  // For accessing agent at runtime
+    class AgentState* agent_state = nullptr;  // For accessing current session state
 };
 
 /// Command result
@@ -79,6 +83,9 @@ public:
 
     /// Tab completion for commands
     std::vector<std::string> CompleteCommand(const std::string& partial) const;
+
+    /// Tab completion for model names (provider/agent format)
+    std::vector<std::string> CompleteModel(const std::string& partial) const;
 
     /// Tab completion for command arguments
     std::vector<std::string> CompleteArguments(const std::string& cmd_name,

@@ -72,6 +72,64 @@ void HeaderList::clear() {
 // HttpClient implementation
 // ============================================================================
 
+HttpResponse HttpClient::Get(const HttpRequest& request) {
+    HttpResponse response;
+
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        response.error = "Failed to initialize CURL handle";
+        return response;
+    }
+
+    std::string res_header;
+    std::string res_body;
+    struct curl_slist* headers = static_cast<struct curl_slist*>(request.headers);
+
+    // Configure the request for GET
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, request.timeout_seconds);
+
+    // Default callbacks for blocking request
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &res_body);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, HeaderCallback);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &res_header);
+
+    if (request.low_speed_limit > 0) {
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, request.low_speed_limit);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, request.low_speed_time);
+    }
+
+    if (!request.user_agent.empty()) {
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, request.user_agent.c_str());
+    } else {
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, "curl/7.88.1");
+    }
+
+    // Execute
+    CURLcode res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        response.error = "CURL request failed: " + std::string(curl_easy_strerror(res));
+        curl_easy_cleanup(curl);
+        curl_global_cleanup();
+        return response;
+    }
+
+    long code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    response.status_code = static_cast<int>(code);
+    response.body = res_body;
+    response.retry_after_seconds = ParseRetryAfter(res_header);
+
+    curl_easy_cleanup(curl);
+    curl_global_cleanup();
+
+    return response;
+}
+
 HttpResponse HttpClient::Post(const HttpRequest& request) {
     HttpResponse response;
 

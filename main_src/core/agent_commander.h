@@ -13,8 +13,8 @@
 
 #include "common/noncopyable.h"
 #include "common/config.h"
-#include "core/system_prompt.h"
 #include "core/messages_schema.h"
+#include "core/agent_state.h"  // For AgentState and SystemSchema
 
 namespace aicode {
 
@@ -50,6 +50,9 @@ class AgentCommander : public Noncopyable {
     /// Process user message and print response
     void ProcessUserMessage(const std::string& line);
 
+    /// Switch to a different provider and agent
+    void SwitchProvider(const std::string& provider_name, const std::string& agent_name);
+
  private:
     AgentCommander();
     ~AgentCommander();
@@ -74,7 +77,6 @@ class AgentCommander : public Noncopyable {
     std::shared_ptr<MemoryManager> memory_manager_;
     std::shared_ptr<SkillLoader> skill_loader_;
     std::shared_ptr<ToolRegistry> tool_registry_;
-    std::shared_ptr<AgentCore> agent_core_;
     std::shared_ptr<LLMProvider> llm_provider_;
     CommandRegistry* command_registry_ = nullptr;  // Non-owned pointer
 
@@ -85,8 +87,7 @@ class AgentCommander : public Noncopyable {
     std::mutex permission_mutex_;
     std::condition_variable permission_cv_;
     std::filesystem::path workspace_path_;
-    std::vector<MessageSchema> short_term_memory_;
-    std::vector<SystemSchema> system_prompt_;
+    AgentState agent_state_;  // Current session state (messages, config, provider, system_prompt)
 };
 
 }  // namespace aicode

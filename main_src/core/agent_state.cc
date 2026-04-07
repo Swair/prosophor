@@ -1,14 +1,13 @@
 // Copyright 2026 AiCode Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-#include "core/system_prompt.h"
+#include "core/agent_state.h"
 
 #include <sstream>
 
 #include "common/log_wrapper.h"
 #include "core/skill_loader.h"
 #include "managers/memory_manager.h"
-#include "common/config.h"
 
 namespace aicode {
 

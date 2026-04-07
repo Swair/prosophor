@@ -42,6 +42,11 @@ AiCodeConfig& AiCodeConfig::GetInstance() {
 const AgentConfig& AiCodeConfig::GetAgentConfig() const {
     auto prov_it = providers.find(default_provider);
     if (prov_it != providers.end()) {
+        auto agent_it = prov_it->second.agents.find(default_agent);
+        if (agent_it != prov_it->second.agents.end()) {
+            return agent_it->second;
+        }
+        LOG_WARN("Agent '{}' not found in provider '{}', using 'default'", default_agent, default_provider);
         return prov_it->second.GetDefaultAgent();
     }
     static AgentConfig default_agent;

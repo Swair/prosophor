@@ -50,6 +50,9 @@ struct HttpResponse {
 /// High-level HTTP client for blocking requests
 class HttpClient {
    public:
+    // Perform a blocking HTTP GET request
+    static HttpResponse Get(const HttpRequest& request);
+
     // Perform a blocking HTTP POST request
     static HttpResponse Post(const HttpRequest& request);
 

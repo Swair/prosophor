@@ -13,6 +13,7 @@
 #include "common/time_wrapper.h"
 #include "managers/memory_manager.h"
 #include "core/skill_loader.h"
+#include "core/agent_state.h"
 
 namespace aicode {
 
@@ -104,34 +105,37 @@ void SubagentCoordinator::RunSubagent(Subagent& agent) {
         ToolRegistry tool_registry;
         tool_registry.RegisterBuiltinTools();
 
-        // Create agent config for subagent
-        AgentConfig config;
-        config.model = "claude-sonnet-4-6";  // Default subagent model
-        config.max_tokens = 4096;
-
-        // Create agent core
-        AgentCore agent_core(
+        // Initialize the singleton AgentCore with subagent-specific dependencies
+        auto& agent_core = AgentCore::GetInstance();
+        agent_core.Initialize(
             memory_manager,
             skill_loader,
             tool_registry.GetToolSchemas(),
             [&tool_registry](const std::string& name, const nlohmann::json& args) {
                 return tool_registry.ExecuteTool(name, args);
-            },
-            chat_callback_,
-            stream_chat_callback_,
-            config
+            }
         );
+
+        // Set provider callbacks
+        agent_core.SetProviderCallbacks(chat_callback_, stream_chat_callback_);
+
+        // Create agent state for this subagent session
+        AgentState state;
+        state.model = "claude-sonnet-4-6";
+        state.max_tokens = 4096;
+        state.use_tools = true;
+        state.max_iterations = 10;  // Subagent default
 
         // Build system prompt
         std::string system_prompt_text = subagent_system_prompt_ +
             "\n\nYou are working on: " + agent.description +
             "\n\nYour task: " + agent.task;
 
-        // Set system prompt and run the agent
-        std::vector<SystemSchema> system_prompt;
-        system_prompt.push_back({"text", system_prompt_text, false});
-        agent_core.SetSystemPrompt(system_prompt, false);
-        agent.messages = agent_core.CloseLoop(agent.task);
+        state.system_prompt.push_back({"text", system_prompt_text, false});
+
+        // Run the agent
+        agent_core.CloseLoop(agent.task, state);
+        agent.messages = state.messages;
 
         // Extract result from final message
         if (!agent.messages.empty()) {

@@ -16,12 +16,13 @@
 #include "core/agent_core.h"
 #include "managers/memory_manager.h"
 #include "core/skill_loader.h"
-#include "core/system_prompt.h"
+#include "core/agent_state.h"
 #include "managers/buddy_manager.h"
 #include "managers/session_manager.h"
 #include "cli/command_registry.h"
 #include "providers/qwen_provider.h"
 #include "providers/anthropic_provider.h"
+#include "providers/ollama_provider.h"
 #include "tools/tool_registry.h"
 
 namespace aicode {
@@ -49,13 +50,73 @@ AgentCommander::~AgentCommander() {
     }
 }
 
+void AgentCommander::SwitchProvider(const std::string& provider_name, const std::string& agent_name) {
+    LOG_INFO("Switching provider to: {} agent: {}", provider_name, agent_name);
+
+    auto provider_it = config_.providers.find(provider_name);
+    if (provider_it == config_.providers.end()) {
+        LOG_ERROR("Provider not found: {}", provider_name);
+        return;
+    }
+
+    auto agent_it = provider_it->second.agents.find(agent_name);
+    if (agent_it == provider_it->second.agents.end()) {
+        LOG_ERROR("Agent not found: {} for provider: {}", agent_name, provider_name);
+        return;
+    }
+
+    const auto& provider_config = provider_it->second;
+    const auto& new_agent_config = agent_it->second;
+
+    // Update internal config state
+    config_.default_provider = provider_name;
+    config_.default_agent = agent_name;
+    agent_config_ = new_agent_config;
+
+    // Recreate LLM provider based on new provider type
+    if (provider_name == "ollama") {
+        llm_provider_ = std::make_shared<OllamaProvider>(
+            provider_config.base_url, provider_config.timeout);
+        LOG_INFO("Switched to Ollama provider with base_url: {}", provider_config.base_url);
+    } else if (provider_name == "qwen" || provider_name == "dashscope") {
+        llm_provider_ = std::make_shared<QwenProvider>(
+            provider_config.api_key, provider_config.base_url, provider_config.timeout);
+        LOG_INFO("Switched to Qwen provider with base_url: {}", provider_config.base_url);
+    } else if (provider_name == "anthropic") {
+        llm_provider_ = std::make_shared<AnthropicProvider>(
+            provider_config.api_key, provider_config.base_url, provider_config.timeout);
+        LOG_INFO("Switched to Anthropic provider with base_url: {}", provider_config.base_url);
+    }
+
+    // Update AgentCore provider callbacks and agent_state_
+    AgentCore::GetInstance().SetProviderCallbacks(
+        [this](const ChatRequest& request) -> ChatResponse {
+            return llm_provider_->Chat(request);
+        },
+        [this](const ChatRequest& request, std::function<void(const ChatResponse&)> callback) {
+            llm_provider_->ChatStream(request, callback);
+        }
+    );
+
+    // Update agent_state_ with new agent config
+    agent_state_.provider_name = provider_name;  // Update provider name
+    agent_state_.model = new_agent_config.model;
+    agent_state_.temperature = new_agent_config.temperature;
+    agent_state_.max_tokens = new_agent_config.max_tokens;
+    agent_state_.use_tools = new_agent_config.use_tools;
+    agent_state_.max_iterations = new_agent_config.DynamicMaxIterations();
+
+    LOG_INFO("Provider switch completed: {}/{} using model {}",
+             provider_name, agent_name, new_agent_config.model);
+}
+
 void AgentCommander::InitializeComponents() {
     LOG_INFO("Initializing AiCode components...");
 
     // Get config from singleton (loads from ~/.aicode/settings.json)
     config_ = aicode::AiCodeConfig::GetInstance();
 
-    // Get agent config from default provider's default agent
+    // Get provider config
     auto provider_it = config_.providers.find(config_.default_provider);
     if (provider_it == config_.providers.end()) {
         LOG_WARN("Provider '{}' not found, using defaults", config_.default_provider);
@@ -65,9 +126,10 @@ void AgentCommander::InitializeComponents() {
         LOG_ERROR("No provider configured");
         throw std::runtime_error("No provider configured");
     }
-
     const auto& provider_config = provider_it->second;
-    agent_config_ = provider_config.GetDefaultAgent();
+
+    // Get agent config from default provider and default_agent
+    agent_config_ = config_.GetAgentConfig();
 
     LOG_INFO("Using provider: {}, agent: {}, model: {}",
              config_.default_provider, agent_config_.name, agent_config_.model);
@@ -214,14 +276,30 @@ void AgentCommander::InitializeComponents() {
     command_registry_ = &CommandRegistry::GetInstance();
     command_registry_->Initialize();
 
-    // LLM Provider
-    llm_provider_ = std::make_shared<QwenProvider>(
-        provider_config.api_key, provider_config.base_url, provider_config.timeout);
-    LOG_INFO("Using {} provider with base_url: {}", config_.default_provider, provider_config.base_url);
+    // LLM Provider - select based on config
+    if (config_.default_provider == "ollama") {
+        llm_provider_ = std::make_shared<OllamaProvider>(
+            provider_config.base_url, provider_config.timeout);
+        LOG_INFO("Using Ollama provider with base_url: {}", provider_config.base_url);
+    } else if (config_.default_provider == "qwen" || config_.default_provider == "dashscope") {
+        llm_provider_ = std::make_shared<QwenProvider>(
+            provider_config.api_key, provider_config.base_url, provider_config.timeout);
+        LOG_INFO("Using Qwen provider with base_url: {}", provider_config.base_url);
+    } else if (config_.default_provider == "anthropic") {
+        llm_provider_ = std::make_shared<AnthropicProvider>(
+            provider_config.api_key, provider_config.base_url, provider_config.timeout);
+        LOG_INFO("Using Anthropic provider with base_url: {}", provider_config.base_url);
+    } else {
+        // Default to Qwen
+        llm_provider_ = std::make_shared<QwenProvider>(
+            provider_config.api_key, provider_config.base_url, provider_config.timeout);
+        LOG_INFO("Using Qwen provider (default) with base_url: {}", provider_config.base_url);
+    }
 
-    // Agent CloseLoop
-    std::cout << "[InitializeComponents] Creating AgentCore..." << std::endl;
-    agent_core_ = std::make_shared<AgentCore>(
+    // Agent CloseLoop - Initialize stateless AgentCore singleton
+
+    // Initialize AgentCore singleton with service dependencies
+    AgentCore::GetInstance().Initialize(
         memory_manager_,
         skill_loader_,
         tool_registry_->GetToolSchemas(),
@@ -255,19 +333,32 @@ void AgentCommander::InitializeComponents() {
             }
 
             return tool_registry_->ExecuteTool(tool_name, args);
-        },
+        }
+    );
+
+    // Set provider callbacks
+    AgentCore::GetInstance().SetProviderCallbacks(
         [&](const ChatRequest& request)-> ChatResponse {
             return llm_provider_->Chat(request);
         },
         [&](const ChatRequest& request, std::function<void(const ChatResponse&)> callback) {
             llm_provider_->ChatStream(request, callback);
-        },
-        agent_config_
+        }
     );
 
-    LOG_INFO("AgentCore initialized: model={}, temp={}, max_tokens={}, context_window={}",
-             agent_config_.model, agent_config_.temperature,
-             agent_config_.max_tokens, agent_config_.context_window);
+    // Initialize agent state for current session
+    agent_state_.provider_name = config_.default_provider;
+    agent_state_.model = agent_config_.model;
+    agent_state_.temperature = agent_config_.temperature;
+    agent_state_.max_tokens = agent_config_.max_tokens;
+    agent_state_.use_tools = agent_config_.use_tools;
+    agent_state_.max_iterations = agent_config_.DynamicMaxIterations();
+
+    // Build and set initial system prompt
+    agent_state_.system_prompt = BuildSystemPrompt();
+
+    LOG_INFO("AgentCore initialized: model={}, temp={}, max_tokens={}",
+             agent_state_.model, agent_state_.temperature, agent_state_.max_tokens);
 
     LOG_INFO("InitializeComponents finished");
 }
@@ -322,7 +413,8 @@ bool AgentCommander::HandleCommand(const std::string& line) {
         CommandContext ctx;
         ctx.workspace = workspace_path_.string();
         ctx.session_id = SessionManager::GetInstance().GetCurrentSessionId();
-        ctx.agent_core = agent_core_.get();
+        ctx.agent_core = &AgentCore::GetInstance();
+        ctx.agent_state = &agent_state_;
 
         CommandResult result = command_registry_->ExecuteCommand(cmd_name, cmd_args, ctx);
 
@@ -346,57 +438,17 @@ void AgentCommander::ProcessUserMessage(const std::string& line) {
     try {
         LOG_INFO("User: {}", line);
 
-        if (agent_core_) {
-            // Reset interrupted_ flag before processing new message
+        // Reset interrupted_ flag before processing new message
+        interrupted_ = false;
+
+        // Call stateless AgentCore with current session state
+        AgentCore::GetInstance().CloseLoop(line, agent_state_);
+
+        // Check if interrupted during processing
+        if (interrupted_) {
             interrupted_ = false;
-
-            auto response = agent_core_->CloseLoop(line);
-
-            // Check if interrupted during processing
-            if (interrupted_) {
-                interrupted_ = false;  // Reset for next use
-                return;
-            }
-
-            // Print response
-            for (const auto& msg : response) {
-                // Check for interrupt during output
-                if (interrupted_) {
-                    return;
-                }
-
-                if (msg.role == "assistant") {
-                    std::string text = msg.text();
-
-                    // Also print tool use information
-                    for (const auto& block : msg.content) {
-                        if (block.type == "tool_use") {
-                            if (!text.empty()) text += "\n";
-                            text += "[Using tool: " + block.name + "]";
-                        } else if (block.type == "tool_result") {
-                            if (!text.empty()) text += "\n";
-                            text += "[Tool result: " + block.content.substr(0, 100) +
-                                    (block.content.size() > 100 ? "..." : "") + "]";
-                        }
-                    }
-
-                    if (!text.empty()) {
-#ifdef _WIN32
-                        LOG_INFO("AiCode: {}", text);
-#else
-                        std::cout << "AiCode: " << text << std::endl;
-#endif
-                    } else if (!msg.content.empty()) {
-#ifdef _WIN32
-                        LOG_INFO("AiCode: [Processing with tools]");
-#else
-                        std::cout << "AiCode: [Processing with tools]" << std::endl;
-#endif		
-                    }
-                }
-            }
+            return;
         }
-
     } catch (const std::exception& e) {
         LOG_ERROR("Error: {}", e.what());
         std::cout << "Error: " << e.what() << std::endl;
@@ -414,11 +466,6 @@ int AgentCommander::Run() {
     // Print banner (with buddy if enabled in config)
     bool show_buddy = config_.show_buddy;
     aicode::PrintBanner(AICODE_VERSION, show_buddy);
-
-    system_prompt_ = BuildSystemPrompt();
-
-    // Set initial system prompt on agent
-    agent_core_->SetSystemPrompt(system_prompt_, true);
 
     // Input queue for producer-consumer pattern
     InputQueue input_queue;
@@ -455,7 +502,7 @@ int AgentCommander::Run() {
             if (interrupted_) {
                 std::cout << "[Interrupted]\n";
                 interrupted_ = false;
-                agent_core_->Stop();
+                AgentCore::GetInstance().Stop();
                 continue;
             }
 
@@ -507,9 +554,7 @@ int AgentCommander::Run() {
 
 void AgentCommander::Stop() {
     interrupted_ = true;
-    if (agent_core_) {
-        agent_core_->Stop();
-    }
+    AgentCore::GetInstance().Stop();
 }
 
 }  // namespace aicode

@@ -13,10 +13,10 @@
 
 namespace aicode {
 
-// Internal helper functions for Anthropic serialization
+// Internal helper functions for Anthropic serialization (static to avoid linkage conflicts)
 
 // Maps thinking level to budget tokens
-int ThinkingBudgetTokens(const std::string& level) {
+static int ThinkingBudgetTokens(const std::string& level) {
     if (level == "low") return 1024;
     if (level == "medium") return 4096;
     if (level == "high") return 16000;
@@ -24,7 +24,7 @@ int ThinkingBudgetTokens(const std::string& level) {
 }
 
 // Applies thinking parameters to payload_json
-void ApplyThinkingParams(nlohmann::json& payload_json,
+static void ApplyThinkingParams(nlohmann::json& payload_json,
      const ChatRequest& request) {
     int budget = ThinkingBudgetTokens(request.thinking);
     if (budget > 0) {
@@ -39,7 +39,7 @@ void ApplyThinkingParams(nlohmann::json& payload_json,
 }
 
 // Serialize message content to Anthropic format
-nlohmann::json SerializeMessageContent(const std::vector<ContentSchema>& content) {
+static nlohmann::json SerializeMessageContent(const std::vector<ContentSchema>& content) {
     // Check if message has tool-related content
     bool has_tool_content = false;
     for (const auto& block : content) {
@@ -90,7 +90,7 @@ nlohmann::json SerializeMessageContent(const std::vector<ContentSchema>& content
 }
 
 // Serialize tools to Anthropic format
-nlohmann::json SerializeTools(const std::vector<ToolsSchema>& tools) {
+static nlohmann::json SerializeTools(const std::vector<ToolsSchema>& tools) {
     nlohmann::json arr = nlohmann::json::array();
     for (const auto& schema : tools) {
         nlohmann::json tool_json = nlohmann::json::object();

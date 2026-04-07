@@ -843,23 +843,32 @@ std::string ToolRegistry::BashTool(const nlohmann::json& params) {
         throw std::runtime_error("Command is required");
     }
 
-        std::string result;
+    std::string result;
     std::string cmd = command + " 2>&1";
     FILE* pipe = popen(cmd.c_str(), "r");
     if (!pipe) {
         throw std::runtime_error("Failed to execute command");
     }
 
-    char buffer[256];
+    // Use larger buffer to avoid truncating error messages
+    char buffer[4096];
     while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
         result += buffer;
     }
 
     int status = pclose(pipe);
+
+    // Always include exit code information
+    std::string exit_info = "\n[Exit code: " + std::to_string(status) + "]";
+
     if (status != 0) {
-        result += "\n[Command exited with code " + std::to_string(status) + "]";
+        // Command failed - throw exception so full error is passed to LLM without truncation
+        result += exit_info;
+        throw std::runtime_error(result);
     }
 
+    // Command succeeded - truncate if needed
+    result += exit_info;
     return result;
 }
 

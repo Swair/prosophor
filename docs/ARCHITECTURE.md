@@ -6,13 +6,17 @@ AiCode 是一个基于 LLM 的智能编码助手，采用 C++ 实现，支持多
 
 ### 1.1 核心特性
 
-- **多 LLM 提供者支持**: Anthropic、Qwen 等
-- **工具调用系统**: 文件操作、Shell 命令、Git、LSP 等
+- **多 LLM 提供者支持**: Anthropic、Qwen、Ollama 等
+- **工具调用系统**: 文件操作、Shell 命令、Git、LSP、子 Agent 等 40+ 工具
 - **技能系统**: 通过 SKILL.md 文件定义的可扩展技能
 - **MCP 协议**: 支持外部工具服务器集成
 - **计划模式**: 结构化任务规划和执行
 - **上下文压缩**: 自动管理长对话历史
 - **权限管理**: 细粒度的工具调用授权
+- **子 Agent 系统**: 任务分解与委派
+- **定时任务**: Cron 调度器支持
+- **工作树管理**: Git worktree 集成
+- **伴生宠物**: Buddy 系统（ASCII 艺术渲染）
 
 ---
 
@@ -50,9 +54,12 @@ AiCode 是一个基于 LLM 的智能编码助手，采用 C++ 实现，支持多
 ┌─────────────────────────────────────────────────────────────────┐
 │                    LLM Providers (providers/)                   │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
-│  │ AnthropicProvider│ │  QwenProvider   │ │   LLMProvider   │ │
-│  └─────────────────┘  └─────────────────┘  │    (interface)  │ │
-│                                            └─────────────────┘ │
+│  │ AnthropicProvider│ │  QwenProvider   │ │   OllamaProvider│ │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
+│  ┌─────────────────┐                                            │
+│  │ LLMProvider     │                                            │
+│  │ (interface)     │                                            │
+│  └─────────────────┘                                            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -525,10 +532,12 @@ struct AgentConfig {
 - `LspManager`
 - `McpClient`
 - `SessionManager`
+- `TokenTracker`
+- `CronScheduler`
 
 ### 5.2 策略模式
 
-- `LLMProvider` 接口：`AnthropicProvider`, `QwenProvider`
+- `LLMProvider` 接口：`AnthropicProvider`, `QwenProvider`, `OllamaProvider`
 - `CompactStrategy`: `Summary`, `Truncate`, `Hybrid`
 
 ### 5.3 工厂模式
@@ -548,42 +557,61 @@ struct AgentConfig {
 ```
 main_src/
 ├── cli/                  # CLI 交互层
-│   ├── command_registry.h
-│   └── input_handler.h
+│   ├── command_registry.h/cc
+│   └── input_handler.h/cc
 ├── common/               # 通用工具
-│   ├── config.h          # 配置结构
+│   ├── config.h/cc       # 配置结构
 │   ├── constants.h
-│   ├── curl_client.h     # HTTP 客户端
+│   ├── curl_client.h/cc  # HTTP 客户端
 │   ├── log_wrapper.h
-│   └── noncopyable.h
+│   ├── noncopyable.h
+│   ├── file_utils.h/cc   # 文件工具
+│   ├── time_wrapper.h/cc # 时间工具
+│   └── string_utils.h/cc # 字符串工具
 ├── core/                 # 核心业务逻辑
-│   ├── agent_commander.h # 主入口/编排器
-│   ├── agent_core.h      # Agent 核心
-│   ├── compact_service.h # 上下文压缩
-│   ├── memory_manager.h  # 文件/记忆管理
-│   ├── messages_schema.h # 消息数据结构
-│   ├── permission_manager.h
-│   ├── plan_mode.h       # 计划模式
-│   ├── skill_loader.h    # 技能加载
-│   ├── system_prompt.h   # 系统提示构建
-│   ├── tool_registry.h   # 工具注册
-│   └── session_manager.h # 会话管理
+│   ├── agent_commander.h/cc  # 主入口/编排器
+│   ├── agent_core.h/cc       # Agent 核心
+│   ├── compact_service.h/cc  # 上下文压缩
+│   ├── memory_manager.h/cc   # 文件/记忆管理
+│   ├── messages_schema.h     # 消息数据结构
+│   ├── permission_manager.h/cc
+│   ├── plan_mode.h/cc        # 计划模式
+│   ├── skill_loader.h/cc     # 技能加载
+│   ├── system_prompt.h/cc    # 系统提示构建
+│   ├── tool_registry.h/cc    # 工具注册
+│   ├── session_manager.h/cc  # 会话管理
+│   └── reference_parser.h/cc # 文件引用解析
 ├── providers/            # LLM 提供者
-│   ├── llm_provider.h    # 抽象接口
-│   ├── anthropic_provider.h
-│   └── qwen_provider.h
+│   ├── llm_provider.h/cc # 抽象接口
+│   ├── anthropic_provider.h/cc
+│   ├── qwen_provider.h/cc
+│   └── ollama_provider.h/cc
 ├── tools/                # 工具实现
-│   ├── tool_registry.h
-│   ├── agent_tool.h
-│   ├── ask_user_question_tool.h
-│   ├── todo_write_tool.h
-│   └── ...
+│   ├── tool_registry.h/cc
+│   ├── agent_tool.h/cc
+│   ├── ask_user_question_tool.h/cc
+│   ├── todo_write_tool.h/cc
+│   ├── glob_tool.h/cc
+│   ├── grep_tool.h/cc
+│   ├── lsp_tool.h/cc
+│   ├── task_tool.h/cc
+│   ├── worktree_tool.h/cc
+│   ├── cron_tool.h/cc
+│   └── background_run_tool.h/cc
 ├── mcp/                  # MCP 协议
-│   └── mcp_client.h
+│   └── mcp_client.h/cc
+├── managers/             # 管理器
+│   ├── buddy_manager.h/cc
+│   ├── token_tracker.h/cc
+│   ├── worktree_manager.h/cc
+│   └── background_task_manager.h/cc
+├── agents/               # Agent 相关
+│   ├── plan_mode.h/cc
+│   ├── task_manager.h/cc
+│   └── subagent_coordinator.h/cc
 └── services/             # 外部服务
-    ├── lsp_manager.h     # LSP 管理
-    ├── cron_scheduler.h
-    └── worktree_manager.h
+    ├── lsp_manager.h/cc  # LSP 管理
+    └── cron_scheduler.h/cc
 ```
 
 ---
@@ -818,8 +846,11 @@ AiCode 是一个模块化的 AI 编码助手架构：
 3. **可扩展性**: 技能系统、MCP 协议、工具注册
 4. **安全性**: 权限管理、命令限制、超时保护
 5. **用户体验**: 计划模式、会话管理、上下文压缩
+6. **高级特性**: 子 Agent 系统、定时任务、工作树管理、伴生宠物
 
 核心价值主张：
 - 开源、可定制的 Claude Code 替代方案
-- 支持多种 LLM 提供者
+- 支持多种 LLM 提供者 (Anthropic/Qwen/Ollama)
 - 灵活的技能和工具扩展机制
+- 40+ 内置工具，覆盖文件操作、Git、LSP、Web 等
+- 完整的 MCP 协议支持，可集成外部工具服务器

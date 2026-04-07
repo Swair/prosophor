@@ -14,11 +14,9 @@
 #include "common/constants.h"
 #include "managers/memory_manager.h"
 #include "core/skill_loader.h"
-#include "core/agent_role.h"
 #include "core/compact_service.h"
 #include "managers/token_tracker.h"
 #include "core/reference_parser.h"
-#include "core/system_prompt.h"
 #include "tools/tool_registry.h"
 #include "services/lsp_manager.h"
 
@@ -61,53 +59,52 @@ static std::string TruncateToolResult(const std::string& result,
     return truncated;
 }
 
-AgentCore::AgentCore(std::shared_ptr<MemoryManager> memory_manager,
-                     std::shared_ptr<SkillLoader> skill_loader,
-                     std::vector<ToolsSchema> tool_schemas,
-                     std::function<std::string(const std::string& tool_name, const nlohmann::json& args)> tool_executor,
-                     std::function<ChatResponse(const ChatRequest& request)> chat_llm_cb,
-                     std::function<void(const ChatRequest&, std::function<void(const ChatResponse&)>)> chat_completion_stream,
-                     const AgentConfig& agent_config)
-    : memory_manager_(memory_manager),
-      skill_loader_(skill_loader),
-      tool_schemas_(std::move(tool_schemas)),
-      tool_executor_(std::move(tool_executor)),
-      chat_llm_cb_(std::move(chat_llm_cb)),
-      chat_llm_stream_cb_(std::move(chat_completion_stream)),
-      stop_requested_(false),
-      max_iterations_(15) {
-    max_iterations_ = agent_config_.DynamicMaxIterations();
-    LOG_INFO("AgentCore initialized with model: {}, max_iterations: {}",
-                  agent_config_.model, max_iterations_);
-
-    // Add tool schemas only if enabled
-    if (agent_config_.use_tools) {
-        chat_request_.tools = tool_schemas_;
-        chat_request_.tool_choice_auto = true;
-    }
-
-    SetConfig(agent_config);
+AgentCore& AgentCore::GetInstance() {
+    static AgentCore instance;
+    return instance;
 }
 
-void AgentCore::SetModel(const std::string& model_ref) {
-    agent_config_.model = model_ref;
-    chat_request_.model = model_ref;
-    LOG_INFO("Model set to: {}", model_ref);
+AgentCore::AgentCore()
+    : stop_requested_(false) {
 }
 
-void AgentCore::SetSystemPrompt(const std::vector<SystemSchema>& system_prompt, bool is_cache) {
-    chat_request_.system.clear();
-    for (const auto& schema : system_prompt) {
-        chat_request_.system.push_back(schema);
-    }
-    LOG_DEBUG("System prompt set with {} schemas (cache={})", system_prompt.size(), is_cache);
+AgentCore::~AgentCore() = default;
+
+void AgentCore::Initialize(std::shared_ptr<MemoryManager> memory_manager,
+                           std::shared_ptr<SkillLoader> skill_loader,
+                           std::vector<ToolsSchema> tool_schemas,
+                           std::function<std::string(const std::string& tool_name, const nlohmann::json& args)> tool_executor) {
+    memory_manager_ = memory_manager;
+    skill_loader_ = skill_loader;
+    tool_schemas_ = std::move(tool_schemas);
+    tool_executor_ = std::move(tool_executor);
+
+    LOG_INFO("AgentCore initialized with tool_schemas: {}", tool_schemas_.size());
 }
 
-std::vector<MessageSchema> AgentCore::CloseLoop(const std::string& message) {
+void AgentCore::SetProviderCallbacks(
+    std::function<ChatResponse(const ChatRequest& request)> chat_cb,
+    std::function<void(const ChatRequest&, std::function<void(const ChatResponse&)>)> stream_cb) {
+    chat_llm_cb_ = chat_cb;
+    chat_llm_stream_cb_ = stream_cb;
+    LOG_INFO("Provider callbacks updated");
+}
+
+ChatRequest AgentCore::BuildRequest(const AgentState& state) {
+    ChatRequest req;
+    req.model = state.model;
+    req.temperature = state.temperature;
+    req.max_tokens = state.max_tokens;
+    req.messages = state.messages;
+    req.system = state.system_prompt;
+    req.tools = state.use_tools ? tool_schemas_ : std::vector<ToolsSchema>{};
+    req.tool_choice_auto = state.use_tools;
+    return req;
+}
+
+void AgentCore::CloseLoop(const std::string& message, AgentState& state) {
     LOG_DEBUG("Processing message (non-streaming)");
     stop_requested_ = false;
-
-    std::vector<MessageSchema> res_messages;
 
     // Process message - resolve @file references
     std::string processed_message = message;
@@ -133,31 +130,31 @@ std::vector<MessageSchema> AgentCore::CloseLoop(const std::string& message) {
 
     // Add user message (with resolved references)
     if (!processed_message.empty()) {
-        chat_request_.messages.emplace_back("user", processed_message);
+        state.messages.emplace_back("user", processed_message);
     }
 
     // Check if compaction is needed
     auto& compact_service = CompactService::GetInstance();
-    if (compact_service.NeedsCompaction(chat_request_.messages)) {
+    if (compact_service.NeedsCompaction(state.messages)) {
         LOG_INFO("Context compaction triggered");
 
-        auto llm_callback = [this](const std::string& prompt) -> std::string {
+        auto llm_callback = [this, &state](const std::string& prompt) -> std::string {
             ChatRequest req;
-            req.model = agent_config_.model;
-            req.temperature = agent_config_.temperature;
+            req.model = state.model;
+            req.temperature = state.temperature;
             req.max_tokens = 4096;
             req.AddUserMessage(prompt);
             auto resp = chat_llm_cb_(req);
             return resp.content_text;
         };
 
-        auto compact_result = compact_service.Compact(chat_request_.messages, llm_callback);
-        chat_request_.messages = compact_result.kept_messages;
+        auto compact_result = compact_service.Compact(state.messages, llm_callback);
+        state.messages = compact_result.kept_messages;
 
         // Add summary to system prompt
         if (!compact_result.summary.empty()) {
-            chat_request_.system.clear();
-            chat_request_.system.push_back({"text", compact_result.summary, false});
+            state.system_prompt.clear();
+            state.system_prompt.push_back({"text", compact_result.summary, false});
         }
 
         LOG_INFO("Compaction complete: removed {} messages, saved ~{} tokens",
@@ -166,17 +163,18 @@ std::vector<MessageSchema> AgentCore::CloseLoop(const std::string& message) {
 
     int iterations = 0;
 
-    while (iterations < max_iterations_) {
+    while (iterations < state.max_iterations) {
         // Check for interrupt
         if (stop_requested_) {
             throw std::runtime_error("Interrupted by user");
         }
 
         try {
-            // 1. 标准化：调用大模型的接口，定义入参，出参，接口
-            // 2. chat_with_llm_单次调用，内部保持无状态
-            // 3. 闭环放在CloseLoop里，不在chat_with_llm_里，状态量都在这一层
-            auto response = chat_llm_cb_(chat_request_);
+            // Build request from state
+            ChatRequest request = BuildRequest(state);
+
+            auto response = chat_llm_cb_(request);
+            LOG_INFO("< {}", response.content_text);
 
             if (!response.tool_calls.empty()) {
                 LOG_INFO("LLM requested {} tool calls", response.tool_calls.size());
@@ -186,12 +184,10 @@ std::vector<MessageSchema> AgentCore::CloseLoop(const std::string& message) {
                 assistant_msg.role = "assistant";
                 assistant_msg.AddTextContent(response.content_text);
 
-
                 // Execute tools and build results message
                 MessageSchema results_msg;
                 results_msg.role = "user";
                 bool has_tool_error = false;
-                std::string tool_error_msg;
 
                 for (const auto& tc : response.tool_calls) {
                     // Check for interrupt during tool execution
@@ -199,31 +195,29 @@ std::vector<MessageSchema> AgentCore::CloseLoop(const std::string& message) {
                         throw std::runtime_error("Interrupted by user");
                     }
 
-                    LOG_INFO("  Tool: {}, args: {}", tc.name, tc.arguments.dump());
-
                     // Add tool call to assistant message
                     assistant_msg.AddToolUseContent(tc.id, tc.name, tc.arguments);
+                    LOG_INFO("< Tool using: {}, args: {}", tc.name, tc.arguments.dump());
 
                     try {
                         auto result = tool_executor_(tc.name, tc.arguments);
+                        // Only truncate successful results, keep error output intact
                         result = TruncateToolResult(result, kToolResultMaxChars, kToolResultKeepLines);
+                        LOG_INFO("< Tool {}, result: {}", tc.name, result);
                         results_msg.AddToolResultContent(tc.id, result);
                     } catch (const std::exception& e) {
-                        // Tool execution failed - add error result to inform LLM
+                        // Tool execution failed - DON'T truncate error message
+                        // Full error context is critical for LLM to diagnose and fix the issue
                         has_tool_error = true;
-                        tool_error_msg = e.what();
-                        std::string error_result = "Error: " + tool_error_msg;
-                        LOG_WARN("Tool {} execution failed: {}", tc.name, e.what());
+                        std::string error_result = e.what();
+                        LOG_WARN("< Tool {} execution failed: {}", tc.name, error_result);
                         results_msg.AddToolResultContent(tc.id, error_result);
                     }
                 }
 
-                // Update request history for next iteration
-                chat_request_.messages.push_back(assistant_msg);
-                chat_request_.messages.push_back(results_msg);
-
-                res_messages.push_back(assistant_msg);
-                res_messages.push_back(results_msg);
+                // Update history for next iteration
+                state.messages.push_back(assistant_msg);
+                state.messages.push_back(results_msg);
 
                 iterations++;
 
@@ -234,21 +228,24 @@ std::vector<MessageSchema> AgentCore::CloseLoop(const std::string& message) {
                 continue;
             }
 
+            // Final text response - no tool calls
             if (!response.content_text.empty()) {
-                LOG_INFO("LLM provided final response");
+                LOG_INFO("=====================================================");
                 MessageSchema final_msg;
                 final_msg.role = "assistant";
                 final_msg.AddTextContent(response.content_text);
-                res_messages.push_back(final_msg);
-                return res_messages;
+
+                // Add to history and return
+                state.messages.push_back(final_msg);
+                return;
             }
 
             if (stop_requested_) {
                 MessageSchema stop_msg;
                 stop_msg.role = "assistant";
                 stop_msg.AddTextContent("[Agent turn stopped by user]");
-                res_messages.push_back(stop_msg);
-                return res_messages;
+                state.messages.push_back(stop_msg);
+                return;
             }
 
             LOG_ERROR("Unexpected LLM response format");
@@ -262,7 +259,7 @@ std::vector<MessageSchema> AgentCore::CloseLoop(const std::string& message) {
             }
 
             LOG_ERROR("Error in LLM processing: {}", e.what());
-            if (iterations < max_iterations_ - 1) {
+            if (iterations < state.max_iterations - 1) {
                 std::this_thread::sleep_for(
                     std::chrono::seconds(1 << std::min(iterations, 4)));
                 iterations++;
@@ -273,11 +270,11 @@ std::vector<MessageSchema> AgentCore::CloseLoop(const std::string& message) {
     }
 
     throw std::runtime_error("Failed to get valid response after " +
-                             std::to_string(max_iterations_) + " iterations");
+                             std::to_string(state.max_iterations) + " iterations");
 }
 
 std::vector<MessageSchema> AgentCore::LoopStream(
-    const std::string& message, AgentEventCallback callback) {
+    const std::string& message, AgentState& state, AgentEventCallback callback) {
     LOG_DEBUG("Processing message (streaming)");
     stop_requested_ = false;
 
@@ -285,48 +282,48 @@ std::vector<MessageSchema> AgentCore::LoopStream(
 
     // Add user message
     if (!message.empty()) {
-        chat_request_.messages.emplace_back("user", message);
+        state.messages.emplace_back("user", message);
     }
 
     // Check if compaction is needed
     auto& compact_service = CompactService::GetInstance();
-    if (compact_service.NeedsCompaction(chat_request_.messages)) {
+    if (compact_service.NeedsCompaction(state.messages)) {
         LOG_INFO("Context compaction triggered (streaming)");
 
-        auto llm_callback = [this](const std::string& prompt) -> std::string {
+        auto llm_callback = [this, &state](const std::string& prompt) -> std::string {
             ChatRequest req;
-            req.model = agent_config_.model;
-            req.temperature = agent_config_.temperature;
+            req.model = state.model;
+            req.temperature = state.temperature;
             req.max_tokens = 4096;
             req.AddUserMessage(prompt);
             auto resp = chat_llm_cb_(req);
             return resp.content_text;
         };
 
-        auto compact_result = compact_service.Compact(chat_request_.messages, llm_callback);
-        chat_request_.messages = compact_result.kept_messages;
+        auto compact_result = compact_service.Compact(state.messages, llm_callback);
+        state.messages = compact_result.kept_messages;
 
         // Add summary to system prompt
         if (!compact_result.summary.empty()) {
-            chat_request_.system.clear();
-            chat_request_.system.push_back({"text", compact_result.summary, false});
+            state.system_prompt.clear();
+            state.system_prompt.push_back({"text", compact_result.summary, false});
         }
 
         LOG_INFO("Compaction complete: removed {} messages, saved ~{} tokens",
                  compact_result.messages_removed, compact_result.tokens_saved);
     }
 
-    // Use member chat_request_ - set stream flag
-    chat_request_.stream = true;
-
     int iterations = 0;
 
-    while (iterations < max_iterations_ && !stop_requested_) {
+    while (iterations < state.max_iterations && !stop_requested_) {
         try {
             std::string full_response;
 
+            ChatRequest request = BuildRequest(state);
+            request.stream = true;
+
             chat_llm_stream_cb_(
-                chat_request_, [&](const ChatResponse& chunk) {
+                request, [&](const ChatResponse& chunk) {
                     if (!chunk.content_text.empty()) {
                         full_response += chunk.content_text;
                         if (callback) {
@@ -349,7 +346,7 @@ std::vector<MessageSchema> AgentCore::LoopStream(
                             if (!full_response.empty())
                                 assistant_msg.AddTextContent(full_response);
                             assistant_msg.AddToolUseContent(tc.id, tc.name, tc.arguments);
-                            chat_request_.messages.push_back(assistant_msg);
+                            state.messages.push_back(assistant_msg);
                             new_memory.push_back(assistant_msg);
                             full_response.clear();
 
@@ -367,7 +364,7 @@ std::vector<MessageSchema> AgentCore::LoopStream(
                                 MessageSchema results_msg;
                                 results_msg.role = "user";
                                 results_msg.AddToolResultContent(tc.id, result);
-                                chat_request_.messages.push_back(results_msg);
+                                state.messages.push_back(results_msg);
                                 new_memory.push_back(results_msg);
                             } catch (const std::exception& e) {
                                 std::string error_content = "Error: " + std::string(e.what());
@@ -381,7 +378,7 @@ std::vector<MessageSchema> AgentCore::LoopStream(
                                 MessageSchema results_msg;
                                 results_msg.role = "user";
                                 results_msg.AddToolResultContent(tc.id, error_content);
-                                chat_request_.messages.push_back(results_msg);
+                                state.messages.push_back(results_msg);
                                 new_memory.push_back(results_msg);
                             }
                         }
@@ -430,20 +427,6 @@ std::vector<MessageSchema> AgentCore::LoopStream(
 void AgentCore::Stop() {
     stop_requested_ = true;
     LOG_INFO("Agent stop requested");
-}
-
-void AgentCore::SetConfig(const AgentConfig& config) {
-    agent_config_ = config;
-    chat_request_.model = config.model;
-    chat_request_.temperature = config.temperature;
-    chat_request_.max_tokens = config.max_tokens;
-    chat_request_.thinking = config.thinking;
-    max_iterations_ = config.DynamicMaxIterations();
-    LOG_INFO(
-        "AgentCore config updated: model={}, temp={}, max_tokens={}, "
-        "max_iterations={}, thinking={}",
-        config.model, config.temperature, config.max_tokens, max_iterations_,
-        config.thinking);
 }
 
 void AgentCore::InitializeLsp() {

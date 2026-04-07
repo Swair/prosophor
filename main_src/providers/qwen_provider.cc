@@ -14,10 +14,10 @@
 
 namespace aicode {
 
-// Internal helper functions for Qwen serialization
+// Internal helper functions for Qwen serialization (static to avoid linkage conflicts)
 
 // Maps thinking level to budget tokens
-int ThinkingBudgetTokens(const std::string& level) {
+static int ThinkingBudgetTokens(const std::string& level) {
     if (level == "low") return 1024;
     if (level == "medium") return 4096;
     if (level == "high") return 16000;
@@ -25,7 +25,7 @@ int ThinkingBudgetTokens(const std::string& level) {
 }
 
 // Applies thinking parameters to payload_json
-void ApplyThinkingParams(nlohmann::json& payload_json,
+static void ApplyThinkingParams(nlohmann::json& payload_json,
      const ChatRequest& request) {
     int budget = ThinkingBudgetTokens(request.thinking);
     if (budget > 0) {
@@ -40,7 +40,7 @@ void ApplyThinkingParams(nlohmann::json& payload_json,
 }
 
 // Serialize message content to Qwen format (same as Anthropic)
-nlohmann::json SerializeMessageContent(const std::vector<ContentSchema>& content) {
+static nlohmann::json SerializeMessageContent(const std::vector<ContentSchema>& content) {
     // Check if message has tool-related content
     bool has_tool_content = false;
     for (const auto& block : content) {
@@ -91,7 +91,7 @@ nlohmann::json SerializeMessageContent(const std::vector<ContentSchema>& content
 }
 
 // Serialize tools to Qwen format (same as Anthropic)
-nlohmann::json SerializeTools(const std::vector<ToolsSchema>& tools) {
+static nlohmann::json SerializeTools(const std::vector<ToolsSchema>& tools) {
     nlohmann::json arr = nlohmann::json::array();
     for (const auto& schema : tools) {
         nlohmann::json tool_json = nlohmann::json::object();
@@ -172,9 +172,9 @@ std::string QwenProvider::Serialize(const ChatRequest& request) const {
 
     ApplyThinkingParams(payload_json, request);
 
-    LOG_DEBUG("  reqeust body: {}", payload_json.dump(4));
+    LOG_DEBUG("Request body: {}", payload_json.dump(4));
 
-    return payload_json.dump(2);
+    return payload_json.dump();
 }
 
 ChatResponse QwenProvider::Deserialize(const std::string& json_str) const {
@@ -196,6 +196,8 @@ ChatResponse QwenProvider::Deserialize(const std::string& json_str) const {
     }
 
     ChatResponse result;
+
+    // Parse content blocks
     if (response_json.contains("content") && response_json["content"].is_array()) {
         for (const auto& block : response_json["content"]) {
             std::string block_type = block.value("type", "");
@@ -239,13 +241,13 @@ ChatResponse QwenProvider::Chat(const ChatRequest& request) {
     // http 请求
     HttpRequest http_request;
     http_request.url = base_url_ + "/v1/messages";
-    http_request.post_data = Serialize(request);
     http_request.timeout_seconds = timeout_;
 
     HeaderList headers = CreateHeaders();
     http_request.headers = headers.get();
-
     PrintRequestLog(http_request.url, api_key_.substr(0, 8) + "...");
+
+    http_request.post_data = Serialize(request);
 
     HttpResponse http_response = HttpClient::Post(http_request);
 
