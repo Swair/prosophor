@@ -39,18 +39,27 @@ MemoryManager::~MemoryManager() { StopFileWatcher(); }
 void MemoryManager::LoadWorkspaceFiles() {
     LOG_INFO("Loading workspace files from: {}", workspace_path_.string());
 
+    // 1. Load root workspace identity files (SOUL.md, USER.md, etc.)
     for (const auto& name :
          {"SOUL.md", "USER.md", "MEMORY.md", "AGENTS.md", "TOOLS.md"}) {
         try {
-            auto content = ReadIdentityFile(name);
-            if (!content.empty()) {
-                LOG_DEBUG("Loaded {} ({} bytes)", name, content.size());
+            auto filepath = workspace_path_ / name;
+            if (std::filesystem::exists(filepath)) {
+                auto content = ReadFileContent(filepath);
+                if (!content.empty()) {
+                    LOG_INFO("Loaded {} ({} bytes)", name, content.size());
+                }
             }
         } catch (const std::exception& e) {
             LOG_DEBUG("No {} found: {}", name, e.what());
         }
     }
 
+    // 2. Load AICODE.md from each directory (like Claude Code's CLAUDE.md)
+    // These provide directory-specific instructions/norms
+    LoadAicodeFilesRecursively(workspace_path_);
+
+    // 3. Load daily memory files
     auto memory_dir = workspace_path_ / "memory";
     if (std::filesystem::exists(memory_dir)) {
         int loaded_count = 0;
@@ -65,7 +74,9 @@ void MemoryManager::LoadWorkspaceFiles() {
                 }
             }
         }
-        LOG_INFO("Loaded {} daily memory files", loaded_count);
+        if (loaded_count > 0) {
+            LOG_INFO("Loaded {} daily memory files", loaded_count);
+        }
     }
 
     spdlog::info("Workspace files loaded successfully");
@@ -82,6 +93,37 @@ std::string MemoryManager::ReadAgentsFile() const {
 
 std::string MemoryManager::ReadToolsFile() const {
     return ReadIdentityFile("TOOLS.md");
+}
+
+void MemoryManager::LoadAicodeFilesRecursively(const std::filesystem::path& dir) {
+    // Load AICODE.md from current directory if exists
+    auto aicode_file = dir / "AICODE.md";
+    if (std::filesystem::exists(aicode_file)) {
+        try {
+            auto content = ReadFileContent(aicode_file);
+            if (!content.empty()) {
+                // Store with relative path prefix for context
+                auto rel_path = std::filesystem::relative(dir, workspace_path_);
+                std::string prefix = rel_path.empty() ? "" : ("[" + rel_path.string() + "] ");
+                LOG_INFO("Loaded {}AICODE.md ({} bytes)", prefix, content.size());
+            }
+        } catch (const std::exception& e) {
+            LOG_DEBUG("Failed to load AICODE.md from {}: {}", dir.string(), e.what());
+        }
+    }
+
+    // Recursively search subdirectories (skip hidden directories and symlinks)
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+            if (entry.is_directory() &&
+                !entry.is_symlink() &&
+                entry.path().filename().string()[0] != '.') {
+                LoadAicodeFilesRecursively(entry.path());
+            }
+        }
+    } catch (const std::exception& e) {
+        LOG_DEBUG("Failed to iterate directory {}: {}", dir.string(), e.what());
+    }
 }
 
 std::vector<std::string> MemoryManager::SearchMemory(
@@ -121,8 +163,8 @@ std::vector<std::string> MemoryManager::SearchMemory(
 }
 
 void MemoryManager::SaveDailyMemory(const std::string& content) {
-    auto date_str = GetCurrentDate();
-    auto timestamp_str = GetCurrentTimestamp();
+    auto date_str = SystemClock::GetCurrentDate();
+    auto timestamp_str = SystemClock::GetCurrentTimestamp();
 
     auto memory_dir = workspace_path_ / "memory";
     std::filesystem::create_directories(memory_dir);
@@ -216,7 +258,7 @@ void MemoryManager::SetAgentWorkspace(const std::string& agent_id) {
     agent_id_ = agent_id;
     workspace_path_ = base_dir_ / "agents" / agent_id / "workspace";
     std::filesystem::create_directories(workspace_path_);
-    LOG_INFO("Set agent workspace: {}", workspace_path_.string());
+    LOG_DEBUG("SetAgentWorkspace: {}", workspace_path_.string());
 }
 
 std::filesystem::path MemoryManager::GetBaseDir() const { return base_dir_; }

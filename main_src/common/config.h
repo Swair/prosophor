@@ -55,6 +55,7 @@ struct AgentConfig {
     int context_window = 128000;
     std::string thinking = "off";
     bool use_tools = true;
+    bool enable_streaming = true;  // Whether to use streaming for responses
 
     // Auto-compaction
     bool auto_compact = true;
@@ -138,8 +139,7 @@ struct SecurityConfig {
 /// Top-level AiCode configuration
 struct AiCodeConfig {
     std::string log_level = "info";
-    std::string default_provider = "anthropic";
-    std::string default_agent = "default";
+    std::string default_role = "default";  // Default role to use when not specified
     bool show_buddy = true;
 
     SecurityConfig security;

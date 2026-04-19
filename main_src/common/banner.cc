@@ -26,7 +26,7 @@ void PrintBanner(const std::string& version, bool show_buddy) {
     // Default robot face
     if (!show_buddy || !BuddyManager::GetInstance().HasCompanion()) {
         std::cout << "          ____        \n";
-        std::cout << "     ╭───|    |── ──╮\n";
+        std::cout << "     ╭─(─|    |─)-──╮\n";
         std::cout << "    ╭─────────────╮ |\n";
         std::cout << " A==│  ◉      ◉   │ |==C \n";
         std::cout << "    │     V       │ |\n";
@@ -48,7 +48,8 @@ void PrintHelp() {
     std::cout << "\nCommands:\n";
     std::cout << "  /help     - Show this help message\n";
     std::cout << "  /clear    - Clear conversation history\n";
-    std::cout << "  /model    - Show/change current model\n";
+    std::cout << "  /model    - Show/change provider and model (overrides role config)\n";
+    std::cout << "  /role     - Show/change current role\n";
     std::cout << "  /config   - Show current configuration\n";
     std::cout << "  /memory   - Show/save daily memory\n";
     std::cout << "  /exit     - Exit the application\n";

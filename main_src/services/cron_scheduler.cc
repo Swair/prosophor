@@ -50,7 +50,7 @@ void CronScheduler::Shutdown() {
 }
 
 std::string CronScheduler::GenerateTaskId() const {
-    return GenerateIdWithTimestamp("cron_");
+    return SystemClock::GenerateIdWithTimestamp("cron_");
 }
 
 std::string CronScheduler::Schedule(const std::string& cron,
@@ -66,7 +66,7 @@ std::string CronScheduler::Schedule(const std::string& cron,
     task.recurring = recurring;
     task.durable = durable;
     task.status = CronJobStatus::Active;
-    task.created_at = GetCurrentTimestamp();
+    task.created_at = SystemClock::GetCurrentTimestamp();
     task.next_execution_at = GetNextExecutionTime(cron);
 
     tasks_[task.id] = task;
@@ -146,7 +146,7 @@ std::string CronScheduler::RunNow(const std::string& task_id) {
 
 std::string CronScheduler::GetNextExecutionTime(const std::string& cron_expression) const {
     auto next_time = CalculateNextTime(cron_expression);
-    return FormatTimestamp(next_time, "%Y-%m-%dT%H:%M:%S");
+    return SystemClock::FormatTimestamp(next_time, "%Y-%m-%dT%H:%M:%S");
 }
 
 std::chrono::system_clock::time_point CronScheduler::CalculateNextTime(const std::string& cron) const {
@@ -156,7 +156,7 @@ std::chrono::system_clock::time_point CronScheduler::CalculateNextTime(const std
     iss >> minute >> hour >> dom >> month >> dow;
 
     auto now = std::chrono::system_clock::now();
-    auto tm = GetLocalTime(now);
+    auto tm = SystemClock::GetLocalTime(now);
 
     // Start from next minute
     tm.tm_sec = 0;
@@ -211,7 +211,7 @@ void CronScheduler::ExecuteTask(ScheduledTask& task) {
     LOG_INFO("Executing scheduled task {}: {}", task.id, task.prompt);
 
     task.execution_count++;
-    task.last_executed_at = GetCurrentTimestamp();
+    task.last_executed_at = SystemClock::GetCurrentTimestamp();
 
     try {
         task.last_result = execute_callback_(task.prompt);

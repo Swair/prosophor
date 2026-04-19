@@ -12,8 +12,7 @@
 #include "common/log_wrapper.h"
 #include "tools/tool_registry.h"
 #include "common/config.h"
-#include "core/messages_schema.h"
-#include "core/agent_state.h"  // For SystemSchema
+#include "common/messages_schema.h"
 
 namespace aicode {
 
@@ -122,7 +121,8 @@ class LLMProvider {
 
     virtual ChatResponse Chat(const ChatRequest& request) = 0;
 
-    virtual void ChatStream(const ChatRequest& request,
+    /// Streaming chat - returns accumulated ChatResponse after stream completes
+    virtual ChatResponse ChatStream(const ChatRequest& request,
       std::function<void(const ChatResponse&)> callback) = 0;
 
     virtual std::string GetProviderName() const = 0;
@@ -132,7 +132,6 @@ class LLMProvider {
     virtual std::string Serialize(const ChatRequest& request) const = 0;
 
     virtual ChatResponse Deserialize(const std::string& json_str) const = 0;
-
 };
 
 }  // namespace aicode

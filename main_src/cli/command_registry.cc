@@ -11,10 +11,10 @@
 
 #include "common/log_wrapper.h"
 #include "core/agent_core.h"
-#include "core/agent_commander.h"
+#include "cli/agent_commander.h"
 #include "managers/token_tracker.h"
 #include "agents/task_manager.h"
-#include "managers/session_manager.h"
+#include "managers/agent_session_manager.h"
 #include "managers/plugin_manager.h"
 #include "agents/plan_mode.h"
 #include "managers/memory_manager.h"
@@ -339,15 +339,65 @@ void CommandRegistry::Initialize() {
     // /model - Show/change current model
     {
         Command cmd;
+        cmd.name = "role";
+        cmd.description = "Show or change the default role";
+        cmd.usage = "/role [role_id]";
+        cmd.aliases = {"rl"};
+        cmd.handler = [this](const CommandContext& ctx, const std::vector<std::string>& args) {
+            return CmdRole(ctx, args);
+        };
+        cmd.completer = [](const std::string& partial) {
+            // Complete role names from config/.aicode/roles/
+            std::vector<std::string> completions;
+            std::string roles_dir = "config/.aicode/roles";
+            if (std::filesystem::exists(roles_dir)) {
+                for (const auto& entry : std::filesystem::directory_iterator(roles_dir)) {
+                    if (entry.is_regular_file() && entry.path().extension() == ".md") {
+                        std::string role_id = entry.path().stem().string();
+                        if (role_id.find(partial) == 0) {
+                            completions.push_back(role_id);
+                        }
+                    }
+                }
+            }
+            return completions;
+        };
+        RegisterCommand(cmd);
+    }
+
+    // /roles - List all available roles
+    {
+        Command cmd;
+        cmd.name = "roles";
+        cmd.description = "List all available roles";
+        cmd.usage = "/roles";
+        cmd.aliases = {"rls"};
+        cmd.handler = [this](const CommandContext& ctx, const std::vector<std::string>& args) {
+            return CmdRoles(ctx, args);
+        };
+        RegisterCommand(cmd);
+    }
+
+    // /model - Show/change current provider and model
+    {
+        Command cmd;
         cmd.name = "model";
-        cmd.description = "Show or change the current model";
-        cmd.usage = "/model [provider/agent|model_name]";
-        cmd.aliases = {"mdl"};
+        cmd.description = "Show or change the current provider/model (overrides role config)";
+        cmd.usage = "/model [provider_name] [model_name]";
+        cmd.aliases = {"md"};
         cmd.handler = [this](const CommandContext& ctx, const std::vector<std::string>& args) {
             return CmdModel(ctx, args);
         };
-        cmd.completer = [this](const std::string& partial) {
-            return CompleteModel(partial);
+        cmd.completer = [](const std::string& partial) {
+            // Complete provider names from config
+            std::vector<std::string> completions;
+            std::vector<std::string> providers = {"dashscope", "ollama", "anthropic"};
+            for (const auto& p : providers) {
+                if (p.find(partial) == 0) {
+                    completions.push_back(p);
+                }
+            }
+            return completions;
         };
         RegisterCommand(cmd);
     }
@@ -394,6 +444,19 @@ void CommandRegistry::Initialize() {
                 }
             }
             return completions;
+        };
+        RegisterCommand(cmd);
+    }
+
+    // /bye - Exit the application
+    {
+        Command cmd;
+        cmd.name = "bye";
+        cmd.description = "Exit the application";
+        cmd.usage = "/bye";
+        cmd.aliases = {};
+        cmd.handler = [this](const CommandContext& ctx, const std::vector<std::string>& args) {
+            return CmdBye(ctx, args);
         };
         RegisterCommand(cmd);
     }
@@ -479,38 +542,16 @@ std::vector<std::string> CommandRegistry::CompleteCommand(const std::string& par
     return completions;
 }
 
-std::vector<std::string> CommandRegistry::CompleteModel(const std::string& partial) const {
+std::vector<std::string> CommandRegistry::CompleteRole(const std::string& partial) const {
     std::vector<std::string> completions;
-    auto& config = AiCodeConfig::GetInstance();
+    std::string roles_dir = "config/.aicode/roles";
 
-    // Check if partial contains a slash (provider/agent format)
-    size_t slash_pos = partial.find('/');
-    if (slash_pos != std::string::npos) {
-        // Complete agent name for given provider
-        std::string provider = partial.substr(0, slash_pos);
-        std::string agent_partial = partial.substr(slash_pos + 1);
-
-        auto provider_it = config.providers.find(provider);
-        if (provider_it != config.providers.end()) {
-            for (const auto& [agent_name, agent_config] : provider_it->second.agents) {
-                if (agent_name.find(agent_partial) == 0) {
-                    completions.push_back(provider + "/" + agent_name);
-                }
-            }
-        }
-    } else {
-        // Complete provider names
-        for (const auto& [provider_name, provider_config] : config.providers) {
-            if (provider_name.find(partial) == 0) {
-                completions.push_back(provider_name + "/");
-            }
-        }
-        // Also suggest model names from current provider
-        auto current_it = config.providers.find(config.default_provider);
-        if (current_it != config.providers.end()) {
-            for (const auto& [agent_name, agent_config] : current_it->second.agents) {
-                if (agent_config.model.find(partial) == 0) {
-                    completions.push_back(agent_config.model);
+    if (std::filesystem::exists(roles_dir)) {
+        for (const auto& entry : std::filesystem::directory_iterator(roles_dir)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".md") {
+                std::string role_id = entry.path().stem().string();
+                if (role_id.find(partial) == 0) {
+                    completions.push_back(role_id);
                 }
             }
         }
@@ -908,8 +949,7 @@ CommandResult CommandRegistry::CmdConfig(const CommandContext&, const std::vecto
         // Show current config
         std::ostringstream oss;
         oss << "Current configuration:\n";
-        oss << "  Default provider: " << config.default_provider << "\n";
-        oss << "  Default agent: " << config.default_agent << "\n";
+        oss << "  Default role: " << config.default_role << "\n";
         oss << "  Log level: " << config.log_level << "\n";
         oss << "  Permission level: " << config.security.permission_level << "\n";
         return CommandResult::Ok(oss.str());
@@ -1032,7 +1072,7 @@ CommandResult CommandRegistry::CmdMcp(const CommandContext&, const std::vector<s
 }
 
 CommandResult CommandRegistry::CmdResume(const CommandContext&, const std::vector<std::string>& args) {
-    auto& session_mgr = SessionManager::GetInstance();
+    auto& session_mgr = AgentSessionManager::GetInstance();
     std::ostringstream oss;
 
     std::string session_id;
@@ -1045,47 +1085,39 @@ CommandResult CommandRegistry::CmdResume(const CommandContext&, const std::vecto
         }
     }
 
-    std::vector<MessageSchema> messages;
-    nlohmann::json metadata;
-
-    if (session_mgr.LoadSession(session_id, messages, metadata)) {
-        oss << "Resumed session: " << session_id << "\n";
-        oss << "  Messages: " << messages.size() << "\n";
-        oss << "  Created: " << metadata.value("created_at", "unknown") << "\n";
-        if (metadata.contains("workspace")) {
-            oss << "  Workspace: " << metadata["workspace"] << "\n";
-        }
-        if (metadata.contains("last_user_message")) {
-            oss << "  Last message: " << metadata["last_user_message"] << "\n";
+    const auto* session = session_mgr.GetSession(session_id);
+    if (session) {
+        oss << "Resumed session: " << session->session_id << "\n";
+        oss << "  Role: " << session->role_id << "\n";
+        oss << "  Messages: " << session->messages.size() << "\n";
+        if (!session->task_description.empty()) {
+            oss << "  Task: " << session->task_description << "\n";
         }
         return CommandResult::Ok(oss.str());
     }
 
-    return CommandResult::Fail("Failed to load session: " + session_id);
+    return CommandResult::Fail("Failed to get session: " + session_id);
 }
 
 CommandResult CommandRegistry::CmdSessions(const CommandContext&, const std::vector<std::string>&) {
-    auto& session_mgr = SessionManager::GetInstance();
+    auto& session_mgr = AgentSessionManager::GetInstance();
     auto sessions = session_mgr.ListSessions();
     std::ostringstream oss;
 
     if (sessions.empty()) {
-        return CommandResult::Ok("No saved sessions found.");
+        return CommandResult::Ok("No active sessions found.");
     }
 
-    oss << "Saved sessions:\n\n";
+    oss << "Active sessions:\n\n";
     for (size_t i = 0; i < sessions.size() && i < 20; ++i) {
-        const auto& s = sessions[i];
+        const auto* s = session_mgr.GetSession(sessions[i]);
+        if (!s) continue;
         std::string marker = (i == 0) ? "* " : "  ";
-        oss << marker << s.session_id << "\n";
-        oss << "       " << s.message_count << " messages, "
-            << s.token_count << " tokens, $"
-            << std::fixed << std::setprecision(2) << s.cost_usd << "\n";
-        oss << "       Updated: " << s.updated_at << "\n";
-        if (!s.last_user_message.empty()) {
-            oss << "       Last: " << s.last_user_message.substr(0, 50);
-            if (s.last_user_message.size() > 50) oss << "...";
-            oss << "\n";
+        oss << marker << s->session_id << "\n";
+        oss << "       Role: " << s->role_id << "\n";
+        oss << "       Messages: " << s->messages.size() << "\n";
+        if (!s->task_description.empty()) {
+            oss << "       Task: " << s->task_description << "\n";
         }
         oss << "\n";
     }
@@ -1518,7 +1550,7 @@ CommandResult CommandRegistry::CmdDoctor(const CommandContext& ctx, const std::v
     // Configuration
     oss << "Configuration:\n";
     auto& config = AiCodeConfig::GetInstance();
-    oss << "  Default provider: " << config.default_provider << "\n";
+    oss << "  Default role: " << config.default_role << "\n";
     oss << "  Log level: " << config.log_level << "\n";
 
     return CommandResult::Ok(oss.str());
@@ -1896,6 +1928,7 @@ CommandResult CommandRegistry::CmdMemory(const CommandContext& ctx, const std::v
 }
 
 CommandResult CommandRegistry::CmdSummary(const CommandContext& ctx, const std::vector<std::string>& args) {
+    (void)ctx;  // Mark as intentionally unused
     std::ostringstream oss;
     bool brief = false;
     bool detailed = false;
@@ -1909,34 +1942,32 @@ CommandResult CommandRegistry::CmdSummary(const CommandContext& ctx, const std::
         }
     }
 
-    auto& session_mgr = SessionManager::GetInstance();
+    auto& session_mgr = AgentSessionManager::GetInstance();
     std::string session_id = session_mgr.GetLastSessionId();
 
     if (session_id.empty()) {
         return CommandResult::Ok("No active session found.");
     }
 
-    // Load session
-    std::vector<MessageSchema> messages;
-    nlohmann::json metadata;
-
-    if (!session_mgr.LoadSession(session_id, messages, metadata)) {
-        return CommandResult::Fail("Failed to load session: " + session_id);
+    // Get session from memory
+    const auto* session = session_mgr.GetSession(session_id);
+    if (!session) {
+        return CommandResult::Fail("Failed to get session: " + session_id);
     }
 
     oss << "=== Session Summary ===\n\n";
-    oss << "Session ID: " << session_id << "\n";
-    oss << "Created: " << metadata.value("created_at", "unknown") << "\n";
+    oss << "Session ID: " << session->session_id << "\n";
+    oss << "Role: " << session->role_id << "\n";
+    oss << "Task: " << session->task_description << "\n";
 
-    if (metadata.contains("workspace")) {
-        oss << "Workspace: " << metadata["workspace"] << "\n";
+    if (!session->working_directory.empty()) {
+        oss << "Working Directory: " << session->working_directory << "\n";
     }
 
     // Count statistics
     int user_messages = 0, assistant_messages = 0, tool_calls = 0;
-    std::set<std::string> files_modified;
 
-    for (const auto& msg : messages) {
+    for (const auto& msg : session->messages) {
         if (msg.role == "user") {
             user_messages++;
         } else if (msg.role == "assistant") {
@@ -1964,11 +1995,11 @@ CommandResult CommandRegistry::CmdSummary(const CommandContext& ctx, const std::
     oss << "  Total tokens: " << total_stats.total_tokens << "\n";
     oss << "  Cost: $" << std::fixed << std::setprecision(4) << tracker.GetTotalEstimatedCost() << "\n";
 
-    if (detailed && !messages.empty()) {
+    if (detailed && !session->messages.empty()) {
         oss << "\n=== Recent Messages ===\n\n";
-        int start = std::max(0, static_cast<int>(messages.size()) - 10);
-        for (size_t i = start; i < messages.size(); ++i) {
-            const auto& msg = messages[i];
+        int start = std::max(0, static_cast<int>(session->messages.size()) - 10);
+        for (size_t i = start; i < session->messages.size(); ++i) {
+            const auto& msg = session->messages[i];
             oss << "[" << msg.role << "]: ";
             if (!msg.content.empty() && msg.content[0].type == "text") {
                 std::string text = msg.content[0].text;
@@ -1991,138 +2022,147 @@ CommandResult CommandRegistry::CmdSummary(const CommandContext& ctx, const std::
 
 // ==================== Additional Command Handlers ====================
 
-CommandResult CommandRegistry::CmdModel(const CommandContext& ctx, const std::vector<std::string>& args) {
+CommandResult CommandRegistry::CmdRoles(const CommandContext&, const std::vector<std::string>&) {
+    std::ostringstream oss;
+    oss << "Available roles:\n";
+    std::string roles_dir = "config/.aicode/roles";
+    if (std::filesystem::exists(roles_dir)) {
+        for (const auto& entry : std::filesystem::directory_iterator(roles_dir)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".md") {
+                std::string role_id = entry.path().stem().string();
+                oss << "  " << role_id << "\n";
+            }
+        }
+    } else {
+        oss << "  (roles directory not found: " << roles_dir << ")\n";
+    }
+    oss << "\nUsage: /role <role_id>  e.g., /role coder\n";
+    return CommandResult::Ok(oss.str());
+}
+
+CommandResult CommandRegistry::CmdRole(const CommandContext& ctx, const std::vector<std::string>& args) {
     auto& config = AiCodeConfig::GetInstance();
 
     if (args.empty()) {
-        // Show current model
+        // Show current role
         std::ostringstream oss;
-        oss << "Current model configuration:\n";
-        oss << "  Default provider: " << config.default_provider << "\n";
-        oss << "  Default agent: " << config.default_agent << "\n";
+        oss << "Current role configuration:\n";
+        oss << "  Default role: " << config.default_role << "\n";
 
-        // Show actual runtime config from AgentState
-        if (ctx.agent_state) {
-            oss << "  Current model: " << ctx.agent_state->model << "\n";
-            oss << "  Temperature: " << ctx.agent_state->temperature << "\n";
-            oss << "  Max tokens: " << ctx.agent_state->max_tokens << "\n";
-            oss << "  Max iterations: " << ctx.agent_state->max_iterations << "\n";
-        } else {
-            auto provider_it = config.providers.find(config.default_provider);
-            if (provider_it != config.providers.end()) {
-                auto default_agent = provider_it->second.GetDefaultAgent();
-                oss << "  Current model: " << default_agent.model << "\n";
-                oss << "  Temperature: " << default_agent.temperature << "\n";
-                oss << "  Max tokens: " << default_agent.max_tokens << "\n";
-            }
+        // Show actual runtime config from AgentSession
+        if (ctx.agent_session && ctx.agent_session->role) {
+            oss << "\n  Current session role: " << ctx.agent_session->role->id << "\n";
+            oss << "    Provider: " << ctx.agent_session->role->provider_name << "\n";
+            oss << "    Model: " << ctx.agent_session->role->model << "\n";
+            oss << "    Temperature: " << ctx.agent_session->role->temperature << "\n";
+            oss << "    Max tokens: " << ctx.agent_session->role->max_tokens << "\n";
         }
 
-        // List available providers and agents
-        oss << "\nAvailable providers and agents:\n";
-        for (const auto& [provider_name, provider_config] : config.providers) {
-            oss << "  " << provider_name << ":\n";
-            for (const auto& [agent_name, agent_config] : provider_config.agents) {
-                std::string marker = (provider_name == config.default_provider && agent_name == config.default_agent) ? " >" : "";
-                oss << marker << "    " << agent_name << ": " << agent_config.model << "\n";
-            }
-        }
-        oss << "\nUsage: /model [provider/agent]  e.g., /model ollama/default\n";
-        oss << "       /model <model_name>       e.g., /model qwen2.5:7b\n";
-
-        return CommandResult::Ok(oss.str());
-    }
-
-    // Change model at runtime
-    std::string new_model = args[0];
-
-    std::string new_provider, new_agent;
-    size_t slash_pos = new_model.find('/');
-
-    if (slash_pos != std::string::npos) {
-        // Format: provider/agent
-        new_provider = new_model.substr(0, slash_pos);
-        new_agent = new_model.substr(slash_pos + 1);
-
-        // Validate provider
-        auto provider_it = config.providers.find(new_provider);
-        if (provider_it == config.providers.end()) {
-            return CommandResult::Fail("Unknown provider: " + new_provider);
-        }
-
-        // Validate agent
-        auto agent_it = provider_it->second.agents.find(new_agent);
-        if (agent_it == provider_it->second.agents.end()) {
-            return CommandResult::Fail("Unknown agent '" + new_agent + "' for provider '" + new_provider + "'");
-        }
-
-        // Update default provider and agent in config
-        auto& mutable_config = AiCodeConfig::GetInstance();
-        mutable_config.default_provider = new_provider;
-        mutable_config.default_agent = new_agent;
-
-        // Update AgentCommander's provider and agent (this updates agent_state_)
-        auto& agent_commander = AgentCommander::GetInstance();
-        agent_commander.SwitchProvider(new_provider, new_agent);
-
-        // Save config to file
-        mutable_config.SaveToFile();
-
-        std::ostringstream oss;
-        oss << "Switched to: " << new_provider << "/" << new_agent << "\n";
-        oss << "  Model: " << agent_it->second.model << "\n";
-        oss << "  Temperature: " << agent_it->second.temperature << "\n";
-        oss << "  Max tokens: " << agent_it->second.max_tokens << "\n";
-        oss << "Applied to current session.\n";
-        oss << "Configuration saved.";
-        return CommandResult::Ok(oss.str());
-
-    } else {
-        // Just model name - search across all providers and agents
-        bool found = false;
-        for (const auto& [provider_name, provider_config] : config.providers) {
-            for (const auto& [agent_name, agent_config] : provider_config.agents) {
-                if (agent_config.model == new_model) {
-                    new_provider = provider_name;
-                    new_agent = agent_name;
-                    found = true;
-                    break;
+        // List available roles
+        oss << "\nAvailable roles:\n";
+        std::string roles_dir = "config/.aicode/roles";
+        if (std::filesystem::exists(roles_dir)) {
+            for (const auto& entry : std::filesystem::directory_iterator(roles_dir)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".md") {
+                    std::string role_id = entry.path().stem().string();
+                    std::string marker = (role_id == config.default_role) ? " >" : "";
+                    oss << marker << "  " << role_id << "\n";
                 }
             }
-            if (found) break;
         }
+        oss << "\nUsage: /role <role_id>  e.g., /role coder\n";
 
-        if (found) {
-            // Found matching agent - switch to it
-            auto& mutable_config = AiCodeConfig::GetInstance();
-            mutable_config.default_provider = new_provider;
-            mutable_config.default_agent = new_agent;
-
-            auto& agent_commander = AgentCommander::GetInstance();
-            agent_commander.SwitchProvider(new_provider, new_agent);
-
-            mutable_config.SaveToFile();
-
-            std::ostringstream oss;
-            oss << "Switched to: " << new_provider << "/" << new_agent << "\n";
-            oss << "  Model: " << new_model << "\n";
-            oss << "Applied to current session.\n";
-            oss << "Configuration saved.";
-            return CommandResult::Ok(oss.str());
-
-        } else {
-            // Model not found in config - just update current session's model directly
-            if (ctx.agent_state) {
-                ctx.agent_state->model = new_model;
-                std::ostringstream oss;
-                oss << "Model updated to: " << new_model << "\n";
-                oss << "Note: This change applies to current session only.\n";
-                oss << "Configuration not saved (model not in config).";
-                return CommandResult::Ok(oss.str());
-            } else {
-                return CommandResult::Fail("Model not found in config and no active session");
-            }
-        }
+        return CommandResult::Ok(oss.str());
     }
+
+    // Change default role
+    std::string new_role_id = args[0];
+
+    // Validate role exists
+    std::string role_path = "config/.aicode/roles/" + new_role_id + ".md";
+    if (!std::filesystem::exists(role_path)) {
+        return CommandResult::Fail("Unknown role: " + new_role_id);
+    }
+
+    // Update default_role in config
+    auto& mutable_config = AiCodeConfig::GetInstance();
+    mutable_config.default_role = new_role_id;
+
+    // Save config to file
+    mutable_config.SaveToFile();
+
+    std::ostringstream oss;
+    oss << "Switched to role: " << new_role_id << "\n";
+    oss << "Configuration saved.\n";
+    oss << "Note: Role changes apply to new sessions. Current session uses its original role configuration.";
+    return CommandResult::Ok(oss.str());
+}
+
+CommandResult CommandRegistry::CmdModel(const CommandContext& ctx, const std::vector<std::string>& args) {
+    auto& router = ProviderRouter::GetInstance();
+
+    if (args.empty()) {
+        // Show current provider/model configuration
+        std::ostringstream oss;
+        oss << "Current provider/model configuration:\n";
+
+        if (ctx.agent_session) {
+            // Show session-level config (with overrides)
+            if (!ctx.agent_session->override_provider_name.empty()) {
+                oss << "  Session provider (overridden): " << ctx.agent_session->override_provider_name << "\n";
+            } else if (ctx.agent_session->role) {
+                oss << "  Session provider (from role): " << ctx.agent_session->role->provider_name << "\n";
+            }
+
+            if (!ctx.agent_session->override_model.empty()) {
+                oss << "  Session model (overridden): " << ctx.agent_session->override_model << "\n";
+            } else if (ctx.agent_session->role) {
+                oss << "  Session model (from role): " << ctx.agent_session->role->model << "\n";
+            }
+
+            oss << "\n  Current session: " << ctx.agent_session->session_id << "\n";
+            oss << "  Role: " << ctx.agent_session->role_id << "\n";
+        }
+
+        // List available providers
+        oss << "\nAvailable providers:\n";
+        oss << "  dashscope  - Alibaba Qwen (DashScope)\n";
+        oss << "  ollama     - Local Ollama models\n";
+        oss << "  anthropic  - Anthropic Claude API\n";
+        oss << "\nUsage:\n";
+        oss << "  /model <provider>              - Switch provider (keeps current model)\n";
+        oss << "  /model <provider> <model>      - Switch provider and model\n";
+        oss << "  e.g., /model ollama qwen3:8b\n";
+        oss << "  e.g., /model dashscope\n";
+
+        return CommandResult::Ok(oss.str());
+    }
+
+    // Change provider/model
+    std::string new_provider = args[0];
+    std::string new_model = args.size() > 1 ? args[1] : "";
+
+    // Validate provider exists
+    auto provider = router.GetProviderByName(new_provider);
+    if (!provider) {
+        return CommandResult::Fail("Unknown provider: " + new_provider);
+    }
+
+    // Apply override to current session
+    if (ctx.agent_session) {
+        ctx.agent_session->ApplyProviderOverride(new_provider, new_model);
+
+        std::ostringstream oss;
+        oss << "Switched provider to: " << new_provider << "\n";
+        if (!new_model.empty()) {
+            oss << "Model: " << new_model << "\n";
+        }
+        oss << "Note: This override applies to the current session only.\n";
+        oss << "New sessions will use the role's default provider configuration.";
+        return CommandResult::Ok(oss.str());
+    }
+
+    return CommandResult::Fail("No active session to switch provider for");
 }
 
 CommandResult CommandRegistry::CmdPermissions(const CommandContext&, const std::vector<std::string>& args) {
@@ -2189,7 +2229,7 @@ CommandResult CommandRegistry::CmdPermissions(const CommandContext&, const std::
 }
 
 CommandResult CommandRegistry::CmdHistory(const CommandContext&, const std::vector<std::string>& args) {
-    auto& session_mgr = SessionManager::GetInstance();
+    auto& session_mgr = AgentSessionManager::GetInstance();
 
     int count = 10;  // Default to last 10 messages
     if (!args.empty()) {
@@ -2216,13 +2256,23 @@ CommandResult CommandRegistry::CmdHistory(const CommandContext&, const std::vect
     auto sessions = session_mgr.ListSessions();
     int display_count = std::min(static_cast<int>(sessions.size()), count);
     for (int i = 0; i < display_count; ++i) {
-        const auto& session = sessions[i];
-        oss << "  " << (i + 1) << ". " << session.session_id;
-        oss << " - " << session.workspace;
-        oss << " (" << session.message_count << " messages)\n";
+        const auto* session = session_mgr.GetSession(sessions[i]);
+        if (!session) continue;
+        oss << "  " << (i + 1) << ". " << session->session_id;
+        oss << " (role: " << session->role_id << ")";
+        if (!session->task_description.empty()) {
+            oss << " - " << session->task_description;
+        }
+        oss << " (" << session->messages.size() << " messages)\n";
     }
 
     return CommandResult::Ok(oss.str());
+}
+
+CommandResult CommandRegistry::CmdBye([[maybe_unused]] const CommandContext& ctx, [[maybe_unused]] const std::vector<std::string>& args) {
+    // The actual exit is handled by AgentCommander::HandleCommand
+    // This command just provides a friendly message
+    return CommandResult::Ok("Goodbye!");
 }
 
 }  // namespace aicode

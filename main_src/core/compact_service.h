@@ -5,9 +5,10 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <atomic>
 #include <nlohmann/json.hpp>
 
-#include "core/messages_schema.h"
+#include "common/messages_schema.h"
 
 namespace aicode {
 
@@ -34,13 +35,11 @@ struct CompactConfig {
     int max_tokens = 100000;        // Max total tokens before compaction
     std::string summary_prompt;     // Custom prompt for summary generation
 
-    static CompactConfig Default() {
-        CompactConfig cfg;
-        cfg.summary_prompt =
+    static constexpr CompactConfig Default() {
+        return {CompactStrategy::Hybrid, 100, 20, 100000,
             "Please provide a concise summary of the conversation so far, "
             "including: key decisions made, code changes discussed, "
-            "and any unresolved issues. Keep it brief but comprehensive.";
-        return cfg;
+            "and any unresolved issues. Keep it brief but comprehensive."};
     }
 };
 
@@ -92,7 +91,7 @@ private:
 
     CompactConfig config_;
     bool auto_compact_enabled_ = true;
-    int compaction_count_ = 0;
+    std::atomic<int> compaction_count_{0};  // Thread-safe counter
 
     /// Generate summary of old messages using LLM
     std::string GenerateSummary(const std::vector<MessageSchema>& old_messages,

@@ -33,3 +33,4 @@ inline void InitLog(const std::string& level = "info") {
 #define LOG_DEBUG(...) spdlog::debug(__VA_ARGS__)
 #define LOG_WARN(...) spdlog::warn(__VA_ARGS__)
 #define LOG_ERROR(...) spdlog::error(__VA_ARGS__)
+

@@ -32,7 +32,7 @@ void PlanModeManager::CreatePlan(const std::string& title, const std::string& de
     current_plan_ = Plan();
     current_plan_.title = title;
     current_plan_.description = description;
-    current_plan_.created_at = GetCurrentTimestamp();
+    current_plan_.created_at = SystemClock::GetCurrentTimestamp();
     current_plan_.updated_at = current_plan_.created_at;
     LOG_INFO("Created plan: {}", title);
 }
@@ -48,13 +48,13 @@ void PlanModeManager::AddStep(const std::string& description,
     step.status = PlanStepStatus::Pending;
 
     current_plan_.steps.push_back(step);
-    current_plan_.updated_at = GetCurrentTimestamp();
+    current_plan_.updated_at = SystemClock::GetCurrentTimestamp();
     LOG_DEBUG("Added plan step {}: {}", step.id, description);
 }
 
 void PlanModeManager::ApprovePlan() {
     current_plan_.approved = true;
-    current_plan_.updated_at = GetCurrentTimestamp();
+    current_plan_.updated_at = SystemClock::GetCurrentTimestamp();
     LOG_INFO("Plan approved: {}", current_plan_.title);
 }
 
@@ -68,7 +68,7 @@ void PlanModeManager::CompleteStep(int step_id, const std::string& result) {
     if (step) {
         step->status = PlanStepStatus::Completed;
         step->result = result;
-        current_plan_.updated_at = GetCurrentTimestamp();
+        current_plan_.updated_at = SystemClock::GetCurrentTimestamp();
         LOG_INFO("Completed plan step {}: {}", step_id, step->description);
 
         if (current_plan_.IsComplete()) {
@@ -83,7 +83,7 @@ void PlanModeManager::FailStep(int step_id, const std::string& error) {
     if (step) {
         step->status = PlanStepStatus::Failed;
         step->error = error;
-        current_plan_.updated_at = GetCurrentTimestamp();
+        current_plan_.updated_at = SystemClock::GetCurrentTimestamp();
         LOG_ERROR("Failed plan step {}: {} - {}", step_id, step->description, error);
     }
 }
@@ -92,7 +92,7 @@ void PlanModeManager::SkipStep(int step_id) {
     PlanStep* step = current_plan_.GetStep(step_id);
     if (step) {
         step->status = PlanStepStatus::Skipped;
-        current_plan_.updated_at = GetCurrentTimestamp();
+        current_plan_.updated_at = SystemClock::GetCurrentTimestamp();
         LOG_INFO("Skipped plan step {}: {}", step_id, step->description);
     }
 }

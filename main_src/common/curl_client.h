@@ -25,7 +25,7 @@ class HeaderList {
     void* list_;
 };
 
-/// Configuration for HTTP requests
+/// Configuration for HTTP requests (supports both blocking and streaming)
 struct HttpRequest {
     std::string url;
     std::string post_data;
@@ -34,6 +34,12 @@ struct HttpRequest {
     long low_speed_limit = 0;  // bytes/sec, 0 = disabled
     long low_speed_time = 0;   // seconds
     std::string user_agent;
+
+    // Streaming callback: called for each chunk of data received
+    // If nullptr, the request is treated as blocking and body is collected
+    using DataCallback = size_t (*)(void*, size_t, size_t, void*);
+    DataCallback write_function = nullptr;
+    void* write_data = nullptr;
 };
 
 /// Result of an HTTP request
@@ -47,13 +53,14 @@ struct HttpResponse {
     bool failed() const { return !error.empty() || status_code >= 400; }
 };
 
-/// High-level HTTP client for blocking requests
+/// High-level HTTP client for blocking and streaming requests
 class HttpClient {
    public:
     // Perform a blocking HTTP GET request
     static HttpResponse Get(const HttpRequest& request);
 
     // Perform a blocking HTTP POST request
+    // If request.write_function is set, performs streaming request instead
     static HttpResponse Post(const HttpRequest& request);
 
     // Perform a blocking HTTP POST request with simple parameters
@@ -63,32 +70,8 @@ class HttpClient {
                             long timeout_seconds);
 };
 
-/// Configuration for streaming requests
-struct StreamRequest {
-    std::string url;
-    std::string post_data;
-    void* headers = nullptr;
-    long timeout_seconds = 30;
-    long low_speed_limit = 0;
-    long low_speed_time = 0;
-    std::string user_agent;
-
-    // Streaming callback: called for each chunk of data received
-    using DataCallback = size_t (*)(void*, size_t, size_t, void*);
-    DataCallback write_function = nullptr;
-    void* write_data = nullptr;
-};
-
-/// ChatStream client for SSE and other streaming protocols
-class StreamClient {
-   public:
-    // Perform a streaming HTTP POST request
-    static void Post(const StreamRequest& request);
-};
-
 /// Base class for handling streaming responses
-class StreamHandler {
-   public:
+struct StreamHandler {
     virtual ~StreamHandler() = default;
 
     /// Called when a complete line is received
@@ -105,23 +88,14 @@ class StreamHandler {
 };
 
 /// SSE (Server-Sent Events) stream handler
-class SseStreamHandler : public StreamHandler {
-   public:
+struct SseStreamHandler : public StreamHandler {
     void OnLine(const std::string& line) override;
     void OnEvent(const std::string& event_type, const std::string& data) override;
-
-    /// Set callback for data events
-    using DataCallback = std::function<void(const std::string& event_type, const std::string& data)>;
-    void SetDataCallback(DataCallback callback) { data_callback_ = callback; }
-
-    /// Get the event stream buffer for custom processing
     std::string& Buffer() { return buffer_; }
 
-   protected:
     std::string buffer_;
     std::string current_event_;
     std::string current_data_;
-    DataCallback data_callback_;
 };
 
 /// Write callback for simple body collection

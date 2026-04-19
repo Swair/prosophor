@@ -12,23 +12,13 @@
 #include "common/log_wrapper.h"
 
 #include "common/constants.h"
-#include "managers/memory_manager.h"
-#include "core/skill_loader.h"
+#include "managers/skill_loader.h"
 #include "core/compact_service.h"
 #include "managers/token_tracker.h"
 #include "core/reference_parser.h"
 #include "tools/tool_registry.h"
-#include "services/lsp_manager.h"
 
 namespace aicode {
-
-// Event name constants
-namespace events {
-inline constexpr const char* kTextDelta = "text_delta";
-inline constexpr const char* kToolUse = "tool_use";
-inline constexpr const char* kToolResult = "tool_result";
-inline constexpr const char* kMessageEnd = "message_end";
-}  // namespace events
 
 // Truncates a tool result if it exceeds the limit
 static std::string TruncateToolResult(const std::string& result,
@@ -59,386 +49,295 @@ static std::string TruncateToolResult(const std::string& result,
     return truncated;
 }
 
-AgentCore& AgentCore::GetInstance() {
-    static AgentCore instance;
-    return instance;
+/// Set session output (state + state_message + optional reply message)
+/// Calls session output callback to notify UI
+void AgentCore::SetSessionOutput(AgentSession& session, AgentRuntimeState state,
+                                  const std::string& state_msg,
+                                  const std::optional<MessageSchema>& reply) {
+    session.state = state;
+    session.state_message = state_msg;
+
+    // Add message to history if provided
+    if (reply && state != AgentRuntimeState::STREAM_TYPING) {
+        session.messages.push_back(*reply);
+    }
+    
+    // Call session output callback if set
+    if (session.output_callback) {
+        session.output_callback(session.session_id, session.role_id, state, state_msg, reply);
+    } else {
+        LOG_DEBUG("[SetSessionOutput] output_callback is NOT set!");
+    }
 }
 
-AgentCore::AgentCore()
-    : stop_requested_(false) {
-}
-
-AgentCore::~AgentCore() = default;
-
-void AgentCore::Initialize(std::shared_ptr<MemoryManager> memory_manager,
-                           std::shared_ptr<SkillLoader> skill_loader,
-                           std::vector<ToolsSchema> tool_schemas,
-                           std::function<std::string(const std::string& tool_name, const nlohmann::json& args)> tool_executor) {
-    memory_manager_ = memory_manager;
-    skill_loader_ = skill_loader;
-    tool_schemas_ = std::move(tool_schemas);
-    tool_executor_ = std::move(tool_executor);
-
-    LOG_INFO("AgentCore initialized with tool_schemas: {}", tool_schemas_.size());
-}
-
-void AgentCore::SetProviderCallbacks(
-    std::function<ChatResponse(const ChatRequest& request)> chat_cb,
-    std::function<void(const ChatRequest&, std::function<void(const ChatResponse&)>)> stream_cb) {
-    chat_llm_cb_ = chat_cb;
-    chat_llm_stream_cb_ = stream_cb;
-    LOG_INFO("Provider callbacks updated");
-}
-
-ChatRequest AgentCore::BuildRequest(const AgentState& state) {
-    ChatRequest req;
-    req.model = state.model;
-    req.temperature = state.temperature;
-    req.max_tokens = state.max_tokens;
-    req.messages = state.messages;
-    req.system = state.system_prompt;
-    req.tools = state.use_tools ? tool_schemas_ : std::vector<ToolsSchema>{};
-    req.tool_choice_auto = state.use_tools;
-    return req;
-}
-
-void AgentCore::CloseLoop(const std::string& message, AgentState& state) {
-    LOG_DEBUG("Processing message (non-streaming)");
-    stop_requested_ = false;
-
-    // Process message - resolve @file references
-    std::string processed_message = message;
-    if (!message.empty()) {
-        // Check for file references
-        if (ReferenceParser::HasFileRefs(message)) {
-            auto workspace = memory_manager_ ? memory_manager_->GetWorkspace() : "";
-            auto file_refs = ReferenceParser::ParseFileRefs(message, workspace);
-
-            // Load file contents
-            for (auto& ref : file_refs) {
-                if (ref.exists) {
-                    LOG_INFO("Loaded file reference: {}", ref.path);
-                } else {
-                    LOG_WARN("File reference not found: {}", ref.path);
-                }
-            }
-
-            // Replace @file with actual content
-            processed_message = ReferenceParser::ReplaceFileRefs(message, file_refs);
-        }
+/// Execute tool calls and build messages - shared by CloseLoop and CloseLoopStream
+bool AgentCore::ExecuteToolCalls(const std::vector<ToolUseSchema>& tool_calls,
+                                  AgentSession& session,
+                                  std::string& accumulated_text,
+                                  int& iterations) {
+    if (tool_calls.empty()) {
+        return false;
     }
 
-    // Add user message (with resolved references)
-    if (!processed_message.empty()) {
-        state.messages.emplace_back("user", processed_message);
-    }
+    LOG_DEBUG("LLM requested {} tool calls", tool_calls.size());
 
-    // Check if compaction is needed
-    auto& compact_service = CompactService::GetInstance();
-    if (compact_service.NeedsCompaction(state.messages)) {
-        LOG_INFO("Context compaction triggered");
+    // Build assistant message with tool calls
+    MessageSchema assistant_msg;
+    assistant_msg.role = "assistant";
+    assistant_msg.AddTextContent(accumulated_text);
 
-        auto llm_callback = [this, &state](const std::string& prompt) -> std::string {
-            ChatRequest req;
-            req.model = state.model;
-            req.temperature = state.temperature;
-            req.max_tokens = 4096;
-            req.AddUserMessage(prompt);
-            auto resp = chat_llm_cb_(req);
-            return resp.content_text;
-        };
+    // Execute tools and build results message
+    MessageSchema results_msg;
+    results_msg.role = "user";
+    bool has_tool_error = false;
 
-        auto compact_result = compact_service.Compact(state.messages, llm_callback);
-        state.messages = compact_result.kept_messages;
-
-        // Add summary to system prompt
-        if (!compact_result.summary.empty()) {
-            state.system_prompt.clear();
-            state.system_prompt.push_back({"text", compact_result.summary, false});
-        }
-
-        LOG_INFO("Compaction complete: removed {} messages, saved ~{} tokens",
-                 compact_result.messages_removed, compact_result.tokens_saved);
-    }
-
-    int iterations = 0;
-
-    while (iterations < state.max_iterations) {
-        // Check for interrupt
-        if (stop_requested_) {
+    for (const auto& tc : tool_calls) {
+        // Check for interrupt during tool execution
+        if (session.stop_requested) {
+            SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, "Interrupted by user");
             throw std::runtime_error("Interrupted by user");
         }
 
+        // Add tool call to assistant message
+        assistant_msg.AddToolUseContent(tc.id, tc.name, tc.arguments);
+        SetSessionOutput(session, AgentRuntimeState::EXECUTING_TOOL, std::string("Tool using: ") + tc.name + ", args: " + tc.arguments.dump());
         try {
-            // Build request from state
-            ChatRequest request = BuildRequest(state);
+            auto result = session.tool_executor(tc.name, tc.arguments);
+            // Only truncate successful results, keep error output intact
+            result = TruncateToolResult(result, kToolResultMaxChars, kToolResultKeepLines);
+            SetSessionOutput(session, AgentRuntimeState::EXECUTING_TOOL, std::string("Tool using: ") + tc.name + ", result: " + result);
+            results_msg.AddToolResultContent(tc.id, result);
+        } catch (const std::exception& e) {
+            // Tool execution failed - DON'T truncate error message
+            // Full error context is critical for LLM to diagnose and fix the issue
+            has_tool_error = true;
+            std::string error_result = e.what();
+            SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, std::string("Tool using: ") + tc.name + ", error_result: " + error_result);
+            results_msg.AddToolResultContent(tc.id, error_result);
+        }
+    }
 
-            auto response = chat_llm_cb_(request);
-            LOG_INFO("< {}", response.content_text);
+    // Set EXECUTING_TOOL state and add messages to history
+    SetSessionOutput(session, AgentRuntimeState::TOOL_MSG, "", assistant_msg);
+    SetSessionOutput(session, AgentRuntimeState::TOOL_MSG, "", results_msg);
 
-            if (!response.tool_calls.empty()) {
-                LOG_INFO("LLM requested {} tool calls", response.tool_calls.size());
+    iterations++;
 
-                // Build assistant message with tool calls
-                MessageSchema assistant_msg;
-                assistant_msg.role = "assistant";
-                assistant_msg.AddTextContent(response.content_text);
+    // If tool had errors, LLM will see the error and can decide what to do next
+    if (has_tool_error) {
+        SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, "Tool execution had errors, continuing to let LLM handle");
+    }
 
-                // Execute tools and build results message
-                MessageSchema results_msg;
-                results_msg.role = "user";
-                bool has_tool_error = false;
+    // Clear accumulated text after tool execution
+    accumulated_text.clear();
 
-                for (const auto& tc : response.tool_calls) {
-                    // Check for interrupt during tool execution
-                    if (stop_requested_) {
-                        throw std::runtime_error("Interrupted by user");
-                    }
+    return true;
+}
 
-                    // Add tool call to assistant message
-                    assistant_msg.AddToolUseContent(tc.id, tc.name, tc.arguments);
-                    LOG_INFO("< Tool using: {}, args: {}", tc.name, tc.arguments.dump());
+std::string AgentCore::ProcessFileRefs(const std::string& message, const AgentSession& session) {
+    std::string processed_message = message;
 
-                    try {
-                        auto result = tool_executor_(tc.name, tc.arguments);
-                        // Only truncate successful results, keep error output intact
-                        result = TruncateToolResult(result, kToolResultMaxChars, kToolResultKeepLines);
-                        LOG_INFO("< Tool {}, result: {}", tc.name, result);
-                        results_msg.AddToolResultContent(tc.id, result);
-                    } catch (const std::exception& e) {
-                        // Tool execution failed - DON'T truncate error message
-                        // Full error context is critical for LLM to diagnose and fix the issue
-                        has_tool_error = true;
-                        std::string error_result = e.what();
-                        LOG_WARN("< Tool {} execution failed: {}", tc.name, error_result);
-                        results_msg.AddToolResultContent(tc.id, error_result);
-                    }
-                }
+    if (message.empty() || !ReferenceParser::HasFileRefs(message)) {
+        return processed_message;
+    }
 
-                // Update history for next iteration
-                state.messages.push_back(assistant_msg);
-                state.messages.push_back(results_msg);
+    auto file_refs = ReferenceParser::ParseFileRefs(message, session.working_directory);
 
-                iterations++;
+    // Load file contents
+    for (auto& ref : file_refs) {
+        if (ref.exists) {
+            LOG_INFO("Loaded file reference: {}", ref.path);
+        } else {
+            LOG_WARN("File reference not found: {}", ref.path);
+        }
+    }
 
-                // If tool had errors, LLM will see the error and can decide what to do next
-                if (has_tool_error) {
-                    LOG_INFO("Tool execution had errors, continuing to let LLM handle");
-                }
-                continue;
+    // Replace @file with actual content
+    processed_message = ReferenceParser::ReplaceFileRefs(message, file_refs);
+
+    return processed_message;
+}
+
+void AgentCore::MaybeCompact(AgentSession& session) {
+    auto& compact_service = CompactService::GetInstance();
+
+    if (!compact_service.NeedsCompaction(session.messages)) {
+        return;
+    }
+
+    LOG_INFO("Context compaction triggered");
+
+    auto llm_callback = [&session](const std::string& prompt) -> std::string {
+        ChatRequest req;
+        // 从 role 获取模型配置
+        if (session.role) {
+            req.model = session.role->model;
+            req.temperature = session.role->temperature;
+            req.max_tokens = 4096;
+        } else {
+            req.model = "claude-sonnet-4-6";
+            req.temperature = 0.7;
+            req.max_tokens = 4096;
+        }
+        req.AddUserMessage(prompt);
+        return session.provider->Chat(req).content_text;
+    };
+
+    auto compact_result = compact_service.Compact(session.messages, llm_callback);
+    session.messages = compact_result.kept_messages;
+
+    // Add summary to system prompt
+    if (!compact_result.summary.empty()) {
+        session.system_prompt.clear();
+        session.system_prompt.push_back({"text", compact_result.summary, false});
+    }
+
+    LOG_INFO("Compaction complete: removed {} messages, saved ~{} tokens",
+             compact_result.messages_removed, compact_result.tokens_saved);
+}
+
+ChatRequest AgentCore::BuildRequest(const AgentSession& session) {
+    ChatRequest req;
+
+    // 从 role 获取模型配置
+    if (session.role) {
+        req.model = session.role->model;
+        req.temperature = session.role->temperature;
+        req.max_tokens = session.role->max_tokens;
+    } else {
+        // 降级使用默认值
+        req.model = "claude-sonnet-4-6";
+        req.temperature = 0.7;
+        req.max_tokens = 8192;
+    }
+
+    req.messages = session.messages;
+    req.system = session.system_prompt;
+    // 根据 role.tools 是否为空来判断是否发送工具（tools_white_list 字段配置了才发送）
+    req.tools = session.use_tools && session.role && !session.role->tools.empty()
+                ? session.role->tools : std::vector<ToolsSchema>{};
+    req.tool_choice_auto = session.use_tools && session.role && !session.role->tools.empty();
+
+    LOG_DEBUG("BuildRequest: use_tools={}, role->tools.size()={}, req.tools.size()={}",
+             session.use_tools,
+             session.role ? session.role->tools.size() : 0,
+             req.tools.size());
+    return req;
+}
+
+int AgentCore::GetMaxIterations(const AgentSession& session) {
+    return session.role ? session.role->max_iterations : 15;
+}
+
+void AgentCore::Loop(const std::string& message, AgentSession& session) {
+    // Determine streaming mode from role configuration
+    bool streaming = session.role && session.role->enable_streaming;
+    LOG_DEBUG("Processing message (streaming={})", streaming);
+
+    // Set initial THINKING state
+    SetSessionOutput(session, AgentRuntimeState::THINKING, "Processing...");
+
+    // Process message - resolve @file references
+    std::string processed_message = ProcessFileRefs(message, session);
+
+    // Add user message (with resolved references)
+    if (!processed_message.empty()) {
+        session.messages.emplace_back("user", processed_message);
+    }
+
+    // Check if compaction is needed
+    MaybeCompact(session);
+
+    int iterations = 0;
+    int max_iterations = GetMaxIterations(session);
+
+    while (iterations < max_iterations && !session.stop_requested) {
+        try {
+            ChatRequest request = BuildRequest(session);
+            request.stream = streaming;
+
+            // Call LLM - streaming or non-streaming
+            ChatResponse response;
+            if (streaming) {
+                SetSessionOutput(session, AgentRuntimeState::THINKING, "< ");
+                // Streaming mode - send STREAM_TYPING for each chunk
+                response = session.provider->ChatStream(
+                    request, [&session](const ChatResponse& chunk) {
+                        if (!chunk.content_text.empty()){
+                            MessageSchema chunk_msg;
+                            chunk_msg.role = "assistant";
+                            chunk_msg.AddTextContent(chunk.content_text);
+                            SetSessionOutput(session, AgentRuntimeState::STREAM_TYPING, "", chunk_msg);
+                        }                        
+                    });
+            } else {
+                response = session.provider->Chat(request);
             }
 
-            // Final text response - no tool calls
+            // Execute tool calls - use response.tool_calls directly
+            std::string response_text = response.content_text;
+            if (ExecuteToolCalls(response.tool_calls, session, response_text, iterations)) {
+                continue;  // Tool calls were executed, continue loop
+            }
+
+            // No tool calls - check for text response
             if (!response.content_text.empty()) {
-                LOG_INFO("=====================================================");
                 MessageSchema final_msg;
                 final_msg.role = "assistant";
                 final_msg.AddTextContent(response.content_text);
 
-                // Add to history and return
-                state.messages.push_back(final_msg);
+                // Set COMPLETE state
+                if(streaming) {
+                    SetSessionOutput(session, AgentRuntimeState::STREAM_MODE_COMPLETE, "Done.", final_msg);
+                } else {
+                    SetSessionOutput(session, AgentRuntimeState::COMPLETE, "Done.", final_msg);
+                }
                 return;
             }
 
-            if (stop_requested_) {
+            if (session.stop_requested) {
                 MessageSchema stop_msg;
                 stop_msg.role = "assistant";
                 stop_msg.AddTextContent("[Agent turn stopped by user]");
-                state.messages.push_back(stop_msg);
+                SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, "Stopped by user", stop_msg);
                 return;
             }
 
-            LOG_ERROR("Unexpected LLM response format");
+            SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, "Unexpected LLM response format");
             break;
 
         } catch (const std::exception& e) {
             // Re-throw interrupt exceptions immediately
             std::string err = std::string(e.what());
             if (err.find("Interrupted by user") != std::string::npos) {
+                SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, "Interrupted by user");
                 throw;
             }
 
+            // Don't retry Ollama timeout errors - they are already retried in OllamaProvider
+            bool is_ollama_timeout = err.find("Ollama API error") != std::string::npos &&
+                                     err.find("Timeout was reached") != std::string::npos;
+
             LOG_ERROR("Error in LLM processing: {}", e.what());
-            if (iterations < state.max_iterations - 1) {
+            if (!is_ollama_timeout && iterations < max_iterations - 1) {
+                // Retry non-timeout errors (e.g., malformed response)
                 std::this_thread::sleep_for(
                     std::chrono::seconds(1 << std::min(iterations, 4)));
                 iterations++;
                 continue;
             }
+            // Set output: state + message
+            SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, e.what());
             throw;
         }
     }
 
-    throw std::runtime_error("Failed to get valid response after " +
-                             std::to_string(state.max_iterations) + " iterations");
-}
-
-std::vector<MessageSchema> AgentCore::LoopStream(
-    const std::string& message, AgentState& state, AgentEventCallback callback) {
-    LOG_DEBUG("Processing message (streaming)");
-    stop_requested_ = false;
-
-    std::vector<MessageSchema> new_memory;
-
-    // Add user message
-    if (!message.empty()) {
-        state.messages.emplace_back("user", message);
-    }
-
-    // Check if compaction is needed
-    auto& compact_service = CompactService::GetInstance();
-    if (compact_service.NeedsCompaction(state.messages)) {
-        LOG_INFO("Context compaction triggered (streaming)");
-
-        auto llm_callback = [this, &state](const std::string& prompt) -> std::string {
-            ChatRequest req;
-            req.model = state.model;
-            req.temperature = state.temperature;
-            req.max_tokens = 4096;
-            req.AddUserMessage(prompt);
-            auto resp = chat_llm_cb_(req);
-            return resp.content_text;
-        };
-
-        auto compact_result = compact_service.Compact(state.messages, llm_callback);
-        state.messages = compact_result.kept_messages;
-
-        // Add summary to system prompt
-        if (!compact_result.summary.empty()) {
-            state.system_prompt.clear();
-            state.system_prompt.push_back({"text", compact_result.summary, false});
-        }
-
-        LOG_INFO("Compaction complete: removed {} messages, saved ~{} tokens",
-                 compact_result.messages_removed, compact_result.tokens_saved);
-    }
-
-    int iterations = 0;
-
-    while (iterations < state.max_iterations && !stop_requested_) {
-        try {
-            std::string full_response;
-
-            ChatRequest request = BuildRequest(state);
-            request.stream = true;
-
-            chat_llm_stream_cb_(
-                request, [&](const ChatResponse& chunk) {
-                    if (!chunk.content_text.empty()) {
-                        full_response += chunk.content_text;
-                        if (callback) {
-                            callback({events::kTextDelta, {{"text", chunk.content_text}}});
-                        }
-                    }
-
-                    if (!chunk.tool_calls.empty()) {
-                        for (const auto& tc : chunk.tool_calls) {
-                            if (callback) {
-                                callback({events::kToolUse,
-                                        {{"id", tc.id},
-                                         {"name", tc.name},
-                                         {"input", tc.arguments}}});
-                            }
-
-                            // Construct assistant message
-                            MessageSchema assistant_msg;
-                            assistant_msg.role = "assistant";
-                            if (!full_response.empty())
-                                assistant_msg.AddTextContent(full_response);
-                            assistant_msg.AddToolUseContent(tc.id, tc.name, tc.arguments);
-                            state.messages.push_back(assistant_msg);
-                            new_memory.push_back(assistant_msg);
-                            full_response.clear();
-
-                            // Execute tool
-                            try {
-                                auto result =
-                                    tool_executor_(tc.name, tc.arguments);
-                                result = TruncateToolResult(result, kToolResultMaxChars,
-                                                            kToolResultKeepLines);
-                                if (callback) {
-                                    callback({events::kToolResult,
-                                            {{"tool_use_id", tc.id}, {"content", result}}});
-                                }
-
-                                MessageSchema results_msg;
-                                results_msg.role = "user";
-                                results_msg.AddToolResultContent(tc.id, result);
-                                state.messages.push_back(results_msg);
-                                new_memory.push_back(results_msg);
-                            } catch (const std::exception& e) {
-                                std::string error_content = "Error: " + std::string(e.what());
-                                if (callback) {
-                                    callback({events::kToolResult,
-                                            {{"tool_use_id", tc.id},
-                                             {"content", error_content},
-                                             {"is_error", true}}});
-                                }
-
-                                MessageSchema results_msg;
-                                results_msg.role = "user";
-                                results_msg.AddToolResultContent(tc.id, error_content);
-                                state.messages.push_back(results_msg);
-                                new_memory.push_back(results_msg);
-                            }
-                        }
-                        iterations++;
-                        return;
-                    }
-
-                    if (chunk.is_stream_end) {
-                        if (callback) {
-                            callback({events::kMessageEnd, {{"content_text", full_response}}});
-                        }
-                    }
-                });
-
-            if (!full_response.empty()) {
-                MessageSchema final_msg;
-                final_msg.role = "assistant";
-                final_msg.AddTextContent(full_response);
-                new_memory.push_back(final_msg);
-                return new_memory;
-            }
-
-            iterations++;
-
-        } catch (const std::exception& e) {
-            LOG_ERROR("Error in streaming: {}", e.what());
-            if (callback) {
-                callback({events::kMessageEnd, {{"message", e.what()}}});
-            }
-            return new_memory;
-        }
-    }
-
+    // Max iterations or stopped
     std::string stop_text =
-        stop_requested_ ? "[Stopped]" : "[Max iterations reached]";
-    if (callback) {
-        callback({events::kMessageEnd, {{"message", stop_text}}});
-    }
-    MessageSchema stop_msg;
-    stop_msg.role = "assistant";
-    stop_msg.AddTextContent(stop_text);
-    new_memory.push_back(stop_msg);
-    return new_memory;
-}
-
-void AgentCore::Stop() {
-    stop_requested_ = true;
-    LOG_INFO("Agent stop requested");
-}
-
-void AgentCore::InitializeLsp() {
-    auto& lsp_manager = aicode::LspManager::GetInstance();
-    lsp_manager.Initialize();
-    LOG_INFO("LSP integration initialized with {} servers",
-             lsp_manager.GetRegisteredServers().size());
-}
-
-bool AgentCore::RequestLspForFile(const std::string& filepath) {
-    auto& lsp_manager = aicode::LspManager::GetInstance();
-    return lsp_manager.StartServerForFile(filepath);
+        session.stop_requested ? "[Stopped]" : "[Max iterations reached]";
+    SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, stop_text);
+    throw std::runtime_error("Failed to get valid response after " +
+                             std::to_string(max_iterations) + " iterations");
 }
 
 }  // namespace aicode

@@ -1,6 +1,5 @@
 {
-  "default_agent": "gemma4",      // Default agent to use when not specified
-  "default_provider": "ollama",   // Default provider to use when not specified
+  "default_role": "default",           // Default role to use when not specified
   "log_level": "info",
   "providers": {
     "dashscope": {
@@ -43,6 +42,27 @@
       "base_url": "http://localhost:11434",
       "timeout": 120
     }
+  },
+  "permissions": {
+    "mode": "default",
+    "allow": [
+      {
+        "tool": "bash",
+        "command": "date *"
+      },
+      {
+        "tool": "bash",
+        "command": "pwd"
+      },
+      {
+        "tool": "bash",
+        "command": "whoami"
+      },
+      {
+        "tool": "bash",
+        "command": "echo *"
+      }
+    ]
   },
   "security": {
     "allow_local_execute": true,

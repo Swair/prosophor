@@ -6,6 +6,7 @@
 #include <vector>
 #include <unordered_map>
 #include <functional>
+#include <mutex>
 #include <nlohmann/json.hpp>
 
 namespace aicode {
@@ -111,6 +112,7 @@ private:
     PermissionManager() = default;
     ~PermissionManager() = default;
 
+    mutable std::mutex mutex_;  // Protects denial_counts_ and mode_
     std::string mode_ = "default";
     std::vector<PermissionRule> allow_rules_;
     std::vector<PermissionRule> deny_rules_;

@@ -38,7 +38,7 @@ std::string TaskManager::CreateTask(const std::string& subject,
     task.description = description;
     task.active_form = active_form.empty() ? subject : active_form;
     task.status = TaskStatus::Pending;
-    task.created_at = GetCurrentTimeMillis();
+    task.created_at = SystemClock::GetCurrentTimeMillis();
     task.updated_at = task.created_at;
 
     tasks_[task.id] = task;
@@ -89,7 +89,7 @@ bool TaskManager::UpdateTaskStatus(const std::string& task_id, TaskStatus status
     }
 
     it->second.status = status;
-    it->second.updated_at = GetCurrentTimeMillis();
+    it->second.updated_at = SystemClock::GetCurrentTimeMillis();
 
     if (status == TaskStatus::Completed || status == TaskStatus::Failed ||
         status == TaskStatus::Cancelled) {
@@ -108,7 +108,7 @@ bool TaskManager::UpdateTaskOwner(const std::string& task_id, const std::string&
     }
 
     it->second.owner = owner;
-    it->second.updated_at = GetCurrentTimeMillis();
+    it->second.updated_at = SystemClock::GetCurrentTimeMillis();
     SaveToFile();
     LOG_INFO("Updated task {} owner to {}", task_id, owner);
     return true;
@@ -121,7 +121,7 @@ bool TaskManager::UpdateTaskDescription(const std::string& task_id, const std::s
     }
 
     it->second.description = description;
-    it->second.updated_at = GetCurrentTimeMillis();
+    it->second.updated_at = SystemClock::GetCurrentTimeMillis();
     SaveToFile();
     LOG_INFO("Updated task {} description", task_id);
     return true;
@@ -137,7 +137,7 @@ bool TaskManager::SetTaskDependencies(const std::string& task_id,
 
     it->second.blocks = blocks;
     it->second.blocked_by = blocked_by;
-    it->second.updated_at = GetCurrentTimeMillis();
+    it->second.updated_at = SystemClock::GetCurrentTimeMillis();
 
     // Update reverse dependencies
     for (const auto& blocked_id : blocked_by) {

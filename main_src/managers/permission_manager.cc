@@ -13,6 +13,7 @@
 namespace aicode {
 
 // Simple glob-style pattern matching
+// Supports: * (any sequence), ? (single char), case-insensitive
 static bool PatternMatches(const std::string& pattern, const std::string& value) {
     if (pattern.empty()) return true;
 
@@ -187,6 +188,8 @@ PermissionResult PermissionManager::CheckPermission(
     const std::string& tool_name,
     const nlohmann::json& input) {
 
+    std::lock_guard<std::mutex> lock(mutex_);
+
     // Bypass mode - allow everything
     if (mode_ == "bypass") {
         return PermissionResult::Allow();
@@ -267,17 +270,21 @@ void PermissionManager::ClearRules() {
 }
 
 void PermissionManager::RecordDenial(const std::string& tool_name, const nlohmann::json& /*input*/) {
+    std::lock_guard<std::mutex> lock(mutex_);
     denial_counts_[tool_name]++;
     LOG_DEBUG("Recorded denial for tool={}, count={}", tool_name, denial_counts_[tool_name]);
 }
 
 int PermissionManager::GetDenialCount(const std::string& tool_name) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = denial_counts_.find(tool_name);
     return (it != denial_counts_.end()) ? it->second : 0;
 }
 
 bool PermissionManager::ShouldFallbackToAllow(const std::string& tool_name) const {
-    return GetDenialCount(tool_name) >= kFallbackThreshold;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = denial_counts_.find(tool_name);
+    return (it != denial_counts_.end() && it->second >= kFallbackThreshold);
 }
 
 bool PermissionManager::RequestUserConfirmation(

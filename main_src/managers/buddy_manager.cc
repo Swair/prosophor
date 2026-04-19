@@ -228,7 +228,7 @@ Companion BuddyManager::GenerateCompanion(const std::string& user_id) {
     std::string uid = user_id.empty() ? "default_user" : user_id;
     GenerateBones(uid);
 
-    companion_.hatched_at = GetCurrentTimeMillis() / 1000;
+    companion_.hatched_at = SystemClock::GetCurrentTimeMillis() / 1000;
 
     companion_loaded_ = true;
     LOG_INFO("Generated new companion: {} ({}, {})",

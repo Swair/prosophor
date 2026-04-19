@@ -209,7 +209,7 @@ ChatResponse OllamaProvider::Deserialize(const std::string& json_str) const {
 }
 
 void OllamaProvider::PrintRequestLog(const std::string& url) const {
-    LOG_INFO("=== Sending request to Ollama API ===");
+    LOG_DEBUG("=== Sending request to Ollama API ===");
     LOG_DEBUG("URL: {}", url);
     LOG_DEBUG("Content-Type: application/json");
 }
@@ -254,11 +254,14 @@ ChatResponse OllamaProvider::Chat(const ChatRequest& request) {
 
 // Streaming support for Ollama (NDJSON format)
 struct OllamaStreamHandler : public StreamHandler {
-    std::function<void(const ChatResponse&)> callback;
+    std::function<void(const ChatResponse&)> chat_response_callback;
     std::string buffer;
 
+    // Accumulated response for return value
+    ChatResponse accumulated_response;
+
     explicit OllamaStreamHandler(std::function<void(const ChatResponse&)> cb)
-        : callback(cb) {}
+        : chat_response_callback(std::move(cb)) {}
 
     std::string& Buffer() override { return buffer; }
 
@@ -273,7 +276,7 @@ struct OllamaStreamHandler : public StreamHandler {
                 ChatResponse end_resp;
                 end_resp.is_stream_end = true;
                 end_resp.stop_reason = "end_turn";
-                callback(end_resp);
+                chat_response_callback(end_resp);
                 return;
             }
 
@@ -286,7 +289,8 @@ struct OllamaStreamHandler : public StreamHandler {
                     std::string content = msg.value("content", "");
                     if (!content.empty()) {
                         resp.content_text = content;
-                        callback(resp);
+                        accumulated_response.content_text += content;
+                        chat_response_callback(resp);
                     }
                 }
 
@@ -308,11 +312,13 @@ struct OllamaStreamHandler : public StreamHandler {
                             // }
 
                             resp.AddToolCall(id, name, args);
+                            accumulated_response.AddToolCall(id, name, args);
                         }
                     }
                     if (resp.HasToolCalls()) {
                         resp.stop_reason = "tool_use";
-                        callback(resp);
+                        accumulated_response.stop_reason = "tool_use";
+                        chat_response_callback(resp);
                     }
                 }
             }
@@ -323,6 +329,7 @@ struct OllamaStreamHandler : public StreamHandler {
                 resp.usage.prompt_tokens = usage.value("prompt_tokens", 0);
                 resp.usage.completion_tokens = usage.value("completion_tokens", 0);
                 resp.usage.total_tokens = resp.usage.prompt_tokens + resp.usage.completion_tokens;
+                accumulated_response.usage = resp.usage;
             }
 
         } catch (const std::exception& e) {
@@ -331,20 +338,17 @@ struct OllamaStreamHandler : public StreamHandler {
     }
 };
 
-void OllamaProvider::ChatStream(const ChatRequest& request,
+ChatResponse OllamaProvider::ChatStream(const ChatRequest& request,
                                  std::function<void(const ChatResponse&)> callback) {
     // Create a copy of request with stream=true
     ChatRequest stream_request = request;
     stream_request.stream = true;
 
-    std::string payload_str = Serialize(stream_request);
-    LOG_DEBUG("Sending streaming request to Ollama API");
+    OllamaStreamHandler stream_handler(std::move(callback));
 
-    OllamaStreamHandler stream_handler(callback);
-
-    StreamRequest stream_req;
+    HttpRequest stream_req;
     stream_req.url = base_url_ + "/api/chat";
-    stream_req.post_data = payload_str;
+    stream_req.post_data = Serialize(stream_request);
     stream_req.timeout_seconds = timeout_seconds_;
     stream_req.low_speed_limit = 1;
     stream_req.low_speed_time = 60;
@@ -352,11 +356,13 @@ void OllamaProvider::ChatStream(const ChatRequest& request,
     HeaderList headers;
     headers.append("Content-Type: application/json");
     stream_req.headers = headers.get();
-
-    stream_req.write_function = StreamWriteCallback;
     stream_req.write_data = &stream_handler;
 
-    StreamClient::Post(stream_req);
+    // curl blocks here, callbacks execute in curl thread
+    HttpClient::Post(stream_req);
+
+    // Return accumulated response
+    return stream_handler.accumulated_response;
 }
 
 }  // namespace aicode

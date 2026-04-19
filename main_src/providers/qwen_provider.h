@@ -21,7 +21,7 @@ class QwenProvider : public LLMProvider {
 
     ChatResponse Chat(const ChatRequest& request) override;
 
-    void ChatStream(const ChatRequest& request,
+    ChatResponse ChatStream(const ChatRequest& request,
         std::function<void(const ChatResponse&)> callback) override;
 
     std::string GetProviderName() const override { return "qwen"; }

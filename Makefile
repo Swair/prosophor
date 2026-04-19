@@ -1,3 +1,12 @@
+# ==============================================================================
+# AiCode Makefile
+# ==============================================================================
+# 编译目标说明：
+#   1. build        - Linux/macOS 构建 (使用 system 默认编译器)
+#   2. build_win    - Windows 构建 (MSYS2/MinGW, 无 SDL UI)
+#   3. build_win_sdl- Windows 构建 (MSYS2/MinGW, 启用 SDL UI)
+# ==============================================================================
+
 PROJECT_DIR ?= $(abspath ./)
 CMAKE ?= cmake
 MAKE ?= make
@@ -7,7 +16,7 @@ NUM_JOB ?= 8
 export PATH := /e/devtool/msys64/mingw64/bin:$(PATH)
 
 PACKAGE_NAME ?= Demo
-PACKAGE_VERSION ?= v0.0.1
+PACKAGE_VERSION ?= 0.2.0
 BUILD_TYPE ?= RelWithDebInfo
 
 
@@ -16,6 +25,9 @@ all:
 .PHONY: all
 
 
+# ==============================================================================
+# Linux/macOS 构建配置
+# ==============================================================================
 
 BUILD_DIR ?= $(PROJECT_DIR)/build
 INSTALL_DIR ?= $(BUILD_DIR)/install
@@ -25,6 +37,7 @@ CMAKE_ARGS ?= \
 	-DBUILD_SHARED_LIBS=OFF \
 	-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 	-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+	-DCMAKE_PROJECT_VERSION=$(PACKAGE_VERSION) \
 	$(CMAKE_EXTRA_ARGS)
 
 build:
@@ -44,6 +57,9 @@ clean:
 .PHONY: clean
 
 
+# ==============================================================================
+# Windows 构建配置 (MSYS2/MinGW)
+# ==============================================================================
 
 BUILD_DIR_WIN ?= $(PROJECT_DIR)/build_win
 INSTALL_DIR_WIN ?= $(BUILD_DIR_WIN)/install
@@ -53,26 +69,38 @@ CMAKE_ARGS_WIN ?= \
 	-DBUILD_SHARED_LIBS=OFF \
 	-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 	-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+	-DCMAKE_PROJECT_VERSION=$(PACKAGE_VERSION) \
 	$(CMAKE_EXTRA_ARGS)
 
-
+# Windows 构建 - 无 SDL UI (纯终端模式)
 build_win:
 	mkdir -p ${BUILD_DIR_WIN} && \
 	cd ${BUILD_DIR_WIN} && \
-	${CMAKE} ${CMAKE_ARGS_WIN} .. && \
+	${CMAKE} ${CMAKE_ARGS_WIN} -DAICODE_SDL_UI=OFF .. && \
 	ninja -j${NUM_JOB}; \
 	ninja install
 .PHONY: build_win
 
+# Windows 构建 - 启用 SDL UI (图形界面模式)
+build_win_sdl:
+	mkdir -p ${BUILD_DIR_WIN} && \
+	cd ${BUILD_DIR_WIN} && \
+	${CMAKE} ${CMAKE_ARGS_WIN} -DAICODE_SDL_UI=ON .. && \
+	ninja -j${NUM_JOB}; \
+	ninja install
+.PHONY: build_win_sdl
 
 run_win:
-	/e/devtool/msys64/msys2_shell.cmd -defterm -here -no-start -mingw64 -c "cd ${INSTALL_DIR_WIN}/bin && ./aicode.exe"; \
+	cd $(INSTALL_DIR_WIN)/bin && ./aicode.exe
 .PHONY: run_win
-
 
 clean_win:
 	find ${BUILD_DIR_WIN} -mindepth 1 -not -path "*/_deps*" -delete
 .PHONY: clean_win
 
-
+# 运行所有单元测试 (执行 bin/tests 目录下所有测试程序)
+.PHONY: run_win_tests
+run_win_tests:
+	@echo "Running all tests in $(INSTALL_DIR_WIN)/bin/tests..."
+	@for test in $(INSTALL_DIR_WIN)/bin/tests/*.exe; do echo "Running $$(basename $$test)..."; $$test || exit 1; done
 

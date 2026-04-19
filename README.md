@@ -575,7 +575,7 @@ AiCode v1.0.0
 | **单例模式** | `AgentCommander`、`CompactService`、`PermissionManager`、`PlanModeManager`、`LspManager`、`McpClient`、`SessionManager` |
 | **策略模式** | `LLMProvider` 接口（`AnthropicProvider`、`QwenProvider`） |
 | **工厂模式** | `ToolRegistry` 注册和创建工具执行器、`SkillLoader` 解析和实例化技能 |
-| **观察者模式** | `AgentEventCallback`（流式响应事件）、`FileChangeCallback`（文件变化监听） |
+| **观察者模式** | `SessionOutputCallback`（会话状态变化通知）、`FileChangeCallback`（文件变化监听） |
 
 ---
 

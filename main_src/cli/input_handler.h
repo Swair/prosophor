@@ -127,6 +127,32 @@ namespace ansi {
     inline const char* kHideCursor = "\033[?25l";
     inline const char* kShowCursor = "\033[?25h";
 
+    // 背景色
+    inline const char* kBgBlack = "\033[40m";
+    inline const char* kBgRed = "\033[41m";
+    inline const char* kBgGreen = "\033[42m";
+    inline const char* kBgYellow = "\033[43m";
+    inline const char* kBgBlue = "\033[44m";
+    inline const char* kBgMagenta = "\033[45m";
+    inline const char* kBgCyan = "\033[46m";
+    inline const char* kBgWhite = "\033[47m";
+    inline const char* kBgBrightBlack = "\033[100m";  // 灰色背景
+
+    // 前景色
+    inline const char* kFgBlack = "\033[30m";
+    inline const char* kFgWhite = "\033[37m";
+    inline const char* kFgBrightWhite = "\033[97m";
+    inline const char* kFgBrightYellow = "\033[93m";
+
+    // 盒式绘图字符（用于边框）
+    inline const char* kBoxTopLeft = "╭";
+    inline const char* kBoxTopRight = "╮";
+    inline const char* kBoxBottomLeft = "╰";
+    inline const char* kBoxBottomRight = "╯";
+    inline const char* kBoxHorizontal = "─";
+    inline const char* kBoxVertical = "│";
+    inline const char* kBoxLightVertical = "┆";
+
     inline std::string MoveCursorRight(int n) {
         return "\033[" + std::to_string(n) + "C";
     }

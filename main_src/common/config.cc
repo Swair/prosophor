@@ -14,6 +14,7 @@
 #include "common/constants.h"
 #include "common/log_wrapper.h"
 #include "common/file_utils.h"
+#include "managers/agent_role_loader.h"
 
 namespace aicode {
 
@@ -40,17 +41,34 @@ AiCodeConfig& AiCodeConfig::GetInstance() {
 }
 
 const AgentConfig& AiCodeConfig::GetAgentConfig() const {
-    auto prov_it = providers.find(default_provider);
-    if (prov_it != providers.end()) {
-        auto agent_it = prov_it->second.agents.find(default_agent);
-        if (agent_it != prov_it->second.agents.end()) {
-            return agent_it->second;
+    // Load default role to get its provider and agent config
+    std::string role_path = "config/.aicode/roles/" + default_role + ".md";
+    if (std::filesystem::exists(role_path)) {
+        auto& loader = AgentRoleLoader::GetInstance();
+        try {
+            AgentRole role = loader.LoadRole(role_path);
+            // Find the agent config from the role's provider
+            auto prov_it = providers.find(role.provider_name);
+            if (prov_it != providers.end()) {
+                auto agent_it = prov_it->second.agents.find(role.model);
+                if (agent_it != prov_it->second.agents.end()) {
+                    return agent_it->second;
+                }
+                // Fall back to provider's default agent
+                return prov_it->second.GetDefaultAgent();
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load default role '{}', using fallback: {}", default_role, e.what());
         }
-        LOG_WARN("Agent '{}' not found in provider '{}', using 'default'", default_agent, default_provider);
-        return prov_it->second.GetDefaultAgent();
     }
-    static AgentConfig default_agent;
-    return default_agent;
+
+    // Fallback: use first provider's default agent
+    if (!providers.empty()) {
+        return providers.begin()->second.GetDefaultAgent();
+    }
+
+    static AgentConfig fallback_agent;
+    return fallback_agent;
 }
 
 const ProviderConfig& AiCodeConfig::GetProvider(const std::string& name) const {
@@ -184,6 +202,7 @@ AgentConfig AgentConfig::FromJson(const nlohmann::json& json) {
     config.context_window = json.value("context_window", json.value("contextWindow", kDefaultContextWindow));
     config.thinking = json.value("thinking", "off");
     config.use_tools = json.value("use_tools", json.value("useTools", true));
+    config.enable_streaming = json.value("enable_streaming", json.value("enableStreaming", true));
     config.auto_compact = json.value("auto_compact", json.value("autoCompact", true));
     config.compact_max_messages = json.value("compact_max_messages", json.value("compactMaxMessages", kDefaultCompactMaxMessages));
     config.compact_keep_recent = json.value("compact_keep_recent", json.value("compactKeepRecent", kDefaultCompactKeepRecent));
@@ -289,8 +308,7 @@ AiCodeConfig AiCodeConfig::FromJson(const nlohmann::json& json) {
 
     AiCodeConfig config;
     config.log_level = json.value("log_level", json.value("logLevel", "info"));
-    config.default_provider = json.value("default_provider", json.value("defaultProvider", "anthropic"));
-    config.default_agent = json.value("default_agent", json.value("defaultAgent", "default"));
+    config.default_role = json.value("default_role", json.value("defaultRole", "default"));
     config.show_buddy = json.value("show_buddy", json.value("showBuddy", true));
 
     if (json.contains("providers") && json["providers"].is_object()) {
@@ -355,6 +373,7 @@ std::string AiCodeConfig::DefaultConfigPath() {
     if (env_path != nullptr && env_path[0] != '\0') {
         return env_path;
     }
+    // Cross-platform: use user home directory
     return ExpandHome("~/.aicode/settings.json");
 }
 
@@ -364,6 +383,7 @@ std::filesystem::path AiCodeConfig::BaseDir() {
     if (env_path != nullptr && env_path[0] != '\0') {
         return std::filesystem::path(env_path).parent_path();
     }
+    // Cross-platform: use user home directory
     return ExpandHome("~/.aicode");
 }
 
@@ -406,15 +426,15 @@ void AiCodeConfig::CreateDefaultConfig(const std::string& filepath) {
 //
 // Structure:
 //   providers.<provider_name>.agents.<agent_name> = { model, temperature, ... }
+//   Roles are defined in config/.aicode/roles/*.md
 //
 // Example:
 //   providers.anthropic.agents.default.model = "qwen3.5-plus"
 //   providers.anthropic.agents.fast.model = "qwen3.5-lite"
 
 {
+  "default_role": "default",          // Default role to use when not specified
   "log_level": "info",
-  "default_provider": "anthropic",
-  "default_agent": "default",
   "show_buddy": true,
 
   // Provider configuration
@@ -433,13 +453,8 @@ void AiCodeConfig::CreateDefaultConfig(const std::string& filepath) {
           "max_tokens": 8192,
           "context_window": 128000,
           "use_tools": true,
-          "thinking": "off"
-        },
-        "fast": {
-          "model": "qwen3.5-lite",
-          "temperature": 0.1,
-          "max_tokens": 1024,
-          "use_tools": true
+          "thinking": "off",
+          "enable_streaming": true
         }
       }
     }
@@ -481,8 +496,7 @@ nlohmann::json AiCodeConfig::ToJson() const {
     nlohmann::json json = nlohmann::json::object();
 
     json["log_level"] = log_level;
-    json["default_provider"] = default_provider;
-    json["default_agent"] = default_agent;
+    json["default_role"] = default_role;
     json["show_buddy"] = show_buddy;
 
     // Serialize providers
@@ -502,6 +516,7 @@ nlohmann::json AiCodeConfig::ToJson() const {
             agent_json["temperature"] = agent_config.temperature;
             agent_json["max_tokens"] = agent_config.max_tokens;
             agent_json["context_window"] = agent_config.context_window;
+            agent_json["enable_streaming"] = agent_config.enable_streaming;
             agents_json[agent_name] = agent_json;
         }
         provider_json["agents"] = agents_json;

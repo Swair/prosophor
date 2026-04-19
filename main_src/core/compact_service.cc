@@ -45,6 +45,8 @@ bool CompactService::NeedsCompaction(const std::vector<MessageSchema>& messages)
     return false;
 }
 
+// ES.45: Use symbolic constant from constants.h
+// kCharsPerTokenEstimate = 4
 int CompactService::EstimateTokens(const std::vector<MessageSchema>& messages) const {
     int total_chars = 0;
 
@@ -216,7 +218,7 @@ CompactResult CompactService::Compact(
     int summary_tokens = summary.empty() ? 0 : static_cast<int>(summary.size()) / kCharsPerTokenEstimate;
     result.tokens_saved = original_tokens - summary_tokens;
 
-    compaction_count_++;
+    compaction_count_.fetch_add(1, std::memory_order_relaxed);
 
     LOG_INFO("Compaction complete: removed {} messages, saved ~{} tokens",
              result.messages_removed, result.tokens_saved);

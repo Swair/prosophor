@@ -75,6 +75,9 @@ class MemoryManager {
     void WriteFileContent(const std::filesystem::path& filepath,
     const std::string& content) const;
 
+    /// Load AICODE.md files recursively from all subdirectories
+    void LoadAicodeFilesRecursively(const std::filesystem::path& dir);
+
     std::filesystem::path workspace_path_;
     std::filesystem::path base_dir_;  // ~/.aicode
     std::string agent_id_;

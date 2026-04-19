@@ -294,7 +294,11 @@ std::string InputHandler::ReadLine(const std::string& prompt) {
     wide_char_buffer_.clear();
     wide_char_index_ = 0;
 
-    std::cout << prompt << std::flush;
+    // 输出上方分隔线
+    std::cout << ansi::kDim << "────────────────────────────────────────────────────────────────────────────────────────────" << ansi::kReset << std::endl;
+
+    // 初始显示带底色的提示符
+    RefreshLine(prompt);
 
     while (true) {
         int c = ReadChar();
@@ -328,7 +332,10 @@ std::string InputHandler::ReadLine(const std::string& prompt) {
 
         // Enter
         if (c == 13 || c == 10) {
-            std::cout << "\n" << std::flush;
+            // 下方分隔线
+            std::cout << "\r" << ansi::kClearLine
+                      << ansi::kDim << "────────────────────────────────────────────────────────────────────────────────────────────" << ansi::kReset
+                      << std::endl;
             DisableRawMode();
             return buffer_;
         }
@@ -528,10 +535,20 @@ void InputHandler::ShowCompletions() {
 }
 
 void InputHandler::RefreshLine(const std::string& prompt) {
-    std::cout << "\r" << ansi::kClearLine << prompt << buffer_;
+    // 移动到行首并清除
+    std::cout << "\r" << ansi::kClearLine;
 
+    // 输入行 - 只显示提示符和输入内容
+    std::cout << ansi::kFgBrightYellow << "❯ " << ansi::kReset
+              << ansi::kBgBrightBlack << ansi::kFgBrightWhite
+              << prompt << buffer_
+              << ansi::kReset;
+
+    // 光标位置调整
+    int prompt_len = 2;  // "❯ " 的长度
+    int content_width = prompt_len + buffer_.length();
     if (cursor_pos_ < buffer_.size()) {
-        std::cout << ansi::MoveCursorLeft(buffer_.size() - cursor_pos_);
+        std::cout << ansi::MoveCursorLeft(content_width - cursor_pos_);
     }
 
     std::cout << std::flush;

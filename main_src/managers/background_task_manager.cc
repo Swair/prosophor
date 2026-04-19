@@ -27,14 +27,14 @@ std::string BackgroundTaskManager::RunInDir(const std::string& command, const st
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Generate short task ID
-    std::string task_id = std::to_string(GetCurrentTimeMillis() % 100000000);
+    std::string task_id = std::to_string(SystemClock::GetCurrentTimeMillis() % 100000000);
 
     // Create task entry
     BackgroundTask task;
     task.id = task_id;
     task.command = command;
     task.status = "running";
-    task.started_at = GetCurrentTimeMillis() / 1000;
+    task.started_at = SystemClock::GetCurrentTimeMillis() / 1000;
 
     tasks_[task_id] = task;
 
@@ -93,7 +93,7 @@ void BackgroundTaskManager::ExecuteTask(const std::string& task_id, const std::s
         if (it != tasks_.end()) {
             it->second.status = status;
             it->second.result = result;
-            it->second.completed_at = GetCurrentTimeMillis() / 1000;
+            it->second.completed_at = SystemClock::GetCurrentTimeMillis() / 1000;
 
             // Add to notification queue
             nlohmann::json notification;

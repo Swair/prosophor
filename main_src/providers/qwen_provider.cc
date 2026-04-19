@@ -10,7 +10,7 @@
 
 #include "common/curl_client.h"
 #include "providers/llm_provider.h"
-#include "core/messages_schema.h"
+#include "common/messages_schema.h"
 
 namespace aicode {
 
@@ -172,7 +172,7 @@ std::string QwenProvider::Serialize(const ChatRequest& request) const {
 
     ApplyThinkingParams(payload_json, request);
 
-    LOG_DEBUG("Request body: {}", payload_json.dump(4));
+    LOG_DEBUG("Request body:\n {}", payload_json.dump(4));
 
     return payload_json.dump();
 }
@@ -228,7 +228,7 @@ ChatResponse QwenProvider::Deserialize(const std::string& json_str) const {
 
 void QwenProvider::PrintRequestLog(const std::string& url,
      const std::string& api_key_prefix) const {
-    LOG_INFO("=== Sending request to Qwen API ===");
+    LOG_DEBUG("=== Sending request to Qwen API ===");
     LOG_DEBUG("URL: {}", url);
     LOG_DEBUG("Headers:");
     LOG_DEBUG("  Content-Type: application/json");
@@ -291,9 +291,11 @@ HeaderList QwenProvider::CreateHeaders() const {
 
 // --- SSE Streaming support ---
 
-// Anthropic-specific SSE stream handler
+// Qwen SSE stream handler - pushes response to callback via external worker
 struct QwenStreamHandler : public SseStreamHandler {
-    std::function<void(const ChatResponse&)> callback;
+    std::function<void(const ChatResponse&)> chat_response_callback;
+    std::string stop_reason;
+    TokenUsageSchema usage;
 
     struct PendingToolCall {
         std::string id;
@@ -304,11 +306,13 @@ struct QwenStreamHandler : public SseStreamHandler {
     int current_block_index = -1;
     std::string current_block_type;
 
-    explicit QwenStreamHandler(
-        std::function<void(const ChatResponse&)> cb)
-        : callback(cb) {}
+    // Accumulated response for return value
+    ChatResponse accumulated_response;
 
-    void OnEvent(const std::string& event_type, const std::string& data) override {
+    explicit QwenStreamHandler(std::function<void(const ChatResponse&)> cb)
+        : chat_response_callback(std::move(cb)) {}
+
+    void OnEvent(const std::string& event_type, const std::string& data) {
         auto j = nlohmann::json::parse(data, nullptr, false);
         if (j.is_discarded()) return;
 
@@ -318,6 +322,7 @@ struct QwenStreamHandler : public SseStreamHandler {
                 const auto& block = j["content_block"];
                 current_block_type = block.value("type", "");
                 if (current_block_type == "tool_use") {
+                    //LOG_DEBUG("response tool_use name: {}", block.dump());
                     PendingToolCall ptc;
                     ptc.id = block.value("id", "");
                     ptc.name = block.value("name", "");
@@ -330,59 +335,77 @@ struct QwenStreamHandler : public SseStreamHandler {
                 std::string delta_type = delta.value("type", "");
 
                 if (delta_type == "text_delta") {
-                    ChatResponse resp;
-                    resp.content_text = delta.value("text", "");
-                    callback(resp);
+                    std::string text = delta.value("text", "");
+                    if (!text.empty()) {
+                        ChatResponse resp;
+                        resp.content_text = std::move(text);
+                        accumulated_response.content_text += resp.content_text;
+                        chat_response_callback(resp);
+                    }
                 } else if (delta_type == "input_json_delta") {
-                    if (!pending_tool_calls.empty()) {
+                    if (!pending_tool_calls.empty()) {                        
+                        //LOG_DEBUG("response tool_use input: {}", delta.dump());
                         pending_tool_calls.back().arguments +=
                             delta.value("partial_json", "");
                     }
                 }
             }
         } else if (event_type == "message_delta") {
-            // Contains stop_reason
+            if (j.contains("delta") && j["delta"].contains("stop_reason")) {
+                stop_reason = j["delta"]["stop_reason"].get<std::string>();
+                accumulated_response.stop_reason = stop_reason;
+            }
+            if (j.contains("usage")) {
+                const auto& u = j["usage"];
+                usage.prompt_tokens = u.value("input_tokens", 0);
+                usage.completion_tokens = u.value("output_tokens", 0);
+                usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+                accumulated_response.usage = usage;
+            }
         } else if (event_type == "message_stop") {
+            // Finalize any pending tool calls
             if (!pending_tool_calls.empty()) {
-                ChatResponse tc_resp;
-                tc_resp.stop_reason = "tool_calls";
                 for (const auto& ptc : pending_tool_calls) {
                     auto args = nlohmann::json::parse(ptc.arguments, nullptr, false);
                     if (args.is_discarded()) {
                         args = nlohmann::json::object();
                     }
-                    tc_resp.AddToolCall(ptc.id, ptc.name, args);
+                    accumulated_response.AddToolCall(ptc.id, ptc.name, args);
                 }
                 pending_tool_calls.clear();
-                callback(tc_resp);
             }
 
+            // Send end-of-stream notification
             ChatResponse end_resp;
             end_resp.is_stream_end = true;
-            callback(end_resp);
+            end_resp.stop_reason = stop_reason.empty() ? "end_turn" : stop_reason;
+            end_resp.usage = usage;
+            chat_response_callback(end_resp);
         }
     }
 };
 
-void QwenProvider::ChatStream(const ChatRequest& request, std::function<void(const ChatResponse&)> callback) {
-    std::string payload_str = Serialize(request);
-    LOG_DEBUG("Sending streaming request to Qwen API");
+ChatResponse QwenProvider::ChatStream(const ChatRequest& request, std::function<void(const ChatResponse&)> callback) {
+    QwenStreamHandler stream_handler(std::move(callback));
 
-    QwenStreamHandler stream_handler(callback);
-
-    StreamRequest stream_req;
+    HttpRequest stream_req;
     stream_req.url = base_url_ + "/v1/messages";
-    stream_req.post_data = payload_str;
+    stream_req.post_data = Serialize(request);
     stream_req.timeout_seconds = timeout_;
     stream_req.low_speed_limit = 1;
     stream_req.low_speed_time = 60;
 
     HeaderList headers = CreateHeaders();
     stream_req.headers = headers.get();
-    stream_req.write_function = StreamWriteCallback;
     stream_req.write_data = &stream_handler;
 
-    StreamClient::Post(stream_req);
+    LOG_DEBUG("Sending streaming request to Qwen API");
+    PrintRequestLog(stream_req.url, api_key_.substr(0, 8) + "...");
+
+    HttpClient::Post(stream_req);
+
+    // Return accumulated response
+    return stream_handler.accumulated_response;
 }
 
 }  // namespace aicode

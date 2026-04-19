@@ -9,7 +9,7 @@
 
 #include "common/curl_client.h"
 #include "providers/llm_provider.h"
-#include "core/messages_schema.h"
+#include "common/messages_schema.h"
 
 namespace aicode {
 
@@ -381,7 +381,9 @@ HeaderList AnthropicProvider::CreateHeaders() const {
 
 // Anthropic-specific SSE stream handler
 struct AnthropicStreamHandler : public SseStreamHandler {
-    std::function<void(const ChatResponse&)> callback;
+    std::function<void(const ChatResponse&)> chat_response_callback;
+    std::string stop_reason;
+    TokenUsageSchema usage;
 
     struct PendingToolCall {
         std::string id;
@@ -392,9 +394,11 @@ struct AnthropicStreamHandler : public SseStreamHandler {
     int current_block_index = -1;
     std::string current_block_type;
 
-    explicit AnthropicStreamHandler(
-        std::function<void(const ChatResponse&)> cb)
-        : callback(cb) {}
+    // Accumulated response for return value
+    ChatResponse accumulated_response;
+
+    explicit AnthropicStreamHandler(std::function<void(const ChatResponse&)> cb)
+        : chat_response_callback(std::move(cb)) {}
 
     void OnEvent(const std::string& event_type, const std::string& data) override {
         auto j = nlohmann::json::parse(data, nullptr, false);
@@ -418,9 +422,13 @@ struct AnthropicStreamHandler : public SseStreamHandler {
                 std::string delta_type = delta.value("type", "");
 
                 if (delta_type == "text_delta") {
-                    ChatResponse resp;
-                    resp.content_text = delta.value("text", "");
-                    callback(resp);
+                    std::string text = delta.value("text", "");
+                    if (!text.empty()) {
+                        ChatResponse resp;
+                        resp.content_text = std::move(text);
+                        accumulated_response.content_text += resp.content_text;
+                        chat_response_callback(resp);
+                    }
                 } else if (delta_type == "input_json_delta") {
                     if (!pending_tool_calls.empty()) {
                         pending_tool_calls.back().arguments +=
@@ -429,48 +437,59 @@ struct AnthropicStreamHandler : public SseStreamHandler {
                 }
             }
         } else if (event_type == "message_delta") {
-            // Contains stop_reason
+            if (j.contains("delta") && j["delta"].contains("stop_reason")) {
+                stop_reason = j["delta"]["stop_reason"].get<std::string>();
+                accumulated_response.stop_reason = stop_reason;
+            }
+            if (j.contains("usage")) {
+                const auto& u = j["usage"];
+                usage.prompt_tokens = u.value("input_tokens", 0);
+                usage.completion_tokens = u.value("output_tokens", 0);
+                usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+                accumulated_response.usage = usage;
+            }
         } else if (event_type == "message_stop") {
+            // Finalize any pending tool calls
             if (!pending_tool_calls.empty()) {
-                ChatResponse tc_resp;
-                tc_resp.stop_reason = "tool_calls";
                 for (const auto& ptc : pending_tool_calls) {
                     auto args = nlohmann::json::parse(ptc.arguments, nullptr, false);
                     if (args.is_discarded()) {
                         args = nlohmann::json::object();
                     }
-                    tc_resp.AddToolCall(ptc.id, ptc.name, args);
+                    accumulated_response.AddToolCall(ptc.id, ptc.name, args);
                 }
                 pending_tool_calls.clear();
-                callback(tc_resp);
             }
 
+            // Send end-of-stream notification
             ChatResponse end_resp;
             end_resp.is_stream_end = true;
-            callback(end_resp);
+            end_resp.stop_reason = stop_reason.empty() ? "end_turn" : stop_reason;
+            end_resp.usage = usage;
+            chat_response_callback(end_resp);
         }
     }
 };
 
-void AnthropicProvider::ChatStream(const ChatRequest& request, std::function<void(const ChatResponse&)> callback) {
-    std::string payload_str = Serialize(request);
-    LOG_DEBUG("Sending streaming request to Anthropic API");
+ChatResponse AnthropicProvider::ChatStream(const ChatRequest& request, std::function<void(const ChatResponse&)> callback) {
+    AnthropicStreamHandler stream_handler(std::move(callback));
 
-    AnthropicStreamHandler stream_handler(callback);
-
-    StreamRequest stream_req;
+    HttpRequest stream_req;
     stream_req.url = base_url_ + "/v1/messages";
-    stream_req.post_data = payload_str;
+    stream_req.post_data = Serialize(request);
     stream_req.timeout_seconds = timeout_;
     stream_req.low_speed_limit = 1;
     stream_req.low_speed_time = 60;
 
     HeaderList headers = CreateHeaders();
     stream_req.headers = headers.get();
-    stream_req.write_function = StreamWriteCallback;
     stream_req.write_data = &stream_handler;
 
-    StreamClient::Post(stream_req);
+    // curl blocks here, callbacks execute in curl thread
+    HttpClient::Post(stream_req);
+
+    // Return accumulated response
+    return stream_handler.accumulated_response;
 }
 
 }  // namespace aicode

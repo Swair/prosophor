@@ -9,7 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include "common/noncopyable.h"
-#include "core/agent_state.h"
+#include "core/agent_session.h"
 
 namespace aicode {
 
@@ -21,7 +21,7 @@ struct CommandContext {
     std::string session_id;
     void* user_data = nullptr;  // For custom context data
     class AgentCore* agent_core = nullptr;  // For accessing agent at runtime
-    class AgentState* agent_state = nullptr;  // For accessing current session state
+    class AgentSession* agent_session = nullptr;  // For accessing current session state
 };
 
 /// Command result
@@ -84,8 +84,8 @@ public:
     /// Tab completion for commands
     std::vector<std::string> CompleteCommand(const std::string& partial) const;
 
-    /// Tab completion for model names (provider/agent format)
-    std::vector<std::string> CompleteModel(const std::string& partial) const;
+    /// Tab completion for role names
+    std::vector<std::string> CompleteRole(const std::string& partial) const;
 
     /// Tab completion for command arguments
     std::vector<std::string> CompleteArguments(const std::string& cmd_name,
@@ -135,9 +135,12 @@ private:
     CommandResult CmdAutoCommit(const CommandContext&, const std::vector<std::string>& args);
     CommandResult CmdMemory(const CommandContext&, const std::vector<std::string>& args);
     CommandResult CmdSummary(const CommandContext&, const std::vector<std::string>& args);
+    CommandResult CmdRole(const CommandContext&, const std::vector<std::string>& args);
+    CommandResult CmdRoles(const CommandContext&, const std::vector<std::string>& args);
     CommandResult CmdModel(const CommandContext&, const std::vector<std::string>& args);
     CommandResult CmdPermissions(const CommandContext&, const std::vector<std::string>& args);
     CommandResult CmdHistory(const CommandContext&, const std::vector<std::string>& args);
+    CommandResult CmdBye(const CommandContext&, const std::vector<std::string>& args);
 };
 
 }  // namespace aicode

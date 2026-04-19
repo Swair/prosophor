@@ -12,8 +12,9 @@
 #include "common/constants.h"
 #include "common/time_wrapper.h"
 #include "managers/memory_manager.h"
-#include "core/skill_loader.h"
-#include "core/agent_state.h"
+#include "managers/skill_loader.h"
+#include "core/agent_session.h"
+#include "core/agent_core.h"
 
 namespace aicode {
 
@@ -22,14 +23,14 @@ SubagentCoordinator& SubagentCoordinator::GetInstance() {
     return instance;
 }
 
-void SubagentCoordinator::Initialize(ChatCallback chat_cb, StreamChatCallback stream_chat_cb) {
+void SubagentCoordinator::Initialize(LlmChatCallback chat_cb, LlmStreamCallback stream_chat_cb) {
     chat_callback_ = chat_cb;
     stream_chat_callback_ = stream_chat_cb;
     LOG_INFO("SubagentCoordinator initialized");
 }
 
 std::string SubagentCoordinator::GenerateAgentId() {
-    return GenerateIdWithTimestamp("agent_");
+    return SystemClock::GenerateIdWithTimestamp("agent_");
 }
 
 std::string SubagentCoordinator::CreateSubagent(const std::string& name,
@@ -41,7 +42,7 @@ std::string SubagentCoordinator::CreateSubagent(const std::string& name,
     agent.description = description;
     agent.task = task;
     agent.status = SubagentStatus::Pending;
-    agent.created_at = GetCurrentTimestamp();
+    agent.created_at = SystemClock::GetCurrentTimestamp();
     agent.context = shared_context_;
 
     subagents_[agent.id] = agent;
@@ -62,7 +63,7 @@ bool SubagentCoordinator::StartSubagent(const std::string& agent_id) {
     }
 
     it->second.status = SubagentStatus::Running;
-    it->second.started_at = GetCurrentTimestamp();
+    it->second.started_at = SystemClock::GetCurrentTimestamp();
 
     // Run subagent synchronously
     RunSubagent(it->second);
@@ -81,7 +82,7 @@ void SubagentCoordinator::StartSubagentAsync(const std::string& agent_id) {
     }
 
     it->second.status = SubagentStatus::Running;
-    it->second.started_at = GetCurrentTimestamp();
+    it->second.started_at = SystemClock::GetCurrentTimestamp();
 
     // Run subagent in a separate thread
     running_threads_[agent_id] = std::thread([this, agent_id]() {
@@ -97,45 +98,33 @@ void SubagentCoordinator::RunSubagent(Subagent& agent) {
     LOG_INFO("Running subagent {}: {}", agent.id, agent.task);
 
     try {
-        // Create agent core for subagent
-        auto memory_manager = std::make_shared<MemoryManager>(std::filesystem::current_path());
-        auto skill_loader = std::make_shared<SkillLoader>();
+        // Use singleton tool registry
+        auto& tool_registry = ToolRegistry::GetInstance();
 
-        // Create tool registry
-        ToolRegistry tool_registry;
-        tool_registry.RegisterBuiltinTools();
-
-        // Initialize the singleton AgentCore with subagent-specific dependencies
-        auto& agent_core = AgentCore::GetInstance();
-        agent_core.Initialize(
-            memory_manager,
-            skill_loader,
-            tool_registry.GetToolSchemas(),
+        // Create agent session for this subagent
+        AgentSession session;
+        session.use_tools = true;
+        session.role = nullptr;
+        // Set runtime dependencies
+        session.tool_executor =
             [&tool_registry](const std::string& name, const nlohmann::json& args) {
                 return tool_registry.ExecuteTool(name, args);
-            }
-        );
+            };
 
-        // Set provider callbacks
-        agent_core.SetProviderCallbacks(chat_callback_, stream_chat_callback_);
-
-        // Create agent state for this subagent session
-        AgentState state;
-        state.model = "claude-sonnet-4-6";
-        state.max_tokens = 4096;
-        state.use_tools = true;
-        state.max_iterations = 10;  // Subagent default
+        // Set provider (use default provider)
+        auto& provider_router = ProviderRouter::GetInstance();
+        session.provider = provider_router.GetProviderByName("anthropic");
 
         // Build system prompt
         std::string system_prompt_text = subagent_system_prompt_ +
             "\n\nYou are working on: " + agent.description +
             "\n\nYour task: " + agent.task;
 
-        state.system_prompt.push_back({"text", system_prompt_text, false});
+        session.system_prompt.push_back({"text", system_prompt_text, false});
 
-        // Run the agent
-        agent_core.CloseLoop(agent.task, state);
-        agent.messages = state.messages;
+        // Run the agent - using static Loop method
+        AgentCore::Loop(agent.task, session);
+        agent.messages = session.messages;
 
         // Extract result from final message
         if (!agent.messages.empty()) {
@@ -146,13 +135,13 @@ void SubagentCoordinator::RunSubagent(Subagent& agent) {
         }
 
         agent.status = SubagentStatus::Completed;
-        agent.completed_at = GetCurrentTimestamp();
+        agent.completed_at = SystemClock::GetCurrentTimestamp();
         LOG_INFO("Subagent completed: {}", agent.id);
 
     } catch (const std::exception& e) {
         agent.status = SubagentStatus::Failed;
         agent.error = e.what();
-        agent.completed_at = GetCurrentTimestamp();
+        agent.completed_at = SystemClock::GetCurrentTimestamp();
         LOG_ERROR("Subagent failed: {} - {}", agent.id, e.what());
     }
 }
@@ -186,7 +175,7 @@ bool SubagentCoordinator::CancelSubagent(const std::string& agent_id) {
     }
 
     it->second.status = SubagentStatus::Cancelled;
-    it->second.completed_at = GetCurrentTimestamp();
+    it->second.completed_at = SystemClock::GetCurrentTimestamp();
     LOG_INFO("Cancelled subagent: {}", agent_id);
     return true;
 }

@@ -2,90 +2,54 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <atomic>
 #include <functional>
-#include <memory>
 #include <string>
 #include <vector>
 
-#include <nlohmann/json.hpp>
-#include "common/log_wrapper.h"
-
-#include "common/noncopyable.h"
-#include "common/config.h"
-#include "common/constants.h"
-#include "core/compact_service.h"
-#include "core/messages_schema.h"
-#include "core/agent_state.h"
-#include "providers/llm_provider.h"
+#include "common/messages_schema.h"
+#include "core/agent_session.h"
+#include "core/compact_service.h"  // For GetCompactService()
+#include "components/ui_types.h"  // For AgentRuntimeState
 
 namespace aicode {
 
-// Forward declarations
-class MemoryManager;
-class SkillLoader;
-class ToolRegistry;
-struct SessionState;
-
-/// Agent event for streaming responses
-struct AgentEvent {
-    std::string type;  // "text_delta" | "tool_use" | "tool_result" | "message_end"
-    nlohmann::json data;
-};
-
-using AgentEventCallback = std::function<void(const AgentEvent&)>;
-
 /// AgentCore: orchestrates message processing, tool execution, and LLM interaction
-/// Stateless singleton - all session state is passed via AgentState parameter
-class AgentCore : public Noncopyable {
+/// Stateless utility class - all state is in AgentSession
+class AgentCore {
  public:
-    static AgentCore& GetInstance();
-
-    /// Initialize with service dependencies (call once at startup)
-    void Initialize(std::shared_ptr<MemoryManager> memory_manager,
-                    std::shared_ptr<SkillLoader> skill_loader,
-                    std::vector<ToolsSchema> tool_schemas,
-                    std::function<std::string(const std::string& tool_name, const nlohmann::json& args)> tool_executor);
-
-    /// Process a message - adds user message to state, runs agent loop, returns assistant response
-    void CloseLoop(const std::string& message, AgentState& state);
-
-    /// Streaming version of CloseLoop
-    std::vector<MessageSchema> LoopStream(const std::string& message, AgentState& state, AgentEventCallback callback);
-
-    /// Stop the current agent turn
-    void Stop();
-
-    /// Set provider callbacks (for hot-reload provider switch)
-    void SetProviderCallbacks(
-        std::function<ChatResponse(const ChatRequest& request)> chat_cb,
-        std::function<void(const ChatRequest&, std::function<void(const ChatResponse&)>)> stream_cb);
+    /// Process a message - streaming mode is determined by session.role->enable_streaming
+    /// @param message User message
+    /// @param session Agent session (read/write) - contains tool_executor, stop_requested, role
+    static void Loop(const std::string& message, AgentSession& session);
 
     /// Get compact service for context compaction
-    CompactService& GetCompactService() { return CompactService::GetInstance(); }
-
-    /// Get LSP manager for code intelligence
-    void InitializeLsp();
-    bool RequestLspForFile(const std::string& filepath);
+    static CompactService& GetCompactService() { return CompactService::GetInstance(); }
 
  private:
-    AgentCore();
-    ~AgentCore();
+    /// Build ChatRequest from AgentSession
+    static ChatRequest BuildRequest(const AgentSession& session);
 
-    /// Build ChatRequest from AgentState
-    ChatRequest BuildRequest(const AgentState& state);
+    /// Process @file references in user message
+    static std::string ProcessFileRefs(const std::string& message, const AgentSession& session);
 
-    // Service dependencies (shared, read-only)
-    std::shared_ptr<MemoryManager> memory_manager_;
-    std::shared_ptr<SkillLoader> skill_loader_;
-    std::vector<ToolsSchema> tool_schemas_;
-    std::function<std::string(const std::string& tool_name, const nlohmann::json& args)> tool_executor_;
+    /// Check and perform context compaction if needed
+    static void MaybeCompact(AgentSession& session);
 
-    // LLM callbacks (set by SessionManager/ProviderRouter)
-    std::function<ChatResponse(const ChatRequest& request)> chat_llm_cb_;
-    std::function<void(const ChatRequest&, std::function<void(const ChatResponse&)>)> chat_llm_stream_cb_;
+    /// Get max iterations from role or default
+    static int GetMaxIterations(const AgentSession& session);
 
-    std::atomic<bool> stop_requested_;
+    /// Set session output (state + state_message + optional reply message)
+    /// Calls session output callback to notify UI
+    static void SetSessionOutput(AgentSession& session, AgentRuntimeState state,
+                                 const std::string& state_msg,
+                                 const std::optional<MessageSchema>& reply = std::nullopt);
+
+    /// Execute tool calls and build messages
+    /// Returns true if tool calls were executed, false if no tool calls
+    static bool ExecuteToolCalls(const std::vector<ToolUseSchema>& tool_calls,
+                                 AgentSession& session,
+                                 std::string& accumulated_text,
+                                 int& iterations);
 };
 
 }  // namespace aicode

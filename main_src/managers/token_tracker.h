@@ -5,9 +5,10 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <shared_mutex>
 
 #include <nlohmann/json.hpp>
-#include "core/messages_schema.h"
+#include "common/messages_schema.h"
 
 namespace aicode {
 
@@ -152,6 +153,7 @@ private:
     TokenTracker() = default;
     ~TokenTracker() = default;
 
+    mutable std::shared_mutex mutex_;  // Protects all stats maps
     std::unordered_map<std::string, TokenStats> model_stats_;
     std::unordered_map<std::string, ExtendedTokenStats> extended_stats_;
     std::unordered_map<std::string, std::pair<double, double>> cost_rates_;  // input, output per 1K tokens

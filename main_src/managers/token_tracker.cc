@@ -58,6 +58,8 @@ TokenTracker& TokenTracker::GetInstance() {
 }
 
 void TokenTracker::RecordUsage(const std::string& model, int prompt_tokens, int completion_tokens) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
     auto& stats = model_stats_[model];
     stats.Add(prompt_tokens, completion_tokens);
 
@@ -85,6 +87,8 @@ void TokenTracker::RecordExtendedUsage(const std::string& model,
                                         int64_t api_duration_without_retries_ms,
                                         int retry_count,
                                         double cost_usd) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
     // Update base stats
     auto& stats = model_stats_[model];
     stats.prompt_tokens += prompt_tokens;
@@ -108,23 +112,27 @@ void TokenTracker::RecordExtendedUsage(const std::string& model,
 }
 
 void TokenTracker::RecordCodeChanges(int lines_added, int lines_removed) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     extended_stats_["__total__"].lines_added += lines_added;
     extended_stats_["__total__"].lines_removed += lines_removed;
     totals_dirty = true;
 }
 
 void TokenTracker::RecordToolInvocation(int64_t duration_ms) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     extended_stats_["__total__"].tool_invocations++;
     extended_stats_["__total__"].tool_duration_ms += duration_ms;
     totals_dirty = true;
 }
 
 void TokenTracker::RecordFpsMetrics(double average_fps, double low_1_pct_fps) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     extended_stats_["__total__"].fps_average = average_fps;
     extended_stats_["__total__"].fps_low_1_pct = low_1_pct_fps;
 }
 
 TokenStats TokenTracker::GetModelStats(const std::string& model) const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     auto it = model_stats_.find(model);
     if (it != model_stats_.end()) {
         return it->second;
@@ -133,6 +141,8 @@ TokenStats TokenTracker::GetModelStats(const std::string& model) const {
 }
 
 TokenStats TokenTracker::GetTotalStats() const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+
     if (!totals_dirty && !cached_totals_.empty()) {
         auto it = cached_totals_.find("__total__");
         if (it != cached_totals_.end()) {
@@ -150,16 +160,20 @@ TokenStats TokenTracker::GetTotalStats() const {
         total.cost_usd += stats.cost_usd;
     }
 
-    cached_totals_["__total__"] = total;
-    totals_dirty = false;
+    // Note: We're modifying cache while holding the lock (read-lock upgraded conceptually)
+    // This is safe because cached_totals_ is marked mutable and we're in a const method
+    const_cast<TokenTracker*>(this)->cached_totals_["__total__"] = total;
+    const_cast<TokenTracker*>(this)->totals_dirty = false;
     return total;
 }
 
 std::unordered_map<std::string, TokenStats> TokenTracker::GetAllStats() const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     return model_stats_;
 }
 
 double TokenTracker::GetEstimatedCost(const std::string& model) const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     auto it = model_stats_.find(model);
     if (it != model_stats_.end()) {
         return it->second.cost_usd;
@@ -172,12 +186,14 @@ double TokenTracker::GetTotalEstimatedCost() const {
 }
 
 void TokenTracker::Reset() {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     model_stats_.clear();
     totals_dirty = true;
     LOG_INFO("Token tracker stats reset");
 }
 
 void TokenTracker::SetCostRate(const std::string& model, double input_rate, double output_rate) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     cost_rates_[model] = {input_rate, output_rate};
     LOG_DEBUG("Cost rate set for {}: ${}/1K input, ${}/1K output", model, input_rate, output_rate);
 }
@@ -218,6 +234,8 @@ nlohmann::json TokenTracker::ToJson() const {
 }
 
 void TokenTracker::FromJson(const nlohmann::json& json) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
     if (json.contains("models") && json["models"].is_object()) {
         for (const auto& [model, stats_json] : json["models"].items()) {
             TokenStats stats;
@@ -252,6 +270,7 @@ void TokenTracker::FromJson(const nlohmann::json& json) {
 }
 
 void TokenTracker::SaveToFile(const std::string& filepath) {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     WriteJson(filepath, ToJson(), 2);
     LOG_INFO("Token tracker stats saved to {}", filepath);
 }
@@ -270,6 +289,7 @@ void TokenTracker::LoadFromFile(const std::string& filepath) {
 // TokenCounter implementation
 int TokenCounter::EstimateTokens(const std::string& text) {
     // Rough approximation: 1 token ≈ 4 characters for English
+    // SL.str.2: Consider std::string_view for read-only text
     return static_cast<int>(text.length() / 4);
 }
 

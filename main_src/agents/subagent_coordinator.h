@@ -8,9 +8,16 @@
 #include <unordered_map>
 #include <nlohmann/json.hpp>
 
-#include "core/agent_core.h"
+#include "core/agent_session.h"
+#include "providers/llm_provider.h"
 
 namespace aicode {
+
+/// LLM chat callback (non-streaming)
+using LlmChatCallback = std::function<ChatResponse(const ChatRequest&)>;
+
+/// LLM streaming callback
+using LlmStreamCallback = std::function<void(const ChatRequest&, std::function<void(const ChatResponse&)>)>;
 
 /// Subagent status
 enum class SubagentStatus {
@@ -51,13 +58,10 @@ struct Subagent {
 /// Subagent coordinator for managing multiple agents
 class SubagentCoordinator {
 public:
-    using ChatCallback = std::function<ChatResponse(const ChatRequest&)>;
-    using StreamChatCallback = std::function<void(const ChatRequest&, std::function<void(const ChatResponse&)>)>;
-
     static SubagentCoordinator& GetInstance();
 
     /// Initialize coordinator
-    void Initialize(ChatCallback chat_cb, StreamChatCallback stream_chat_cb);
+    void Initialize(LlmChatCallback chat_cb, LlmStreamCallback stream_chat_cb);
 
     /// Create a subagent
     std::string CreateSubagent(const std::string& name,
@@ -120,8 +124,8 @@ private:
 
     std::unordered_map<std::string, Subagent> subagents_;
     std::unordered_map<std::string, std::thread> running_threads_;
-    ChatCallback chat_callback_;
-    StreamChatCallback stream_chat_callback_;
+    LlmChatCallback chat_callback_;
+    LlmStreamCallback stream_chat_callback_;
     std::string subagent_system_prompt_ = "You are a specialized subagent working on a specific task.";
     nlohmann::json shared_context_;
 
