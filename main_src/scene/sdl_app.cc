@@ -1,11 +1,11 @@
 // Copyright 2026 AiCode Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sdl_app.h"
+#include "scene/sdl_app.h"
 #include "scene/office_background.h"
 #include "scene/agent_state_observer.h"
 #include "scene/office_character_manager.h"
-#include "scene/character_sprite.h"
+#include "scene/pixel_character.h"
 #include "media_core.h"
 #include "scene/ui_renderer.h"
 #include "common/log_wrapper.h"
@@ -76,7 +76,7 @@ void SdlApp::Initialize() {
     AgentStateVisualizer::GetInstance().Initialize();
     UIRenderer::Instance().Initialize();
     OfficeBackground::GetInstance().Initialize();
-    CharacterSpriteRenderer::Instance().Initialize();
+    PixelCharacterRenderer::Instance().Initialize();
 
     UIRenderer::Instance().SetOnMessageSubmit([this](const std::string& message) {
         if (!message.empty() && message[0] == '/') {

@@ -59,7 +59,7 @@ file(GLOB_RECURSE CC_FILES_LIST
     ${CMAKE_CURRENT_LIST_DIR}/services/*.cc
     ${CMAKE_CURRENT_LIST_DIR}/tools/*.cc
     ${CMAKE_CURRENT_LIST_DIR}/scene/agent_state_observer.cc  # Always include for visualizer
-    ${CMAKE_CURRENT_LIST_DIR}/scene/character_sprite.cc      # Character sprites
+    ${CMAKE_CURRENT_LIST_DIR}/scene/pixel_character.cc       # Pixel character renderer
     ${CMAKE_CURRENT_LIST_DIR}/scene/office_character_manager.cc  # Character manager
     ${CMAKE_CURRENT_LIST_DIR}/scene/character_state_observer.cc  # State observer
     ${CMAKE_CURRENT_LIST_DIR}/scene/office_background.cc     # Office background

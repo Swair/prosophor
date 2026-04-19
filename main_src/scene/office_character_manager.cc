@@ -1,7 +1,7 @@
 // Copyright 2026 AiCode Contributors
 // SPDX-License-Identifier: Apache-2.0
 #include "scene/office_character_manager.h"
-#include "scene/character_sprite.h"
+#include "scene/pixel_character.h"
 #include "scene/layout_config.h"
 #include "common/log_wrapper.h"
 #include <queue>
@@ -282,7 +282,7 @@ void OfficeCharacterManager::Update(float dt) {
 }
 
 void OfficeCharacterManager::Render() {
-    auto& renderer = CharacterSpriteRenderer::Instance();
+    auto& renderer = PixelCharacterRenderer::Instance();
 
     // Depth-sort characters by Y position
     std::vector<CharacterInstance*> sorted;

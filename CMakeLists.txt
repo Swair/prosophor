@@ -40,5 +40,5 @@ install(DIRECTORY ${CMAKE_SOURCE_DIR}/config/.aicode/ DESTINATION ${AICODE_INSTA
     PATTERN "settings.json" EXCLUDE  # Don't overwrite user's settings
 )
 
-# Install assets directory to bin/assets (relative to executable)
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/ DESTINATION bin/assets)
+# # Install assets directory to bin/assets (relative to executable)
+# install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/ DESTINATION bin/assets)
