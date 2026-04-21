@@ -1200,11 +1200,25 @@ void imgui_widget::ImGuiTextUnformatted(const char* text) {
  * @param color 文本颜色（默认白色）
  */
 void imgui_widget::ImGuiTextWrapped(const char* text, float wrap_width, const Color& color) {
+    ImGuiText(text, color, wrap_width);
+}
+
+/**
+ * @brief 渲染带颜色的文本（统一接口）
+ * @param text 文本内容
+ * @param color 文本颜色（默认白色）
+ * @param wrap_width 换行宽度（0 表示无换行）
+ */
+void imgui_widget::ImGuiText(const char* text, const Color& color, float wrap_width) {
     if (wrap_width > 0.0f) {
         ImGuiPushTextWrapPos(wrap_width);
     }
     PushStyleColor(ImGuiCol_Text, color);
-    ImGui::TextWrapped("%s", text);
+    if (wrap_width > 0.0f) {
+        ImGui::TextWrapped("%s", text);
+    } else {
+        ImGui::TextUnformatted(text);
+    }
     PopStyleColor();
     if (wrap_width > 0.0f) {
         ImGuiPopTextWrapPos();
@@ -1217,9 +1231,7 @@ void imgui_widget::ImGuiTextWrapped(const char* text, float wrap_width, const Co
  * @param text 文本内容
  */
 void imgui_widget::ImGuiTextColored(const Color& color, const char* text) {
-    PushStyleColor(0, color);  // 0 = ImGuiCol_Text
-    ImGui::TextUnformatted(text);
-    PopStyleColor();
+    ImGuiText(text, color, 0.0f);  // 委托给统一接口
 }
 
 /**

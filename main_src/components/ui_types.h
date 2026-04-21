@@ -20,8 +20,9 @@ enum class AgentRuntimeState {
     WAITING_PERMISSION,
     STATE_ERROR,
     COMPLETE,
-    STREAM_TYPING,
-    STREAM_MODE_COMPLETE
+    STREAM_MODE_START,      // 流式响应开始
+    STREAM_TYPING,          // 流式响应中
+    STREAM_MODE_COMPLETE    // 流式响应完成
 };
 
 /// 聊天消息结构

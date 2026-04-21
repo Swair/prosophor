@@ -259,8 +259,8 @@ void AgentCore::Loop(const std::string& message, AgentSession& session) {
             // Call LLM - streaming or non-streaming
             ChatResponse response;
             if (streaming) {
-                SetSessionOutput(session, AgentRuntimeState::THINKING, "< ");
-                // Streaming mode - send STREAM_TYPING for each chunk
+                // Streaming mode: send STREAM_MODE_START first, then STREAM_TYPING for each chunk
+                SetSessionOutput(session, AgentRuntimeState::STREAM_MODE_START, "");
                 response = session.provider->ChatStream(
                     request, [&session](const ChatResponse& chunk) {
                         if (!chunk.content_text.empty()){
@@ -268,7 +268,7 @@ void AgentCore::Loop(const std::string& message, AgentSession& session) {
                             chunk_msg.role = "assistant";
                             chunk_msg.AddTextContent(chunk.content_text);
                             SetSessionOutput(session, AgentRuntimeState::STREAM_TYPING, "", chunk_msg);
-                        }                        
+                        }
                     });
             } else {
                 response = session.provider->Chat(request);

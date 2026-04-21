@@ -147,16 +147,19 @@ void AgentCommander::InitializeComponents() {
 
             // Terminal mode: output via OutputManager
             if (state == AgentRuntimeState::THINKING) {
-                std::cout << session_id << " - " << role_id << ": " << state_msg << std::endl;
+                // std::cout << session_id << " - " << role_id << ": " << state_msg << std::endl;
+            }
+            else if(state == AgentRuntimeState::STREAM_MODE_START) {
+                std::cout << "< " << std::flush;
+            }
+            else if(state == AgentRuntimeState::STREAM_TYPING) {
+                std::cout << reply->text() << std::flush;
+            }
+            else if(state == AgentRuntimeState::STREAM_MODE_COMPLETE) {
+                std::cout << "\n> " << std::flush;
             }
             else if(state == AgentRuntimeState::COMPLETE) {
                 std::cout << "< " << reply->text() << std::endl;
-            }  
-            else if(state == AgentRuntimeState::STREAM_TYPING) {
-                std::cout << reply->text() << std::flush;
-            } 
-            else if(state == AgentRuntimeState::STREAM_MODE_COMPLETE) {
-                std::cout << std::endl;
             }
             else if(state == AgentRuntimeState::STATE_ERROR) {
                 LOG_ERROR("Error: {}", state_msg);
@@ -376,7 +379,11 @@ void AgentCommander::HandleInputEvent(const InputEvent& event) {
 
 void AgentCommander::ProcessUserMessage(const std::string& line) {
     try {
+#ifdef _WIN32
+        // Windows: Raw mode 不回显，需要手动输出
         std::cout << "> " << line << std::endl;
+#endif
+        // Linux: Raw mode 已通过 RefreshLine 回显，不需要再次输出
 
         // Reset interrupted_ flag before processing new message
         interrupted_ = false;

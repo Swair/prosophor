@@ -226,8 +226,7 @@ ChatResponse QwenProvider::Deserialize(const std::string& json_str) const {
     return result;
 }
 
-void QwenProvider::PrintRequestLog(const std::string& url,
-     const std::string& api_key_prefix) const {
+void QwenProvider::PrintRequestLog(const std::string& url) const {
     LOG_DEBUG("=== Sending request to Qwen API ===");
     LOG_DEBUG("URL: {}", url);
     LOG_DEBUG("Headers:");
@@ -245,7 +244,7 @@ ChatResponse QwenProvider::Chat(const ChatRequest& request) {
 
     HeaderList headers = CreateHeaders();
     http_request.headers = headers.get();
-    PrintRequestLog(http_request.url, api_key_.substr(0, 8) + "...");
+    PrintRequestLog(http_request.url);
 
     http_request.post_data = Serialize(request);
 
@@ -400,7 +399,7 @@ ChatResponse QwenProvider::ChatStream(const ChatRequest& request, std::function<
     stream_req.write_data = &stream_handler;
 
     LOG_DEBUG("Sending streaming request to Qwen API");
-    PrintRequestLog(stream_req.url, api_key_.substr(0, 8) + "...");
+    PrintRequestLog(stream_req.url);
 
     HttpClient::Post(stream_req);
 

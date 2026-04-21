@@ -13,6 +13,7 @@
 #include "common/file_utils.h"
 #include "managers/permission_manager.h"
 #include "core/memory_consolidation_service.h"
+#include "managers/active_interaction_manager.h"
 
 namespace aicode {
 
@@ -30,6 +31,45 @@ void AgentSessionManager::Initialize(std::shared_ptr<MemoryManager> memory_manag
     // Load roles from ~/.aicode/roles/
     auto roles_dir = aicode::AiCodeConfig::BaseDir() / "roles";
     LoadRolesFromDirectory(roles_dir.string());
+
+    // 初始化主动交互管理器（使用原始指针，避免 shared_ptr 循环依赖）
+    auto& active_interaction = ActiveInteractionManager::GetInstance();
+    active_interaction.Initialize(this);
+
+    // 设置 LLM 执行回调（用于后台主动提词）
+    active_interaction.SetLlmExecuteCallback(
+        [this](const std::string& session_id, const std::string& prompt) -> std::string {
+            auto* session = this->GetSession(session_id);
+            if (!session) {
+                LOG_ERROR("Session not found for active interaction: {}", session_id);
+                return "";
+            }
+
+            ChatRequest req;
+            if (session->role) {
+                req.model = session->role->model;
+                req.temperature = session->role->temperature;
+                req.max_tokens = 4096;
+            } else {
+                req.model = "claude-sonnet-4-6";
+                req.temperature = 0.7;
+                req.max_tokens = 4096;
+            }
+
+            // 构建上下文：包含会话历史
+            std::ostringstream context;
+            context << "以下是当前会话的历史记录：\n\n";
+            for (size_t i = 0; i < session->messages.size() && i < 20; ++i) {
+                const auto& msg = session->messages[i];
+                context << (msg.role == "user" ? "用户" : "助手") << ": " << msg.text() << "\n";
+            }
+            context << "\n" << prompt;
+
+            req.AddUserMessage(context.str());
+            return session->provider->Chat(req).content_text;
+        });
+
+    LOG_INFO("ActiveInteractionManager initialized with LLM callback");
 }
 
 void AgentSessionManager::SetToolExecutor(ToolExecutorCallback tool_executor) {
@@ -140,6 +180,9 @@ std::string AgentSessionManager::SendToSession(const std::string& session_id,
     // 切换记忆上下文
     SwitchMemoryContext(*session);
 
+    // 触发主动交互：监听用户消息
+    ActiveInteractionManager::GetInstance().OnUserMessage(session_id, message);
+
     // 根据 role 中的 enable_streaming 配置选择流式或非流式模式
     AgentCore::Loop(message, *session);
 
@@ -169,6 +212,9 @@ void AgentSessionManager::SendToSessionAsync(const std::string& session_id,
 
     // 切换记忆上下文
     SwitchMemoryContext(*session);
+
+    // 触发主动交互：监听用户消息
+    ActiveInteractionManager::GetInstance().OnUserMessage(session_id, message);
 
     // 提交到线程池
     thread_pool_.Submit([this, session, message]() {
@@ -243,6 +289,9 @@ void AgentSessionManager::CloseSession(const std::string& session_id) {
 
     auto it = sessions_.find(session_id);
     if (it != sessions_.end()) {
+        // 取消该会话的所有待处理主动交互任务
+        ActiveInteractionManager::GetInstance().CancelSessionTasks(session_id);
+
         // Perform exit consolidation using injected service
         auto* consolidation_service = it->second.consolidation_service;
 

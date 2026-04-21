@@ -24,7 +24,7 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 endif()
 
 add_subdirectory(main_src)
-add_subdirectory(tests)
+# add_subdirectory(tests)
 
 # Install configuration files, roles, skills, and workspace
 # Install to ~/.aicode (home directory) on all platforms

@@ -4,28 +4,24 @@
 #include "common/log_wrapper.h"
 #include "common/config.h"
 
-#ifdef AICODE_SDL_UI
-#include "scene/sdl_app.h"
-// SDL 需要 main 函数重定向（Windows 下使用 WIN32 时隐藏控制台）
-#define SDL_MAIN_HANDLED
-#include <SDL3/SDL_main.h>
-#endif
-
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
-#ifdef _WIN32
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR cmdLine, int nCmdShow) {
+#ifdef AICODE_SDL_UI
+#include "scene/sdl_app.h"
 #else
-int main(int argc, char* argv[]) {
+#include "cli/agent_commander.h"
 #endif
 
+// 统一入口：所有平台都用 main()
+int main(int argc, char* argv[]) {
+    (void)argc; (void)argv;  // 未使用参数
+
 #ifdef _WIN32
-    // 隐藏控制台窗口
-    FreeConsole();
-#else
-    (void)argc; (void)argv;
+    // 设置 Windows 控制台代码页为 UTF-8，解决中文乱码问题
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
 #endif
 
     const auto& config = aicode::AiCodeConfig::GetInstance();
@@ -34,7 +30,6 @@ int main(int argc, char* argv[]) {
 
     try {
 #ifdef AICODE_SDL_UI
-        // SDL 图形界面模式
         return aicode::SdlApp::GetInstance().Run();
 #else
         // 命令行 Agent 模式

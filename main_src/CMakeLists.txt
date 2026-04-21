@@ -123,7 +123,7 @@ if(WIN32)
     target_link_libraries(aicode_core PUBLIC ws2_32 bcrypt)
 endif()
 
-if(WIN32)
+if(AICODE_SDL_UI)
     add_executable(aicode WIN32 main.cc)
 else()
     add_executable(aicode main.cc)

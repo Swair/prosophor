@@ -82,13 +82,14 @@ void InputHandler::DisableRawMode() {
 }
 
 int InputHandler::ReadChar() {
-    char c;
-    while (read(STDIN_FILENO, &c, 1) != 1) {
-        if (errno != EAGAIN) {
+    unsigned char c;
+    ssize_t result;
+    while ((result = read(STDIN_FILENO, &c, 1)) != 1) {
+        if (result == -1 && errno != EAGAIN) {
             return -1;
         }
     }
-    return static_cast<unsigned char>(c);
+    return static_cast<int>(c);
 }
 
 int InputHandler::ReadCharWithTimeout(int timeout_ms) {
@@ -106,6 +107,37 @@ int InputHandler::ReadCharWithTimeout(int timeout_ms) {
     }
 
     return ReadChar();
+}
+
+// Helper function to check if a byte is a UTF-8 continuation byte (10xxxxxx)
+static bool IsUtf8ContinuationByte(unsigned char c) {
+    return (c & 0b11000000) == 0b10000000;
+}
+
+// Helper function to get the byte length of a UTF-8 character from its first byte
+static int GetUtf8CharLen(unsigned char first_byte) {
+    if ((first_byte & 0b10000000) == 0b00000000) return 1;  // 0xxxxxxx
+    if ((first_byte & 0b11100000) == 0b11000000) return 2;  // 110xxxxx
+    if ((first_byte & 0b11110000) == 0b11100000) return 3;  // 1110xxxx
+    if ((first_byte & 0b11111000) == 0b11110000) return 4;  // 11110xxx
+    return 1;  // Invalid or continuation byte, treat as single
+}
+
+// Helper function to move cursor backward by one UTF-8 character
+void InputHandler::HandleBackspace() {
+    if (cursor_pos_ <= 0) return;
+
+    // Find the start of the previous UTF-8 character
+    size_t pos = cursor_pos_ - 1;
+    // Move back until we find the start of a UTF-8 character
+    while (pos > 0 && IsUtf8ContinuationByte(static_cast<unsigned char>(buffer_[pos]))) {
+        pos--;
+    }
+
+    // Calculate how many bytes to delete
+    size_t char_len = cursor_pos_ - pos;
+    buffer_.erase(pos, char_len);
+    cursor_pos_ = pos;
 }
 
 void InputHandler::LoadHistory() {
@@ -164,104 +196,20 @@ void InputHandler::AddToHistory(const std::string& line) {
 }
 
 std::string InputHandler::ReadLine(const std::string& prompt) {
-    EnableRawMode();
-
-    buffer_.clear();
-    cursor_pos_ = 0;
-    completions_.clear();
-    completion_index_ = 0;
-
+    // Linux 平台：输出 prompt，使用标准输入读取
+    // 终端会自动回显输入字符
     std::cout << prompt << std::flush;
 
-    while (true) {
-        int c = ReadChar();
+    std::string line;
+    std::getline(std::cin, line);
 
-        if (c == -1) {
-            continue;
-        }
-
-        // Ctrl+C or Ctrl+D
-        if (c == 3 || c == 4) {
-            std::cout << "\n" << std::flush;
-            DisableRawMode();
-            return (c == 4) ? "" : std::string(1, c);
-        }
-
-        // Enter
-        if (c == 13 || c == 10) {
-            std::cout << "\n" << std::flush;
-            DisableRawMode();
-            return buffer_;
-        }
-
-        // Backspace
-        if (c == 127 || c == 8) {
-            HandleBackspace();
-            RefreshLine(prompt);
-            continue;
-        }
-
-        // Delete
-        if (c == 126) {
-            HandleDelete();
-            RefreshLine(prompt);
-            continue;
-        }
-
-        // Escape sequence
-        if (c == 27) {
-            int c2 = ReadCharWithTimeout(10);
-            int c3 = ReadCharWithTimeout(10);
-
-            if (c2 == -1) {
-                // Alt key or escape
-                continue;
-            }
-
-            if (c2 == 91) {  // CSI sequence
-                if (c3 == 65) {  // Up arrow
-                    HandleHistoryUp();
-                    RefreshLine(prompt);
-                } else if (c3 == 66) {  // Down arrow
-                    HandleHistoryDown();
-                    RefreshLine(prompt);
-                } else if (c3 == 67) {  // Right arrow
-                    HandleRight();
-                    RefreshLine(prompt);
-                } else if (c3 == 68) {  // Left arrow
-                    HandleLeft();
-                    RefreshLine(prompt);
-                } else if (c3 == 72) {  // Home
-                    HandleHome();
-                    RefreshLine(prompt);
-                } else if (c3 == 70) {  // End
-                    HandleEnd();
-                    RefreshLine(prompt);
-                } else if (c3 == 51) {  // Delete (needs one more char)
-                    ReadCharWithTimeout(10);  // Consume '~'
-                    HandleDelete();
-                    RefreshLine(prompt);
-                }
-            }
-            continue;
-        }
-
-        // Tab
-        if (c == 9) {
-            HandleTab();
-            RefreshLine(prompt);
-            continue;
-        }
-
-        // Regular character
-        if (c >= 32 && c <= 126) {
-            buffer_.insert(buffer_.begin() + cursor_pos_, static_cast<char>(c));
-            cursor_pos_++;
-            completions_.clear();
-            RefreshLine(prompt);
-            continue;
-        }
+    // 处理 Ctrl+D (EOF)
+    if (std::cin.eof()) {
+        std::cin.clear();
+        return "";
     }
+
+    return line;
 }
 
 void InputHandler::HandleTab() {
@@ -373,13 +321,56 @@ void InputHandler::ShowCompletions() {
     std::cout << ansi::kRestoreCursor << ansi::kClearLine << std::flush;
 }
 
+// Helper function to calculate display width of a string (for cursor positioning)
+// ASCII characters = 1 column, CJK characters = 2 columns
+static int GetDisplayWidth(const std::string& str) {
+    int width = 0;
+    size_t i = 0;
+    while (i < str.size()) {
+        unsigned char c = static_cast<unsigned char>(str[i]);
+        int char_len = GetUtf8CharLen(c);
+
+        // Simple heuristic: ASCII = 1 column, non-ASCII (CJK, etc.) = 2 columns
+        if (c < 128) {
+            width += 1;
+        } else {
+            width += 2;  // CJK and other wide characters
+        }
+        i += char_len;
+    }
+    return width;
+}
+
+// Helper function to get byte position for a given character index
+static size_t GetByteOffset(const std::string& str, size_t char_index) {
+    if (char_index == 0) return 0;
+
+    size_t byte_offset = 0;
+    size_t count = 0;
+
+    while (byte_offset < str.size() && count < char_index) {
+        int char_len = GetUtf8CharLen(static_cast<unsigned char>(str[byte_offset]));
+        byte_offset += char_len;
+        count++;
+    }
+
+    return byte_offset;
+}
+
 void InputHandler::RefreshLine(const std::string& prompt) {
     // Move cursor to beginning of line
     std::cout << "\r" << ansi::kClearLine << prompt << buffer_;
 
-    // Move cursor back to position
-    if (cursor_pos_ < buffer_.size()) {
-        std::cout << ansi::MoveCursorLeft(buffer_.size() - cursor_pos_);
+    // Calculate display width from byte offset 0 to cursor_pos_
+    // cursor_pos_ is a byte offset, we need to calculate the display width up to that point
+    size_t byte_offset = cursor_pos_;
+    int display_width = GetDisplayWidth(buffer_.substr(0, byte_offset));
+    int total_width = GetDisplayWidth(buffer_);
+
+    // Move cursor back from end to the cursor position
+    int chars_to_move = total_width - display_width;
+    if (chars_to_move > 0) {
+        std::cout << ansi::MoveCursorLeft(chars_to_move);
     }
 
     std::cout << std::flush;
@@ -417,15 +408,20 @@ void InputHandler::HandleHistoryDown() {
 }
 
 void InputHandler::HandleLeft() {
-    if (cursor_pos_ > 0) {
-        cursor_pos_--;
+    if (cursor_pos_ == 0) return;
+    // Move back to the start of the previous UTF-8 character
+    size_t pos = cursor_pos_ - 1;
+    while (pos > 0 && IsUtf8ContinuationByte(static_cast<unsigned char>(buffer_[pos]))) {
+        pos--;
     }
+    cursor_pos_ = pos;
 }
 
 void InputHandler::HandleRight() {
-    if (cursor_pos_ < buffer_.size()) {
-        cursor_pos_++;
-    }
+    if (cursor_pos_ >= buffer_.size()) return;
+    // Move forward by one UTF-8 character
+    int char_len = GetUtf8CharLen(static_cast<unsigned char>(buffer_[cursor_pos_]));
+    cursor_pos_ += std::min(static_cast<size_t>(char_len), buffer_.size() - cursor_pos_);
 }
 
 void InputHandler::HandleHome() {
@@ -437,16 +433,10 @@ void InputHandler::HandleEnd() {
 }
 
 void InputHandler::HandleDelete() {
-    if (cursor_pos_ < buffer_.size()) {
-        buffer_.erase(buffer_.begin() + cursor_pos_, buffer_.begin() + cursor_pos_ + 1);
-    }
-}
-
-void InputHandler::HandleBackspace() {
-    if (cursor_pos_ > 0) {
-        buffer_.erase(buffer_.begin() + cursor_pos_ - 1, buffer_.begin() + cursor_pos_);
-        cursor_pos_--;
-    }
+    if (cursor_pos_ >= buffer_.size()) return;
+    // Delete the UTF-8 character at cursor position
+    int char_len = GetUtf8CharLen(static_cast<unsigned char>(buffer_[cursor_pos_]));
+    buffer_.erase(cursor_pos_, char_len);
 }
 
 bool InputHandler::IsInputComplete(const std::string& input) const {

@@ -308,8 +308,10 @@ void ImGuiText(const char* fmt, ...);
 void ImGuiTextUnformatted(const char* text);
 /// 文本渲染（自动换行，wrap_width=0 表示窗口右边界）
 void ImGuiTextWrapped(const char* text, float wrap_width = 0.0f, const Color& color = Colors::White);
-/// 文本渲染（指定颜色，自动恢复样式）
+/// 文本渲染（带颜色，无换行）
 void ImGuiTextColored(const Color& color, const char* text);
+/// 文本渲染（统一接口：颜色 + 可选换行）
+void ImGuiText(const char* text, const Color& color = Colors::White, float wrap_width = 0.0f);
 
 /// 滚动
 void ImGuiSetScrollHereY(float center_y_ratio = 0.5f);

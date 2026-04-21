@@ -32,8 +32,7 @@ class QwenProvider : public LLMProvider {
 
  protected:
     /// Print request log for debugging
-    virtual void PrintRequestLog(const std::string& url,
-                                 const std::string& api_key_prefix) const;
+    virtual void PrintRequestLog(const std::string& url) const;
 
     std::string Serialize(const ChatRequest& request) const override;
     ChatResponse Deserialize(const std::string& json_str) const override;
