@@ -2,7 +2,7 @@
 
 > **Practice Foundation**: This architecture is based on the engineering practice of the open-source project **AiCode** (C++ intelligent coding assistant CLI), and has been core implemented in that project.
 >
-> **Project URL**: https://github.com/ai-code/AiCode
+> **Project URL**: https://github.com/Swair/claude-code-cc-version
 
 ---
 
