@@ -630,6 +630,17 @@ Licensed under the Apache License, Version 2.0.
 
 See [LICENSE](./LICENSE) for details.
 
+## 📑 Citation
+
+If you use this software or reference our research, please cite:
+
+> Fang, J. (2026). *Swair/prosophor: Plugin-Based Proactive Multimodal Interaction Trigger Architecture v0.3.1 & Theoretical Foundations of Proactive Interactive Agents v1.0* [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.19734271
+
+| Resource | License / Access |
+|----------|-----------------|
+| Source Code | [Apache-2.0](./LICENSE) |
+| Whitepaper & Theoretical Foundations | [Zenodo DOI: 10.5281/zenodo.19734271](https://doi.org/10.5281/zenodo.19734271) |
+
 ---
 
 ## 🙏 Acknowledgments
