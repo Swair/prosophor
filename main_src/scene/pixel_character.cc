@@ -1,9 +1,7 @@
 // Copyright 2026 Prosophor Contributors
 // SPDX-License-Identifier: Apache-2.0
 #include "scene/pixel_character.h"
-#include "media_core.h"
-#include "drawer.h"
-#include "media/colors.h"
+#include "media_engine/media_engine.h"
 #include "common/log_wrapper.h"
 
 namespace prosophor {

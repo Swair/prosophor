@@ -26,7 +26,7 @@ SubagentCoordinator& SubagentCoordinator::GetInstance() {
 void SubagentCoordinator::Initialize(LlmChatCallback chat_cb, LlmStreamCallback stream_chat_cb) {
     chat_callback_ = chat_cb;
     stream_chat_callback_ = stream_chat_cb;
-    LOG_INFO("SubagentCoordinator initialized");
+    LOG_DEBUG("SubagentCoordinator initialized");
 }
 
 std::string SubagentCoordinator::GenerateAgentId() {
@@ -113,7 +113,7 @@ void SubagentCoordinator::RunSubagent(Subagent& agent) {
 
         // Set provider (use default provider)
         auto& provider_router = ProviderRouter::GetInstance();
-        session.provider = provider_router.GetProviderByName("anthropic");
+        session.provider = provider_router.GetDefaultProvider();
 
         // Build system prompt
         std::string system_prompt_text = subagent_system_prompt_ +

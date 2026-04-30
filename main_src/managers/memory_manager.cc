@@ -30,14 +30,14 @@ MemoryManager::MemoryManager(const std::filesystem::path& workspace_path)
     }
 
     std::filesystem::create_directories(workspace_path_);
-    LOG_INFO("MemoryManager initialized with workspace: {}",
+    LOG_DEBUG("MemoryManager initialized with workspace: {}",
                   workspace_path_.string());
 }
 
 MemoryManager::~MemoryManager() { StopFileWatcher(); }
 
 void MemoryManager::LoadWorkspaceFiles() {
-    LOG_INFO("Loading workspace files from: {}", workspace_path_.string());
+    LOG_DEBUG("Loading workspace files from: {}", workspace_path_.string());
 
     // 1. Load root workspace identity files (SOUL.md, USER.md, etc.)
     for (const auto& name :
@@ -47,7 +47,7 @@ void MemoryManager::LoadWorkspaceFiles() {
             if (std::filesystem::exists(filepath)) {
                 auto content = ReadFileContent(filepath);
                 if (!content.empty()) {
-                    LOG_INFO("Loaded {} ({} bytes)", name, content.size());
+                    LOG_DEBUG("Loaded {} ({} bytes)", name, content.size());
                 }
             }
         } catch (const std::exception& e) {
@@ -75,11 +75,11 @@ void MemoryManager::LoadWorkspaceFiles() {
             }
         }
         if (loaded_count > 0) {
-            LOG_INFO("Loaded {} daily memory files", loaded_count);
+            LOG_DEBUG("Loaded daily memory files", loaded_count);
         }
     }
 
-    spdlog::info("Workspace files loaded successfully");
+    LOG_DEBUG("Workspace files loaded successfully");
 }
 
 std::string MemoryManager::ReadIdentityFile(const std::string& filename) const {
@@ -105,7 +105,7 @@ void MemoryManager::LoadprosophorFilesRecursively(const std::filesystem::path& d
                 // Store with relative path prefix for context
                 auto rel_path = std::filesystem::relative(dir, workspace_path_);
                 std::string prefix = rel_path.empty() ? "" : ("[" + rel_path.string() + "] ");
-                LOG_INFO("Loaded {}PROSOPHOR.md ({} bytes)", prefix, content.size());
+                LOG_DEBUG("Loaded PROSOPHOR.md ({} bytes)", prefix, content.size());
             }
         } catch (const std::exception& e) {
             LOG_DEBUG("Failed to load PROSOPHOR.md from {}: {}", dir.string(), e.what());
@@ -231,7 +231,7 @@ void MemoryManager::StartFileWatcher() {
         }
     });
 
-    LOG_INFO("File watcher started for workspace: {}",
+    LOG_DEBUG("File watcher started for workspace: {}",
               workspace_path_.string());
 }
 

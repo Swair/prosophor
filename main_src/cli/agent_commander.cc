@@ -19,7 +19,6 @@
 #include "common/string_utils.h"
 #include "core/agent_core.h"
 #include "managers/memory_manager.h"
-#include "managers/buddy_manager.h"
 #include "managers/agent_session_manager.h"
 #include "managers/agent_role_loader.h"
 #include "cli/command_registry.h"
@@ -61,7 +60,7 @@ AgentCommander::~AgentCommander() {
 }
 
 void AgentCommander::InitializeComponents() {
-    LOG_INFO("Initializing Prosophor components...");
+    LOG_DEBUG("Initializing Prosophor components...");
 
     // Get config from singleton (loads from ~/.prosophor/settings.json)
     config_ = prosophor::ProsophorConfig::GetInstance();
@@ -139,7 +138,7 @@ void AgentCommander::InitializeComponents() {
 
     // Set output callback to notify UI based on run mode
     session_manager_->SetOutputCallback(
-        [this](const std::string& session_id, const std::string& role_id,
+        [this](const std::string& /*session_id*/, const std::string& /*role_id*/,
                AgentRuntimeState state, const std::string& state_msg,
                const std::optional<MessageSchema>& reply) {
             // LOG_DEBUG("[Callback] mode_={}, state={}", mode_ == RunMode::Terminal ? "Terminal" : "SDL", static_cast<int>(state));
@@ -154,8 +153,23 @@ void AgentCommander::InitializeComponents() {
             else if(state == AgentRuntimeState::STREAM_MODE_START) {
                 std::cout << "< " << std::flush;
             }
-            else if(state == AgentRuntimeState::STREAM_TYPING) {
+            else if(state == AgentRuntimeState::STREAM_THINKING_START) {
+                std::cout << "\n<thinking>" << std::flush;
+            }
+            else if(state == AgentRuntimeState::STREAM_THINKING) {
+                std::cout << (reply ? reply->text() : "") << std::flush;
+            }
+            else if(state == AgentRuntimeState::STREAM_THINKING_END) {
+                std::cout << "</thinking>\n" << std::flush;
+            }
+            else if(state == AgentRuntimeState::STREAM_CONTENT_TYPING) {
                 std::cout << reply->text() << std::flush;
+            }
+            else if(state == AgentRuntimeState::STREAM_CONTENT_START) {
+                // content block start (no output, already have STREAM_MODE_START)
+            }
+            else if(state == AgentRuntimeState::STREAM_CONTENT_END) {
+                // content block end (no output)
             }
             else if(state == AgentRuntimeState::STREAM_MODE_COMPLETE) {
                 std::cout << "\n> " << std::flush;
@@ -179,7 +193,7 @@ void AgentCommander::InitializeComponents() {
                     // THINKING 状态：创建空的 Agent 消息占位（流式响应的容器）
                     UIRenderer::Instance().StartAssistantMessage();
                 }
-                else if (state == AgentRuntimeState::STREAM_TYPING) {
+                else if (state == AgentRuntimeState::STREAM_CONTENT_TYPING) {
                     // 流式输入：追加内容到 Agent 消息
                     UIRenderer::Instance().UpdateLastMessage(reply->text());
                 }
@@ -193,7 +207,7 @@ void AgentCommander::InitializeComponents() {
     // LSP Manager (optional code intelligence)
     auto& lsp_manager = prosophor::LspManager::GetInstance();
     lsp_manager.Initialize();
-    LOG_INFO("LSP integration initialized with {} servers",
+    LOG_DEBUG("LSP integration initialized with {} servers",
              lsp_manager.GetRegisteredServers().size());
 
     // Command Registry (for tab completion)
@@ -220,7 +234,7 @@ void AgentCommander::InitializeComponents() {
 
     current_session_id_ = session_manager_->CreateSession(default_role_id, "Default session");
 
-    LOG_INFO("InitializeComponents finished, current_session: {} (role: {})",
+    LOG_DEBUG("InitializeComponents finished, current_session: {} (role: {})",
              current_session_id_, default_role_id);
 
     // ActiveInteractionManager and ActiveTriggerManager are already initialized
@@ -414,14 +428,9 @@ void AgentCommander::ProcessUserMessage(const std::string& line) {
 int AgentCommander::Run() {
     g_commander_ptr = this;
 
-    // Load companion pet (if exists)
-    auto& buddy = BuddyManager::GetInstance();
-    buddy.LoadCompanion();
-
     // Print banner (terminal mode only)
     if (mode_ == RunMode::Terminal) {
-        bool show_buddy = config_.show_buddy;
-        prosophor::PrintBanner(PROSOPHOR_VERSION, show_buddy);
+        prosophor::PrintBanner(PROSOPHOR_VERSION);
     }
 
     // Set output manager mode

@@ -44,10 +44,10 @@ class AgentCore {
                                  const std::string& state_msg,
                                  const std::optional<MessageSchema>& reply = std::nullopt);
 
-    /// Execute tool calls and build messages
-    /// Returns true if tool calls were executed, false if no tool calls
+    /// Execute tool calls and append to the given assistant message
     static bool ExecuteToolCalls(const std::vector<ToolUseSchema>& tool_calls,
                                  AgentSession& session,
+                                 MessageSchema& assistant_msg,
                                  std::string& accumulated_text,
                                  int& iterations);
 };

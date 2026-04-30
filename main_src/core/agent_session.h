@@ -6,6 +6,7 @@
 #include <vector>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <functional>
 #include <atomic>
 
@@ -46,9 +47,8 @@ struct AgentSession {
     // =====================
 
     // --- 角色配置 ---
-    const AgentRole* role = nullptr;        // 角色指针（弱引用）
-    std::string override_provider_name;     // 手动指定的 provider，覆盖 role->provider_name
-    std::string override_model;             // 手动指定的 model，覆盖 role->model
+    AgentRole* role = nullptr;               // 角色指针（初始指向共享定义，切换后指向 mutable_role_）
+    std::optional<AgentRole> mutable_role_; // 运行时可修改的 role 副本（切换 provider/model 时创建）
 
     // --- 运行时配置 ---
     bool use_tools = true;                  // 是否使用工具
@@ -89,6 +89,9 @@ struct AgentSession {
 
     // --- Provider 实例（运行时依赖）---
     std::shared_ptr<LLMProvider> provider;  // Provider 实例
+    std::string base_url;                   // Agent base_url（来自 config agents 配置）
+    std::string api_key;                    // Agent api_key（来自 config agents 配置）
+    int timeout = 60;                       // Agent timeout（来自 config agents 配置）
 
     // --- 记忆管理 ---
     std::string session_history_dir;   // Session 会话历史目录
@@ -105,14 +108,14 @@ struct AgentSession {
     }
 
     AgentSession(const std::string& sid, const std::string& rid,
-                 const std::string& task, const AgentRole* r)
+                 const std::string& task, AgentRole* r)
         : role(r), session_id(sid), role_id(rid), task_description(task) {
         created_at = SteadyClock::Now();
         last_active = SteadyClock::Now();
 
         // 初始化运行时状态（从 role 复制配置）
         if (r) {
-            provider = ProviderRouter::GetInstance().GetProviderByName(r->provider_name);
+            provider = ProviderRouter::GetInstance().GetProviderByName(r->provider_prot);
             use_tools = true;
             working_directory.clear();
             messages.clear();
@@ -125,8 +128,7 @@ struct AgentSession {
     // 按字段分类顺序：输入 -> 输出 -> 元数据
     AgentSession(AgentSession&& other) noexcept
         : role(other.role),
-          override_provider_name(std::move(other.override_provider_name)),
-          override_model(std::move(other.override_model)),
+          mutable_role_(std::move(other.mutable_role_)),
           use_tools(other.use_tools),
           working_directory(std::move(other.working_directory)),
           tool_executor(std::move(other.tool_executor)),
@@ -142,6 +144,9 @@ struct AgentSession {
           role_id(std::move(other.role_id)),
           task_description(std::move(other.task_description)),
           provider(std::move(other.provider)),
+          base_url(std::move(other.base_url)),
+          api_key(std::move(other.api_key)),
+          timeout(other.timeout),
           session_history_dir(std::move(other.session_history_dir)),
           created_at(other.created_at),
           last_active(other.last_active),
@@ -152,8 +157,7 @@ struct AgentSession {
         if (this != &other) {
             // 输入
             role = other.role;
-            override_provider_name = std::move(other.override_provider_name);
-            override_model = std::move(other.override_model);
+            mutable_role_ = std::move(other.mutable_role_);
             use_tools = other.use_tools;
             working_directory = std::move(other.working_directory);
             tool_executor = std::move(other.tool_executor);
@@ -171,6 +175,9 @@ struct AgentSession {
             role_id = std::move(other.role_id);
             task_description = std::move(other.task_description);
             provider = std::move(other.provider);
+            base_url = std::move(other.base_url);
+            api_key = std::move(other.api_key);
+            timeout = other.timeout;
             session_history_dir = std::move(other.session_history_dir);
             created_at = other.created_at;
             last_active = other.last_active;
@@ -183,14 +190,58 @@ struct AgentSession {
     AgentSession& operator=(const AgentSession&) = delete;
 
     /// 应用 provider 覆盖（手动切换的优先级高于 role 配置）
+    /// 创建 role 的本地副本，role 指针指向它。BuildRequest 无需任何 override 逻辑。
     void ApplyProviderOverride(const std::string& provider_name, const std::string& model = "") {
-        override_provider_name = provider_name;
-        override_model = model;
-
         auto& router = ProviderRouter::GetInstance();
         provider = router.GetProviderByName(provider_name);
 
-        // 注意：role 是弱引用，不修改原始 role 配置
+        // 创建 role 本地副本
+        mutable_role_ = *role;
+        role = &mutable_role_.value();
+
+        auto& config = ProsophorConfig::GetInstance();
+        auto prov_it = config.providers.find(provider_name);
+        if (prov_it != config.providers.end()) {
+            auto& agent_map = prov_it->second.agents;
+            const AgentConfig* matched = nullptr;
+
+            // Try 1: model as agent key
+            auto agent_it = agent_map.find(model);
+            if (agent_it != agent_map.end()) {
+                matched = &agent_it->second;
+            } else if (!model.empty()) {
+                // Try 2: model as model name (search all agents)
+                for (auto& [k, v] : agent_map) {
+                    if (v.model == model) {
+                        matched = &v;
+                        break;
+                    }
+                }
+            }
+
+            if (matched) {
+                role->model = matched->model;
+                // Find the correct entry's base_url/api_key/timeout by searching all entries
+                std::string entry_base_url;
+                std::string entry_api_key;
+                int entry_timeout = 0;
+                if (prov_it->second.FindEntryForModel(provider_name, model, entry_base_url,
+                                                       entry_api_key, entry_timeout)) {
+                    base_url = entry_base_url;
+                    api_key = entry_api_key;
+                    timeout = entry_timeout;
+                } else {
+                    base_url = prov_it->second.base_url;
+                }
+                role->temperature = matched->temperature;
+                role->max_tokens = matched->max_tokens;
+                role->thinking = matched->thinking;
+                LOG_DEBUG("Applied provider override: provider={}, model={}, base_url={}",
+                         provider_name, matched->model, base_url);
+            } else {
+                LOG_WARN("No matching agent for '{}' in provider '{}'", model, provider_name);
+            }
+        }
     }
 };
 

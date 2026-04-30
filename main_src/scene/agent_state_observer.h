@@ -4,6 +4,7 @@
 
 #include "common/noncopyable.h"
 #include "core/agent_state_visualizer.h"
+#include "scene/anime_character.h"
 
 #include <string>
 #include <memory>
@@ -51,8 +52,8 @@ class AgentStateNotifier : public Noncopyable {
     AgentRuntimeState current_state_ = AgentRuntimeState::IDLE;
 };
 
-/// AgentStateVisualizer: Renders agent state as SDL visual indicator
-/// Draws a colored circle + icon + status text that follows mouse/floats
+/// AgentStateVisualizer: Renders virtual human anime character + blackboard
+/// Teacher character with breathing/blinking animation on a chalkboard background
 class AgentStateVisualizer : public Noncopyable {
  public:
     static AgentStateVisualizer& GetInstance();
@@ -61,7 +62,6 @@ class AgentStateVisualizer : public Noncopyable {
     void Initialize();
 
     /// Render the state indicator
-    /// Parameters control position and animation
     void Render();
 
     /// Update internal state (call from update loop)
@@ -77,32 +77,26 @@ class AgentStateVisualizer : public Noncopyable {
     /// Get current agent state
     AgentRuntimeState GetAgentState() const { return agent_state_; }
 
+    /// Set character type (TEACHER/STUDENT/AI_ASSISTANT/MAGICAL_GIRL/COOL_SEMPAI)
+    void SetCharacterType(AnimeCharacterType type);
+    AnimeCharacterType GetCharacterType() const { return character_type_; }
+
  private:
     AgentStateVisualizer() = default;
 
-    /// Calculate floating position based on time
-    void UpdateFloatingPosition(float time);
+    /// Draw blackboard background
+    void DrawBlackboard();
 
-    /// Draw the state indicator at current position
-    void DrawIndicator();
-
-    /// Draw the capybara sprite
-    void DrawCapybara();
+    /// Draw virtual human anime character with animations
+    void DrawVirtualHumanCharacter();
 
     // State
     AgentRuntimeState agent_state_ = AgentRuntimeState::IDLE;
+    AnimeCharacterType character_type_ = AnimeCharacterType::TEACHER;
     bool visible_ = true;
-    float float_x_ = 100.0f;
-    float float_y_ = 100.0f;
-    float float_offset_x_ = 0.0f;
-    float float_offset_y_ = 0.0f;
     float animation_time_ = 0.0f;
     float pulse_alpha_ = 1.0f;
     std::string state_details_;
-
-    // Visual config
-    float indicator_radius_ = 25.0f;
-    float text_offset_ = 35.0f;
 };
 
 }  // namespace prosophor

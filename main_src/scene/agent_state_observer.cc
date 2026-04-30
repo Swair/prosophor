@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "scene/agent_state_observer.h"
+#include "scene/anime_character.h"
+#include "scene/ui_renderer.h"
+#include "scene/layout_config.h"
 
 #include <algorithm>
 #include <cmath>
 
-#include "media_core.h"
-#include "drawer.h"
-#include "colors.h"
-#include "scene/ui_renderer.h"
+#include "media_engine/media_engine.h"
 #include "common/log_wrapper.h"
 
 namespace prosophor {
@@ -45,7 +45,6 @@ void AgentStateNotifier::NotifyStateChanged(const std::string& session_id,
     std::lock_guard<std::mutex> lock(mutex_);
     current_state_ = new_state;
 
-    // Notify all observers
     for (auto& weak_observer : observers_) {
         if (auto observer = weak_observer.lock()) {
             observer->OnAgentStateChanged(session_id, role_id, new_state, details);
@@ -73,130 +72,116 @@ void AgentStateVisualizer::Initialize() {
 
 void AgentStateVisualizer::Update(float delta_time) {
     animation_time_ += delta_time;
-    UpdateFloatingPosition(animation_time_);
-}
-
-void AgentStateVisualizer::UpdateFloatingPosition(float time) {
-    // Gentle floating animation using sine waves
-    float base_x = 150.0f;  // Base position from left
-    float base_y = 150.0f;  // Base position from top
-
-    // Circular floating motion
-    float_offset_x_ = std::sin(time * 2.0f) * 20.0f;  // 20px horizontal sway
-    float_offset_y_ = std::cos(time * 1.5f) * 15.0f;  // 15px vertical sway
-
-    float_x_ = base_x + float_offset_x_;
-    float_y_ = base_y + float_offset_y_;
-
-    // Pulse effect for certain states
-    auto props = GetStateVisualProps(agent_state_);
-    if (agent_state_ == AgentRuntimeState::THINKING ||
-        agent_state_ == AgentRuntimeState::EXECUTING_TOOL) {
-        // Pulse alpha between 0.7 and 1.0
-        pulse_alpha_ = 0.85f + 0.15f * std::sin(time * 8.0f);
-    } else {
-        pulse_alpha_ = 1.0f;
-    }
 }
 
 void AgentStateVisualizer::Render() {
     if (!visible_) return;
 
-    DrawCapybara();
+    DrawBlackboard();
+    DrawVirtualHumanCharacter();
 }
 
-void AgentStateVisualizer::DrawCapybara() {
-    auto props = GetStateVisualProps(agent_state_);
+void AgentStateVisualizer::DrawBlackboard() {
+    int win_w = MediaCore::Instance().GetWindowWidth();
+    int win_h = MediaCore::Instance().GetWindowHeight();
 
-    // Calculate alpha from pulse
-    uint8_t alpha = static_cast<uint8_t>(255 * pulse_alpha_);
+    float board_w = win_w * 0.63f;
+    float board_h = win_h * 0.94f;
+    float board_x = board_w * 0.01f;
+    float board_y = board_h * 0.03f;
 
-    // Capybara colors based on state
-    uint8_t fur_r = 139;  // Brown fur base
-    uint8_t fur_g = 90;
-    uint8_t fur_b = 43;
+    // 木质外框
+    float frame_thick = 12.0f;
+    Color wood(139, 105, 48, 255);
+    ::Drawer::Instance().DrawFillRect(board_x - frame_thick, board_y - frame_thick,
+                                       board_w + frame_thick * 2, frame_thick, wood);
+    ::Drawer::Instance().DrawFillRect(board_x - frame_thick, board_y + board_h + frame_thick,
+                                       board_w + frame_thick * 2, frame_thick, wood);
+    ::Drawer::Instance().DrawFillRect(board_x - frame_thick, board_y,
+                                       frame_thick, board_h, wood);
+    ::Drawer::Instance().DrawFillRect(board_x + board_w, board_y,
+                                       frame_thick, board_h, wood);
 
-    if (agent_state_ == AgentRuntimeState::THINKING ||
-        agent_state_ == AgentRuntimeState::EXECUTING_TOOL) {
-        // Pulse effect - lighter when active
-        fur_r = 160;
-        fur_g = 110;
-        fur_b = 60;
+    // 黑板面（深绿到墨绿渐变 - 用多行矩形模拟）
+    Color board_top(45, 74, 45, 255);
+    Color board_bot(26, 58, 26, 255);
+    int steps = 10;
+    for (int i = 0; i < steps; i++) {
+        float t = static_cast<float>(i) / steps;
+        uint8_t r = static_cast<uint8_t>(board_top.r + (board_bot.r - board_top.r) * t);
+        uint8_t g = static_cast<uint8_t>(board_top.g + (board_bot.g - board_top.g) * t);
+        uint8_t b = static_cast<uint8_t>(board_top.b + (board_bot.b - board_top.b) * t);
+        float y = board_y + board_h * t;
+        float h = board_h / steps + 1;
+        ::Drawer::Instance().DrawFillRect(board_x, y, board_w, h, Color(r, g, b, 255));
     }
 
-    float capy_x = float_x_;
-    float capy_y = float_y_;
-    float scale = 1.0f;
-
-    // ===== Body (oval, sitting posture) =====
-    ::Drawer::Instance().DrawFillEllipse(
-        capy_x, capy_y + 35 * scale,
-        35 * scale, 30 * scale,
-        Color(fur_r, fur_g, fur_b, alpha));
-
-    // ===== Head (rounded square shape - capybara's distinctive face) =====
-    float head_x = capy_x;
-    float head_y = capy_y - 25 * scale;
-    float head_size = 28 * scale;
-
-    // Main head shape
-    ::Drawer::Instance().DrawFillRect(
-        head_x - head_size, head_y - head_size * 0.8f,
-        head_size * 2, head_size * 1.6f,
-        Color(fur_r, fur_g, fur_b, alpha));
-
-    // Rounded corners (simulate with circles)
-    ::Drawer::Instance().DrawFillCircle(head_x - head_size, head_y - head_size * 0.8f, 8 * scale, Color(fur_r, fur_g, fur_b, alpha));
-    ::Drawer::Instance().DrawFillCircle(head_x + head_size, head_y - head_size * 0.8f, 8 * scale, Color(fur_r, fur_g, fur_b, alpha));
-    ::Drawer::Instance().DrawFillCircle(head_x - head_size, head_y + head_size * 0.8f, 8 * scale, Color(fur_r, fur_g, fur_b, alpha));
-    ::Drawer::Instance().DrawFillCircle(head_x + head_size, head_y + head_size * 0.8f, 8 * scale, Color(fur_r, fur_g, fur_b, alpha));
-
-    // ===== Ears (small rounded triangles on top) =====
-    ::Drawer::Instance().DrawFillCircle(head_x - 15 * scale, head_y - head_size * 0.9f, 6 * scale, Color(fur_r - 20, fur_g - 20, fur_b - 20, alpha));
-    ::Drawer::Instance().DrawFillCircle(head_x + 15 * scale, head_y - head_size * 0.9f, 6 * scale, Color(fur_r - 20, fur_g - 20, fur_b - 20, alpha));
-
-    // ===== Snout (prominent feature of capybara) =====
-    float snout_y = head_y + 8 * scale;
-    ::Drawer::Instance().DrawFillEllipse(
-        head_x, snout_y,
-        12 * scale, 8 * scale,
-        Color(fur_r + 30, fur_g + 20, fur_b + 10, alpha));
-
-    // Nostrils
-    ::Drawer::Instance().DrawFillCircle(head_x - 4 * scale, snout_y, 2 * scale, Color(50, 30, 20, alpha));
-    ::Drawer::Instance().DrawFillCircle(head_x + 4 * scale, snout_y, 2 * scale, Color(50, 30, 20, alpha));
-
-    // ===== Eyes (small, calm expression - capybara's zen look) =====
-    float eye_y = head_y - 5 * scale;
-    // Left eye
-    ::Drawer::Instance().DrawFillCircle(head_x - 10 * scale, eye_y, 4 * scale, Color(30, 20, 10, alpha));
-    // Right eye
-    ::Drawer::Instance().DrawFillCircle(head_x + 10 * scale, eye_y, 4 * scale, Color(30, 20, 10, alpha));
-
-    // Eye highlight (zen, relaxed eyes)
-    ::Drawer::Instance().DrawFillCircle(head_x - 10 * scale, eye_y, 1.5f * scale, Color(255, 255, 255, alpha));
-    ::Drawer::Instance().DrawFillCircle(head_x + 10 * scale, eye_y, 1.5f * scale, Color(255, 255, 255, alpha));
-
-    // ===== State color indicator (scarf/collar) =====
-    float scarf_y = capy_y + 15 * scale;
-    ::Drawer::Instance().DrawFillRect(
-        capy_x - 20 * scale, scarf_y - 5 * scale,
-        40 * scale, 10 * scale,
-        Color(props.r, props.g, props.b, alpha));
-
-    // ===== Status text below =====
-    float name_y = capy_y + 70 * scale;
-
-    // Render state name using encapsulated SDL text rendering
+    // 粉笔字装饰
+    Color chalk(255, 255, 240, 80);
+    float text_y = board_y + board_h * 0.12f;
+    std::string status_text = "AI AGENT";
     UIRenderer::Instance().RenderFloatingText(
-        props.name, float_x_ - 30, name_y, 204, 204, 204, pulse_alpha_);
+        status_text, board_x + 30, text_y, 255, 255, 240, 0.25f);
 
-    // Draw details text (if any) below name
+    // 右下角粉笔槽
+    float chalk_tray_x = board_x + board_w - 120;
+    float chalk_tray_y = board_y + board_h - 15;
+    ::Drawer::Instance().DrawFillRect(chalk_tray_x, chalk_tray_y, 100, 8,
+                                       Color(160, 120, 60, 200));
+    ::Drawer::Instance().DrawFillRect(chalk_tray_x + 10, chalk_tray_y + 1,
+                                       12, 6, Color(255, 255, 255, 180));
+}
+
+void AgentStateVisualizer::DrawVirtualHumanCharacter() {
+    int win_w = MediaCore::Instance().GetWindowWidth();
+    int win_h = MediaCore::Instance().GetWindowHeight();
+
+    // 角色位置：左侧 65% 区域居中
+    float board_w = win_w * 0.63f;
+    float board_h = win_h * 0.94f;
+    float board_x = board_w * 0.01f;
+    float board_y = board_h * 0.03f;
+
+    float base_x = board_x + board_w / 2.0f;
+    float base_y = board_y + board_h * 0.72f;  // 脚部位置
+
+    // 呼吸动画
+    float breathe_y = std::sin(animation_time_ * 3.14f) * 6.0f;  // ±6px
+    float breathe_s = 1.0f + std::sin(animation_time_ * 3.14f) * 0.01f;  // ±1%
+
+    // 眨眼动画：周期 4s，闭合 0.12s
+    float blink_period = 4.0f;
+    float blink_close = 0.12f;
+    float blink_phase = std::fmod(animation_time_, blink_period);
+    bool is_blinking = (blink_phase > blink_period - blink_close);
+
+    // 状态颜色
+    auto props = GetStateVisualProps(agent_state_);
+    Color scarf_color(props.r, props.g, props.b);
+
+    // 脉冲效果
+    float pulse_alpha = 1.0f;
+    if (agent_state_ == AgentRuntimeState::THINKING ||
+        agent_state_ == AgentRuntimeState::EXECUTING_TOOL) {
+        pulse_alpha = 0.88f + 0.12f * std::sin(animation_time_ * 8.0f);
+    }
+
+    float scale = 2.5f * breathe_s;
+
+    AnimeCharacterRenderer::Instance().Render(
+        character_type_, base_x, base_y + breathe_y, agent_state_, scarf_color, scale, pulse_alpha, is_blinking);
+
+    // 状态名称文本
+    float name_y = base_y + 80 * scale;
+    UIRenderer::Instance().RenderFloatingText(
+        props.name, base_x - 30, name_y, 204, 204, 204, pulse_alpha);
+
+    // 详情文本
     if (!state_details_.empty()) {
         float details_y = name_y + 18.0f;
         UIRenderer::Instance().RenderFloatingText(
-            state_details_.substr(0, 25), float_x_ - 40, details_y,
-            153, 153, 153, pulse_alpha_ * 0.8f);
+            state_details_.substr(0, 25), base_x - 40, details_y,
+            153, 153, 153, pulse_alpha * 0.8f);
     }
 }
 
@@ -207,6 +192,10 @@ void AgentStateVisualizer::SetAgentState(AgentRuntimeState state, const std::str
 
 void AgentStateVisualizer::SetVisible(bool visible) {
     visible_ = visible;
+}
+
+void AgentStateVisualizer::SetCharacterType(AnimeCharacterType type) {
+    character_type_ = type;
 }
 
 }  // namespace prosophor

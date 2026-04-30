@@ -58,11 +58,10 @@ file(GLOB_RECURSE CC_FILES_LIST
     ${CMAKE_CURRENT_LIST_DIR}/providers/*.cc
     ${CMAKE_CURRENT_LIST_DIR}/services/*.cc
     ${CMAKE_CURRENT_LIST_DIR}/tools/*.cc
+    ${CMAKE_CURRENT_LIST_DIR}/scene/home_screen.cc            # Home screen mode selector
     ${CMAKE_CURRENT_LIST_DIR}/scene/agent_state_observer.cc  # Always include for visualizer
-    ${CMAKE_CURRENT_LIST_DIR}/scene/pixel_character.cc       # Pixel character renderer
-    ${CMAKE_CURRENT_LIST_DIR}/scene/office_character_manager.cc  # Character manager
-    ${CMAKE_CURRENT_LIST_DIR}/scene/character_state_observer.cc  # State observer
-    ${CMAKE_CURRENT_LIST_DIR}/scene/office_background.cc     # Office background
+    ${CMAKE_CURRENT_LIST_DIR}/scene/anime_character.cc       # Anime teacher character renderer
+    ${CMAKE_CURRENT_LIST_DIR}/scene/galgame_mode.cc          # GALGAME mode scene
     ${CMAKE_CURRENT_LIST_DIR}/scene/sdl_app.cc               # SDL app entry
     ${CMAKE_CURRENT_LIST_DIR}/scene/ui_renderer.cc           # UI renderer
 )

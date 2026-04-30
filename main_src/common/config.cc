@@ -48,10 +48,17 @@ const AgentConfig& ProsophorConfig::GetAgentConfig() const {
         try {
             AgentRole role = loader.LoadRole(role_path);
             // Find the agent config from the role's provider
-            auto prov_it = providers.find(role.provider_name);
+            auto prov_it = providers.find(role.provider_prot);
             if (prov_it != providers.end()) {
-                auto agent_it = prov_it->second.agents.find(role.model);
-                if (agent_it != prov_it->second.agents.end()) {
+                auto& agent_map = prov_it->second.agents;
+                // Try 1: role.model as key (agent name)
+                auto agent_it = agent_map.find(role.model);
+                if (agent_it == agent_map.end()) {
+                    // Try 2: provider_name/model_name key
+                    std::string full_key = role.provider_prot + "/" + role.model;
+                    agent_it = agent_map.find(full_key);
+                }
+                if (agent_it != agent_map.end()) {
                     return agent_it->second;
                 }
                 // Fall back to provider's default agent
@@ -87,6 +94,48 @@ const AgentConfig& ProviderConfig::GetDefaultAgent() const {
     }
     static AgentConfig default_agent;
     return default_agent;
+}
+
+bool ProviderConfig::FindEntryForModel(const std::string& provider_name,
+                                        const std::string& model,
+                                        std::string& out_base_url,
+                                        std::string& out_api_key,
+                                        int& out_timeout) const {
+    for (const auto& entry : entries) {
+        auto it = entry.agents.find(model);
+        if (it == entry.agents.end()) {
+            // Also try searching by model name in agent.config.model
+            for (const auto& [k, v] : entry.agents) {
+                if (v.model == model) {
+                    it = entry.agents.find(k);
+                    break;
+                }
+            }
+        }
+        if (it != entry.agents.end()) {
+            out_base_url = entry.base_url;
+            out_api_key = entry.api_key;
+            out_timeout = entry.timeout;
+            return true;
+        }
+    }
+    // Fallback: search by full key provider_name/model
+    std::string full_key = provider_name + "/" + model;
+    auto agent_it = agents.find(full_key);
+    if (agent_it != agents.end()) {
+        // Find matching entry
+        for (const auto& entry : entries) {
+            for (const auto& [k, v] : entry.agents) {
+                if (v.model == model || k == model) {
+                    out_base_url = entry.base_url;
+                    out_api_key = entry.api_key;
+                    out_timeout = entry.timeout;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 // Substitutes environment variables in the form ${VAR_NAME}
@@ -237,15 +286,19 @@ ProviderConfig ProviderConfig::FromJson(const nlohmann::json& json) {
     ProviderConfig config;
     config.api_key = json.value("api_key", json.value("apiKey", ""));
     config.base_url = json.value("base_url", json.value("baseUrl", ""));
-    config.api_type = json.value("api_type", json.value("apiType", json.value("api", "")));
     config.timeout = json.value("timeout", kDefaultProviderTimeoutSec);
 
-    // Parse agents (nested under provider)
-    if (json.contains("agents") && json["agents"].is_object()) {
-        const auto& agents_json = json["agents"];
+    // Parse agents - support both "agents" and "agent" field names
+    const auto& agents_json_key = json.contains("agents") ? "agents" : "agent";
+    if (json.contains(agents_json_key) && json[agents_json_key].is_object()) {
+        const auto& agents_json = json[agents_json_key];
         for (const auto& [key, value] : agents_json.items()) {
             AgentConfig agent = AgentConfig::FromJson(value);
             agent.name = key;
+            // Also support tools_use → use_tools
+            if (json.contains("tools_use")) {
+                agent.use_tools = json.value("tools_use", true);
+            }
             config.agents[key] = agent;
         }
     }
@@ -309,11 +362,43 @@ ProsophorConfig ProsophorConfig::FromJson(const nlohmann::json& json) {
     ProsophorConfig config;
     config.log_level = json.value("log_level", json.value("logLevel", "info"));
     config.default_role = json.value("default_role", json.value("defaultRole", "default"));
-    config.show_buddy = json.value("show_buddy", json.value("showBuddy", true));
 
     if (json.contains("providers") && json["providers"].is_object()) {
         for (const auto& [key, value] : json["providers"].items()) {
-            config.providers[key] = ProviderConfig::FromJson(value);
+            if (value.is_array()) {
+                // Array format: keep all entries, key agents by provider_name/model_name
+                ProviderConfig merged_config;
+                bool first = true;
+                for (const auto& entry : value) {
+                    ProviderConfig entry_config = ProviderConfig::FromJson(entry);
+
+                    if (first) {
+                        merged_config = entry_config;
+                        first = false;
+                    }
+
+                    // Store entry for lookup by FindEntryForModel
+                    ProviderEntryConfig e;
+                    e.api_key = entry_config.api_key;
+                    e.base_url = entry_config.base_url;
+                    e.timeout = entry_config.timeout;
+                    e.agents = entry_config.agents;
+                    merged_config.entries.push_back(std::move(e));
+                    // Key agents as provider_name/model_name
+                    for (auto& [agent_name, agent_config] : entry_config.agents) {
+                        std::string agent_key = key + "/" + agent_config.model;
+                        merged_config.agents[agent_key] = agent_config;
+                    }
+                    // Merge models
+                    for (auto& model : entry_config.models) {
+                        merged_config.models.push_back(model);
+                    }
+                }
+                config.providers[key] = merged_config;
+            } else {
+                // Object format: use directly
+                config.providers[key] = ProviderConfig::FromJson(value);
+            }
         }
     }
     if (json.contains("security") && json["security"].is_object()) {
@@ -407,7 +492,7 @@ void ProsophorConfig::CreateDefaultConfig(const std::string& filepath) {
         try {
             std::filesystem::copy_file(demo_config_path, expanded_path,
                                         std::filesystem::copy_options::overwrite_existing);
-            LOG_INFO("Created config from demo: {}", demo_config_path);
+            LOG_DEBUG("Created config from demo: {}", demo_config_path);
             return;
         } catch (const std::exception& e) {
             LOG_WARN("Failed to copy demo config: {}", e.what());
@@ -430,34 +515,52 @@ void ProsophorConfig::CreateDefaultConfig(const std::string& filepath) {
 //
 // Example:
 //   providers.anthropic.agents.default.model = "qwen3.5-plus"
-//   providers.anthropic.agents.fast.model = "qwen3.5-lite"
+//   providers.deepseek.agents.pro.model = "deepseek-v4-pro"
 
 {
   "default_role": "default",          // Default role to use when not specified
   "log_level": "info",
-  "show_buddy": true,
 
-  // Provider configuration
+  // Provider configuration (array format supports multiple instances)
   "providers": {
-    "anthropic": {
-      "api_key": "${ANTHROPIC_API_KEY}",
-      "base_url": "https://api.anthropic.com",
-      "api_type": "anthropic-messages",
-      "timeout": 60,
+    "anthropic": [
+      {
+        "api_key": "${ANTHROPIC_API_KEY}",
+        "base_url": "https://api.anthropic.com",
+        "timeout": 60,
 
-      // Multiple agent configurations
-      "agents": {
-        "default": {
-          "model": "qwen3.5-plus",
-          "temperature": 0.7,
-          "max_tokens": 8192,
-          "context_window": 128000,
-          "use_tools": true,
-          "thinking": "off",
-          "enable_streaming": true
+        // Multiple agent configurations
+        "agents": {
+          "default": {
+            "model": "claude-sonnet-4-6",
+            "temperature": 0.7,
+            "max_tokens": 8192,
+            "context_window": 128000,
+            "use_tools": true,
+            "thinking": "off",
+            "enable_streaming": true
+          }
         }
       }
-    }
+    ],
+
+    // DeepSeek (OpenAI-compatible protocol)
+    "deepseek": [
+      {
+        "api_key": "${DEEPSEEK_API_KEY}",
+        "base_url": "https://api.deepseek.com/chat/completions",
+        "timeout": 60,
+        "agents": {
+          "default": {
+            "model": "deepseek-chat",
+            "temperature": 0.7,
+            "max_tokens": 8192,
+            "context_window": 128000,
+            "use_tools": true
+          }
+        }
+      }
+    ]
   },
 
   "security": {
@@ -497,7 +600,6 @@ nlohmann::json ProsophorConfig::ToJson() const {
 
     json["log_level"] = log_level;
     json["default_role"] = default_role;
-    json["show_buddy"] = show_buddy;
 
     // Serialize providers
     nlohmann::json providers_json = nlohmann::json::object();
@@ -505,7 +607,6 @@ nlohmann::json ProsophorConfig::ToJson() const {
         nlohmann::json provider_json = nlohmann::json::object();
         provider_json["api_key"] = config.api_key;
         provider_json["base_url"] = config.base_url;
-        provider_json["api_type"] = config.api_type;
         provider_json["timeout"] = config.timeout;
 
         // Serialize agents
@@ -547,7 +648,7 @@ nlohmann::json ProsophorConfig::ToJson() const {
 void ProsophorConfig::SaveToFile(const std::string& filepath) const {
     auto json = ToJson();
     prosophor::WriteJson(filepath, json, 2);
-    LOG_INFO("Configuration saved to {}", filepath);
+    LOG_DEBUG("Configuration saved to {}", filepath);
 }
 
 }  // namespace prosophor

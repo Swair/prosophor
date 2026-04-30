@@ -126,7 +126,6 @@ private:
     CommandResult CmdCompact(const CommandContext&, const std::vector<std::string>& args);
     CommandResult CmdPlugins(const CommandContext&, const std::vector<std::string>& args);
     CommandResult CmdSkills(const CommandContext&, const std::vector<std::string>& args);
-    CommandResult CmdWorktree(const CommandContext&, const std::vector<std::string>& args);
     CommandResult CmdSchedule(const CommandContext&, const std::vector<std::string>& args);
     CommandResult CmdContext(const CommandContext&, const std::vector<std::string>& args);
     CommandResult CmdDoctor(const CommandContext&, const std::vector<std::string>& args);

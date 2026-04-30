@@ -13,17 +13,8 @@
 
 #include "common/config.h"
 #include "managers/permission_manager.h"
-#include "tools/agent_tools/agent_tool.h"
-#include "tools/command_tools/background_run_tool.h"
-#include "tools/interaction_tools/ask_user_question_tool.h"
-#include "tools/lsp_tools/lsp_tool.h"
-#include "tools/search_tools/glob_tool.h"
-#include "tools/search_tools/grep_tool.h"
-#include "tools/task_tools/cron_tool.h"
-#include "tools/task_tools/task_tool.h"
-#include "tools/task_tools/todo_write_tool.h"
-#include "tools/worktree_tools/worktree_tool.h"
 #include "mcp/mcp_client.h"
+#include "tools/command_tools/background_run_tool.h"
 
 namespace prosophor {
 
@@ -91,15 +82,20 @@ private:
     std::string WriteFileTool(const nlohmann::json& params);
     std::string EditFileTool(const nlohmann::json& params);
 
-    // ========== Command Tools (tools/command_tools/) ==========
+    // ========== Command Tools ==========
     std::string BashTool(const nlohmann::json& params);
-    std::string ExecTool(const nlohmann::json& params);
+    std::string BackgroundRunTool(const nlohmann::json& params);
 
-    // ========== Search Tools (tools/search_tools/) ==========
-    std::string GlobTool(const nlohmann::json& params);
-    std::string GrepTool(const nlohmann::json& params);
+    // ========== Web Tools ==========
     std::string WebSearchTool(const nlohmann::json& params);
     std::string WebFetchTool(const nlohmann::json& params);
+
+    // ========== Memory Tools ==========
+    std::string MemorySearchTool(const nlohmann::json& params);
+    std::string MemoryGetTool(const nlohmann::json& params);
+
+    // ========== Patch Tool ==========
+    std::string ApplyPatchTool(const nlohmann::json& params);
 
     // ========== Token Tools ==========
     std::string TokenCountTool(const nlohmann::json& params);
@@ -111,39 +107,13 @@ private:
     std::string McpListResourcesTool(const nlohmann::json& params);
     std::string McpReadResourceTool(const nlohmann::json& params);
 
-    // ========== Git Tools (tools/git_tools/) ==========
+    // ========== Git Tools ==========
     std::string GitStatusTool(const nlohmann::json& params);
     std::string GitDiffTool(const nlohmann::json& params);
     std::string GitLogTool(const nlohmann::json& params);
     std::string GitCommitTool(const nlohmann::json& params);
     std::string GitAddTool(const nlohmann::json& params);
     std::string GitBranchTool(const nlohmann::json& params);
-
-    // ========== Interaction Tools (tools/interaction_tools/) ==========
-    std::string AskUserQuestionTool(const nlohmann::json& params);
-
-    // ========== Task Tools (tools/task_tools/) ==========
-    std::string TodoWriteTool(const nlohmann::json& params);
-
-    // ========== Worktree Tools (tools/worktree_tools/) ==========
-    std::string WorktreeTool(const nlohmann::json& params);
-
-    // ========== Background Task Tools (tools/command_tools/) ==========
-    std::string BackgroundRunTool(const nlohmann::json& params);
-
-    // ========== LSP Tools (tools/lsp_tools/) ==========
-    std::string LspDiagnosticsTool(const nlohmann::json& params);
-    std::string LspGoToDefinitionTool(const nlohmann::json& params);
-    std::string LspFindReferencesTool(const nlohmann::json& params);
-    std::string LspGetHoverTool(const nlohmann::json& params);
-    std::string LspDocumentSymbolsTool(const nlohmann::json& params);
-    std::string LspWorkspaceSymbolsTool(const nlohmann::json& params);
-    std::string LspFormatDocumentTool(const nlohmann::json& params);
-    std::string LspListServersTool(const nlohmann::json& params);
-    std::string LspAllDiagnosticsTool(const nlohmann::json& params);
-
-    // ========== Agent Tools (tools/agent_tools/) ==========
-    // Note: AgentTool uses Execute() static method, not declared here
 
     std::unordered_map<std::string,
                        std::function<std::string(const nlohmann::json&)>>

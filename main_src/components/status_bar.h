@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "ui_panel.h"
+#include "media_engine/media_engine.h"
 #include "ui_types.h"
 #include <string>
 #include <functional>

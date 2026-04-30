@@ -25,8 +25,12 @@ void ProviderRouter::Initialize(const ProsophorConfig& config) {
     for (const auto& [name, provider_config] : config.providers) {
         try {
             auto provider = CreateProvider(name, provider_config);
+            if (!provider) {
+                LOG_WARN("Skipped provider '{}' (unknown type)", name);
+                continue;
+            }
             providers_[name] = provider;
-            LOG_INFO("Initialized provider: {} ({})", name, provider_config.api_type);
+            LOG_DEBUG("Initialized provider: {}", name);
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to initialize provider {}: {}", name, e.what());
         }
@@ -39,12 +43,12 @@ void ProviderRouter::Initialize(const ProsophorConfig& config) {
         auto& loader = AgentRoleLoader::GetInstance();
         try {
             AgentRole role = loader.LoadRole(role_path);
-            if (!role.provider_name.empty()) {
-                auto it = providers_.find(role.provider_name);
+            if (!role.provider_prot.empty()) {
+                auto it = providers_.find(role.provider_prot);
                 if (it != providers_.end()) {
                     default_provider_ = it->second;
-                    default_provider_name_ = role.provider_name;
-                    LOG_INFO("Default provider '{}' set from default_role '{}'", default_provider_name_, config.default_role);
+                    default_provider_name_ = role.provider_prot;
+                    LOG_DEBUG("Default provider '{}' set from default_role '{}'", default_provider_name_, config.default_role);
                 }
             }
         } catch (const std::exception& e) {
@@ -56,7 +60,7 @@ void ProviderRouter::Initialize(const ProsophorConfig& config) {
     if (!default_provider_ && !providers_.empty()) {
         default_provider_ = providers_.begin()->second;
         default_provider_name_ = providers_.begin()->first;
-        LOG_INFO("Using first available provider as default: {}", default_provider_name_);
+        LOG_DEBUG("Using first available provider as default: {}", default_provider_name_);
     }
 }
 
@@ -91,34 +95,23 @@ std::string ProviderRouter::GetProviderName(const std::string& /*role_id*/) {
 
 std::shared_ptr<LLMProvider> ProviderRouter::CreateProvider(
     const std::string& type,
-    const ProviderConfig& config) {
+    const ProviderConfig& /*config*/) {
 
-    if (type == "anthropic" || type == "claude") {
-        return std::make_shared<AnthropicProvider>(
-            config.api_key,
-            config.base_url,
-            config.timeout);
+    if (type == "anthropic") {
+        return std::make_shared<AnthropicProvider>();
     }
 
-    if (type == "qwen" || type == "dashscope") {
-        return std::make_shared<QwenProvider>(
-            config.api_key,
-            config.base_url,
-            config.timeout);
+    if (type == "openai") {
+        return std::make_shared<OpenAIProvider>();
     }
 
     if (type == "ollama") {
-        return std::make_shared<OllamaProvider>(
-            config.base_url,
-            config.timeout);
+        return std::make_shared<OllamaProvider>();
     }
 
-    // Default to Qwen
-    LOG_WARN("Unknown provider type '{}', defaulting to Qwen", type);
-    return std::make_shared<QwenProvider>(
-        config.api_key,
-        config.base_url,
-        config.timeout);
+    // Unknown protocol - return nullptr
+    LOG_WARN("Unknown provider type '{}', skipping", type);
+    return nullptr;
 }
 
 }  // namespace prosophor

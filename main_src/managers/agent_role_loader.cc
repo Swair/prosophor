@@ -38,7 +38,7 @@ std::vector<AgentRole> AgentRoleLoader::LoadAllRoles(const std::string& roles_di
             try {
                 AgentRole role = ParseMarkdownFile(entry.path());
                 roles.push_back(role);
-                LOG_INFO("Loaded role: {} ({})", role.name, role.id);
+                LOG_DEBUG("Loaded role: {} ({})", role.name, role.id);
             } catch (const std::exception& e) {
                 LOG_ERROR("Failed to load role {}: {}", entry.path().string(), e.what());
             }
@@ -90,7 +90,7 @@ AgentRole AgentRoleLoader::ParseMarkdownFile(const std::filesystem::path& file) 
     }
 
     nlohmann::json metadata = ParseYamlFrontmatter(frontmatter_str);
-    LOG_INFO("ParseMarkdownFile: file={}, metadata keys: {}", file.string(), metadata.dump());
+    LOG_DEBUG("ParseMarkdownFile: file={}, metadata keys: {}", file.string(), metadata.dump());
 
     AgentRole role;
     role.id = metadata.value("id", file.stem().string());
@@ -99,25 +99,39 @@ AgentRole AgentRoleLoader::ParseMarkdownFile(const std::filesystem::path& file) 
     role.avatar = metadata.value("avatar", "🤖");
 
     // Provider 配置（可选，空则使用全局默认）
-    role.provider_name = metadata.value("provider_name", "");
+    role.provider_prot = metadata.value("provider_prot", "");
     role.model = metadata.value("model", std::string(""));
 
-    // 从 settings.json 的 agents 配置中读取 temperature 和 max_tokens
-    // 如果 role 中没有指定 provider_name，则根据 default_role 来确定默认 provider
-    auto& config = ProsophorConfig::GetInstance();
-    std::string provider_to_use = role.provider_name;
+    // Support combined "provider:model" format in model field
+    // e.g. model: "anthropic:qwen3.5-plus" or model: "deepseek:pro"
+    if (!role.model.empty()) {
+        auto colon_pos = role.model.find(':');
+        if (colon_pos != std::string::npos) {
+            std::string extracted_provider = role.model.substr(0, colon_pos);
+            std::string extracted_model = role.model.substr(colon_pos + 1);
+            if (role.provider_prot.empty()) {
+                role.provider_prot = extracted_provider;
+            }
+            role.model = extracted_model;
+        }
+    }
 
-    // 如果 role 没有指定 provider_name，使用 default_role 的 provider
+    // 从 settings.json 的 agents 配置中读取 temperature 和 max_tokens
+    // 如果 role 中没有指定 provider_prot，则根据 default_role 来确定默认 provider
+    auto& config = ProsophorConfig::GetInstance();
+    std::string provider_to_use = role.provider_prot;
+
+    // 如果 role 没有指定 provider_prot，使用 default_role 的 provider
     if (provider_to_use.empty()) {
-        // 尝试加载 default_role 来获取其 provider_name
+        // 尝试加载 default_role 来获取其 provider_prot
         std::string default_role_path = "config/.prosophor/roles/" + config.default_role + ".md";
         if (std::filesystem::exists(default_role_path)) {
             auto& loader = AgentRoleLoader::GetInstance();
             try {
                 AgentRole default_role = loader.LoadRole(default_role_path);
-                if (!default_role.provider_name.empty()) {
-                    provider_to_use = default_role.provider_name;
-                    LOG_INFO("Role {} using default provider '{}' from default_role '{}'",
+                if (!default_role.provider_prot.empty()) {
+                    provider_to_use = default_role.provider_prot;
+                    LOG_DEBUG("Role using default provider '{}' from default_role '{}'",
                              role.id, provider_to_use, config.default_role);
                 }
             } catch (const std::exception& e) {
@@ -128,39 +142,49 @@ AgentRole AgentRoleLoader::ParseMarkdownFile(const std::filesystem::path& file) 
         // 如果还是没有找到 provider，使用 providers 中的第一个
         if (provider_to_use.empty() && !config.providers.empty()) {
             provider_to_use = config.providers.begin()->first;
-            LOG_INFO("Role {} using first available provider: {}", role.id, provider_to_use);
+            LOG_DEBUG("Role using first available provider: {}", role.id, provider_to_use);
         }
     }
 
-    // 尝试从 provider 的 agents 中查找匹配的 model key
-    // role.model 有两种含义：
-    // 1. agent key (如 "default") → 查找 agents 配置
-    // 2. 直接模型名称 (如 "qwen3.5-plus") → 使用默认 agent 配置 + 自定义模型名称
+    // 尝试从 provider 的 agents 中查找匹配的 model
+    // role.model 可以是 agent key 或直接模型名称
     if (!provider_to_use.empty()) {
         auto provider_it = config.providers.find(provider_to_use);
         if (provider_it != config.providers.end()) {
-            std::string agent_key = role.model;  // 保存原始 model 值
+            auto& agent_map = provider_it->second.agents;
 
             // 尝试将 role.model 作为 agent key 查找
-            auto agent_it = provider_it->second.agents.find(role.model);
-            if (agent_it != provider_it->second.agents.end()) {
-                // 找到了匹配的 agent key，使用 agent 配置
+            auto agent_it = agent_map.find(role.model);
+
+            // 如果 key 不匹配，搜索所有 agents 的 model 字段
+            if (agent_it == agent_map.end()) {
+                for (auto& [key, agent] : agent_map) {
+                    if (agent.model == role.model) {
+                        agent_it = agent_map.find(key);
+                        break;
+                    }
+                }
+            }
+
+            if (agent_it != agent_map.end()) {
+                // 找到了匹配的 agent，使用 agent 配置
                 role.temperature = agent_it->second.temperature;
                 role.max_tokens = agent_it->second.max_tokens;
                 role.model = agent_it->second.model;  // 使用 agent 配置中的实际模型名称
-                role.enable_streaming = agent_it->second.enable_streaming;  // 读取 stream 配置
-                LOG_INFO("Role {} using agent '{}' from provider '{}': model={}, temperature={}, max_tokens={}, enable_streaming={}",
-                         role.id, agent_key, provider_to_use, agent_it->second.model,
+                role.enable_streaming = agent_it->second.enable_streaming;
+                role.thinking = agent_it->second.thinking;
+                LOG_DEBUG("Role using agent '{}' from provider '{}': model={}, temperature={}, max_tokens={}, enable_streaming={}",
+                         role.id, agent_it->first, provider_to_use, agent_it->second.model,
                          role.temperature, role.max_tokens, role.enable_streaming);
             } else {
-                // 没有找到匹配的 agent key，使用默认 agent 配置 + 原始模型名称
-                auto default_agent_it = provider_it->second.agents.find("default");
-                if (default_agent_it != provider_it->second.agents.end()) {
+                // 没有找到匹配的 agent，使用 default agent 配置 + 原始模型名称
+                auto default_agent_it = agent_map.find("default");
+                if (default_agent_it != agent_map.end()) {
                     role.temperature = default_agent_it->second.temperature;
                     role.max_tokens = default_agent_it->second.max_tokens;
-                    role.enable_streaming = default_agent_it->second.enable_streaming;  // 读取默认 agent 的 stream 配置
-                    // role.model 保持原始值（如 "qwen3.5-plus"）
-                    LOG_INFO("Role {} using default agent config with model '{}' from provider '{}': temperature={}, max_tokens={}, enable_streaming={}",
+                    role.enable_streaming = default_agent_it->second.enable_streaming;
+                    role.thinking = default_agent_it->second.thinking;
+                    LOG_DEBUG("Role using default agent config with model '{}' from provider '{}': temperature={}, max_tokens={}, enable_streaming={}",
                              role.id, role.model, provider_to_use, role.temperature, role.max_tokens, role.enable_streaming);
                 } else {
                     LOG_WARN("Role {}: no 'default' agent in provider '{}', using hardcoded defaults", role.id, provider_to_use);
@@ -182,7 +206,7 @@ AgentRole AgentRoleLoader::ParseMarkdownFile(const std::filesystem::path& file) 
             // 通配符：加载所有技能
             auto& skill_loader = SkillLoader::GetInstance();
             role.skills = skill_loader.GetAllSkillIds();
-            LOG_INFO("Role {} uses all skills: {}", role.id, role.skills.size());
+            LOG_DEBUG("Role uses all skills: {}", role.id, role.skills.size());
         } else if (skills_config.is_array()) {
             role.skills = skills_config.get<std::vector<std::string>>();
         } else if (skills_config.is_string()) {
@@ -194,11 +218,11 @@ AgentRole AgentRoleLoader::ParseMarkdownFile(const std::filesystem::path& file) 
     // 工具配置 - 支持通配符 "*" 和兼容字符串格式
     // 记录是否显式配置了 tools_white_list 字段（用于自动设置 use_tools）
     bool tools_explicitly_configured = metadata.contains("tools_white_list");
-    LOG_INFO("Role {}: tools_explicitly_configured={}, metadata.has('tools_white_list')={}",
+    LOG_DEBUG("Role tools_explicitly_configured={}, metadata.has('tools_white_list')={}",
              role.id, tools_explicitly_configured, metadata.contains("tools_white_list"));
     if (tools_explicitly_configured) {
-        LOG_INFO("Role {}: tools_config = {}", role.id, metadata["tools_white_list"].dump());
-        LOG_INFO("Role {}: tools_config.is_array={}, tools_config.type={}",
+        LOG_DEBUG("Role tools_config = {}", role.id, metadata["tools_white_list"].dump());
+        LOG_DEBUG("Role tools_config.is_array={}, tools_config.type={}",
                  role.id, metadata["tools_white_list"].is_array(), metadata["tools_white_list"].type_name());
     }
 
@@ -210,7 +234,7 @@ AgentRole AgentRoleLoader::ParseMarkdownFile(const std::filesystem::path& file) 
             auto& tool_registry = ToolRegistry::GetInstance();
             role.tools = tool_registry.GetToolSchemas();
             role.auto_confirm_tools = true;  // 关键：启用自动确认，不弹权限询问
-            LOG_INFO("Role {} uses all tools with auto_confirm=true: {}", role.id, role.tools.size());
+            LOG_DEBUG("Role uses all tools with auto_confirm=true: {}", role.id, role.tools.size());
         } else if (tools_config.is_array()) {
             // 工具名称列表
             auto& tool_registry = ToolRegistry::GetInstance();

@@ -85,7 +85,7 @@ HttpResponse HttpClient::Get(const HttpRequest& request) {
     std::string res_header;
     std::string res_body;
     struct curl_slist* headers = static_cast<struct curl_slist*>(request.headers);
-    // 检测是否为流式：write_data 非空且未指定 write_function
+    // 检测是否为流式：write_data 非空
     const bool is_streaming = request.write_data != nullptr;
 
     // Configure the request for GET
@@ -213,6 +213,24 @@ HttpResponse HttpClient::Post(const HttpRequest& request) {
     long code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
 
+    // Streaming mode: for errors, re-perform to capture error response body
+    if (is_streaming && code >= 400 && res == CURLE_OK) {
+        std::string error_body;
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &error_body);
+        curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");  // Disable compression for error capture
+        CURLcode res2 = curl_easy_perform(curl);
+        long code2 = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code2);
+        curl_easy_cleanup(curl);
+        curl_global_cleanup();
+        std::string err_msg = "HTTP error: " + std::to_string(code);
+        if (res2 == CURLE_OK && !error_body.empty()) {
+            err_msg += " - " + error_body.substr(0, 2000);
+        }
+        throw std::runtime_error(err_msg);
+    }
+
     curl_easy_cleanup(curl);
     curl_global_cleanup();
 
@@ -220,9 +238,6 @@ HttpResponse HttpClient::Post(const HttpRequest& request) {
     if (is_streaming) {
         if (res != CURLE_OK) {
             throw std::runtime_error("CURL streaming request failed: " + std::string(curl_easy_strerror(res)));
-        }
-        if (code >= 400) {
-            throw std::runtime_error("HTTP error: " + std::to_string(code));
         }
         return response;  // Return empty response for streaming
     }

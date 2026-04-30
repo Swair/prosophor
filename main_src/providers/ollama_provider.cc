@@ -13,13 +13,8 @@ using namespace nlohmann;
 
 namespace prosophor {
 
-OllamaProvider::OllamaProvider(const std::string& base_url, int timeout_seconds)
-    : base_url_(base_url),
-      timeout_seconds_(timeout_seconds) {
-    if (base_url_.empty()) {
-        base_url_ = "http://localhost:11434";
-    }
-    LOG_INFO("OllamaProvider initialized with base_url: {}", base_url_);
+OllamaProvider::OllamaProvider() {
+    LOG_DEBUG("OllamaProvider initialized");
 }
 
 std::vector<std::string> OllamaProvider::GetSupportedModels() const {
@@ -27,7 +22,7 @@ std::vector<std::string> OllamaProvider::GetSupportedModels() const {
     std::vector<std::string> models;
 
     HttpRequest req;
-    req.url = base_url_ + "/api/tags";
+    req.url = "http://localhost:11434/api/tags";
     req.timeout_seconds = 10;
 
     HttpResponse resp = HttpClient::Get(req);
@@ -208,48 +203,17 @@ ChatResponse OllamaProvider::Deserialize(const std::string& json_str) const {
     return result;
 }
 
-void OllamaProvider::PrintRequestLog(const std::string& url) const {
+void OllamaProvider::PrintRequestLog(const ChatRequest& request) const {
     LOG_DEBUG("=== Sending request to Ollama API ===");
-    LOG_DEBUG("URL: {}", url);
+    LOG_DEBUG("URL: {}", request.base_url);
+    LOG_DEBUG("Model: {}", request.model);
     LOG_DEBUG("Content-Type: application/json");
 }
 
-ChatResponse OllamaProvider::Chat(const ChatRequest& request) {
-    HttpRequest http_request;
-    http_request.url = base_url_ + "/api/chat";
-    http_request.timeout_seconds = timeout_seconds_;
-
+HeaderList OllamaProvider::CreateHeaders(const ChatRequest& /*request*/) const {
     HeaderList headers;
     headers.append("Content-Type: application/json");
-    http_request.headers = headers.get();
-
-    PrintRequestLog(http_request.url);
-
-    http_request.post_data = Serialize(request);
-
-    HttpResponse http_response = HttpClient::Post(http_request);
-
-    LOG_DEBUG("=== Received response from Ollama API ===");
-
-    if (http_response.failed()) {
-        std::string error_msg = http_response.error.empty() ? http_response.body : http_response.error;
-        LOG_ERROR("Ollama API HTTP {}: {}", http_response.status_code, error_msg.substr(0, 256));
-        throw std::runtime_error("Ollama API error (HTTP " +
-                                 std::to_string(http_response.status_code) + "): " +
-                                 error_msg);
-    }
-
-    ChatResponse response = Deserialize(http_response.body);
-
-    // Record token usage
-    if (response.usage.total_tokens > 0) {
-        RecordTokenUsage(request.model, response.usage);
-        LOG_INFO("Token usage: {} prompt, {} completion, {} total",
-                 response.usage.prompt_tokens, response.usage.completion_tokens,
-                 response.usage.total_tokens);
-    }
-
-    return response;
+    return headers;
 }
 
 // Streaming support for Ollama (NDJSON format)
@@ -340,28 +304,9 @@ struct OllamaStreamHandler : public StreamHandler {
 
 ChatResponse OllamaProvider::ChatStream(const ChatRequest& request,
                                  std::function<void(const ChatResponse&)> callback) {
-    // Create a copy of request with stream=true
-    ChatRequest stream_request = request;
-    stream_request.stream = true;
-
     OllamaStreamHandler stream_handler(std::move(callback));
-
-    HttpRequest stream_req;
-    stream_req.url = base_url_ + "/api/chat";
-    stream_req.post_data = Serialize(stream_request);
-    stream_req.timeout_seconds = timeout_seconds_;
-    stream_req.low_speed_limit = 1;
-    stream_req.low_speed_time = 60;
-
-    HeaderList headers;
-    headers.append("Content-Type: application/json");
-    stream_req.headers = headers.get();
-    stream_req.write_data = &stream_handler;
-
-    // curl blocks here, callbacks execute in curl thread
-    HttpClient::Post(stream_req);
-
-    // Return accumulated response
+    PrintRequestLog(request);
+    ExecuteStream(request, &stream_handler, 180);
     return stream_handler.accumulated_response;
 }
 

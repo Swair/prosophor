@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "media_engine/media_engine.h"
 #include "ui_types.h"
-#include "colors.h"
-#include "ui_panel.h"
-#include "media/imgui_widget.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -36,8 +34,7 @@ public:
     bool IsVisible() const { return visible_; }
 
 private:
-    float x_ = 0, y_ = 0;       // ChatPanel 位置
-    float width_ = 0, height_ = 0;  // ChatPanel 尺寸
+    std::unique_ptr<UIContainer> container_;
     std::unique_ptr<imgui_widget::ScrollWindow> scroll_window_;
     std::vector<ChatMessage> messages_;
     bool visible_ = true;

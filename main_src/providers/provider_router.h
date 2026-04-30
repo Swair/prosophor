@@ -9,7 +9,7 @@
 
 #include "providers/llm_provider.h"
 #include "providers/anthropic_provider.h"
-#include "providers/qwen_provider.h"
+#include "providers/openai_provider.h"
 #include "providers/ollama_provider.h"
 #include "common/config.h"
 

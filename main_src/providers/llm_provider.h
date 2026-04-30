@@ -13,6 +13,7 @@
 #include "tools/tool_registry.h"
 #include "common/config.h"
 #include "common/messages_schema.h"
+#include "common/curl_client.h"
 
 namespace prosophor {
 
@@ -42,6 +43,13 @@ struct ChatRequest {
     bool tool_choice_auto = true;
     bool stream = false;
     std::string thinking = "off";  // "off" | "low" | "medium" | "high"
+
+    // Agent-specific base_url from config (set by BuildRequest from agent config)
+    std::string base_url;
+    // API key for this request (overrides provider's default key)
+    std::string api_key;
+    // Request timeout in seconds (overrides provider's default timeout)
+    int timeout = 60;
 
     // System message helpers
     void AddSystemMessage(std::string text, bool cache_control = false) {
@@ -85,18 +93,20 @@ struct ChatRequest {
 
 /// Response from chat completion API
 struct ChatResponse {
-    // std::string content_thinking;
+    std::string content_thinking;
     std::string content_text;
     std::vector<ToolUseSchema> tool_calls;
     bool is_stream_end = false;
-    // std::string id;
-    // std::string model;
-    // std::string role;
+    std::string thinking_phase;      // "start", "delta", "end" (for thinking blocks)
+    std::string content_phase;       // "start", "end" (for text blocks)
     std::string stop_reason;
-    // std::string type;
     TokenUsageSchema usage;
 
     // Convenience methods
+    void AddThinking(std::string text) {
+        if (!content_thinking.empty()) content_thinking += "\n";
+        content_thinking += std::move(text);
+    }
     void AddText(std::string text) {
         if (!content_text.empty()) content_text += "\n";
         content_text += std::move(text);
@@ -115,11 +125,13 @@ struct ChatResponse {
 void RecordTokenUsage(const std::string& model, const TokenUsageSchema& usage);
 
 /// Abstract interface for LLM providers
+/// HTTP providers: Chat() is shared (serialize → POST → error check → deserialize → token tracking)
+/// Each provider: Serialize(), Deserialize(), CreateHeaders(), PrintRequestLog(), ChatStream()
 class LLMProvider {
  public:
     virtual ~LLMProvider() = default;
 
-    virtual ChatResponse Chat(const ChatRequest& request) = 0;
+    ChatResponse Chat(const ChatRequest& request);
 
     /// Streaming chat - returns accumulated ChatResponse after stream completes
     virtual ChatResponse ChatStream(const ChatRequest& request,
@@ -132,6 +144,16 @@ class LLMProvider {
     virtual std::string Serialize(const ChatRequest& request) const = 0;
 
     virtual ChatResponse Deserialize(const std::string& json_str) const = 0;
+
+ protected:
+    /// Execute streaming HTTP POST request
+    /// default_timeout: used when request.timeout <= 0 (Ollama: 180, others: 60)
+    HttpResponse ExecuteStream(const ChatRequest& request,
+        void* stream_handler,
+        int default_timeout = 60) const;
+
+    virtual HeaderList CreateHeaders(const ChatRequest& request) const = 0;
+    virtual void PrintRequestLog(const ChatRequest& request) const = 0;
 };
 
 }  // namespace prosophor

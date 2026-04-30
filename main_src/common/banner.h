@@ -8,8 +8,7 @@
 namespace prosophor {
 
 /// Print the application banner with ASCII art
-/// If show_buddy is true, displays the user's companion pet
-void PrintBanner(const std::string& version, bool show_buddy = false);
+void PrintBanner(const std::string& version);
 
 /// Print help message for available commands
 void PrintHelp();

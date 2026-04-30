@@ -130,7 +130,7 @@ void PermissionManager::Initialize(const nlohmann::json& config) {
         }
     }
 
-    LOG_INFO("PermissionManager initialized with mode={}, allow_rules={}, deny_rules={}, ask_rules={}",
+    LOG_DEBUG("PermissionManager initialized with mode={}, allow_rules={}, deny_rules={}, ask_rules={}",
              mode_, allow_rules_.size(), deny_rules_.size(), ask_rules_.size());
 }
 
@@ -266,7 +266,7 @@ void PermissionManager::ClearRules() {
     deny_rules_.clear();
     ask_rules_.clear();
     denial_counts_.clear();
-    LOG_INFO("Permission rules cleared");
+    LOG_DEBUG("Permission rules cleared");
 }
 
 void PermissionManager::RecordDenial(const std::string& tool_name, const nlohmann::json& /*input*/) {
@@ -303,7 +303,7 @@ bool PermissionManager::RequestUserConfirmation(
 
 void PermissionManager::SetMode(const std::string& mode) {
     mode_ = mode;
-    LOG_INFO("Permission mode changed to: {}", mode);
+    LOG_DEBUG("Permission mode changed to: {}", mode);
 }
 
 }  // namespace prosophor

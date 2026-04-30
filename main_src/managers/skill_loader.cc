@@ -21,7 +21,7 @@ SkillLoader& SkillLoader::GetInstance() {
 }
 
 SkillLoader::SkillLoader() {
-    LOG_INFO("SkillLoader initialized");
+    LOG_DEBUG("SkillLoader initialized");
 }
 
 std::vector<SkillMetadata> SkillLoader::LoadSkillsFromDirectory(
@@ -53,7 +53,7 @@ std::vector<SkillMetadata> SkillLoader::LoadSkillsFromDirectory(
         }
     }
 
-    LOG_INFO("Loaded {} skills", skills.size());
+    LOG_DEBUG("Loaded skills", skills.size());
     return skills;
 }
 
@@ -294,7 +294,7 @@ std::vector<SkillMetadata> SkillLoader::LoadSkills(
         }
     }
 
-    LOG_INFO("Loaded {} skills from {} directories", result.size(),
+    LOG_DEBUG("Loaded skills from {} directories", result.size(),
                   dirs.size());
     return result;
 }

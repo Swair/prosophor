@@ -32,7 +32,7 @@ void ActiveTriggerManager::Initialize(const std::string& active_dir) {
         }
     }
 
-    LOG_INFO("ActiveTriggerManager initialized: {}", active_dir_);
+    LOG_DEBUG("ActiveTriggerManager initialized: {}", active_dir_);
     ScanAndLoadPlugins();
 }
 
@@ -44,7 +44,7 @@ void ActiveTriggerManager::Start() {
 
     running_ = true;
     scheduler_thread_ = std::thread(&ActiveTriggerManager::SchedulerLoop, this);
-    LOG_INFO("ActiveTriggerManager scheduler started");
+    LOG_DEBUG("ActiveTriggerManager scheduler started");
 }
 
 void ActiveTriggerManager::Stop() {
@@ -104,7 +104,7 @@ void ActiveTriggerManager::ScanAndLoadPlugins() {
     std::sort(idle_plugins_.begin(), idle_plugins_.end(),
               [](const auto& a, const auto& b) { return a.priority < b.priority; });
 
-    LOG_INFO("Loaded {} active plugins ({} periodic, {} idle)",
+    LOG_DEBUG("Loaded active plugins ({} periodic, {} idle)",
              loaded, periodic_plugins_.size(), idle_plugins_.size());
 }
 
@@ -157,11 +157,11 @@ bool ActiveTriggerManager::LoadPlugin(const std::string& plugin_dir) {
 
     if (plugin.mode == "periodic") {
         periodic_plugins_.push_back(plugin);
-        LOG_INFO("Loaded periodic plugin: {} (interval={}s, priority={})",
+        LOG_DEBUG("Loaded periodic plugin: {} (interval={}s, priority={})",
                  plugin.name, plugin.interval, plugin.priority);
     } else if (plugin.mode == "idle") {
         idle_plugins_.push_back(plugin);
-        LOG_INFO("Loaded idle plugin: {} (threshold={}s, priority={})",
+        LOG_DEBUG("Loaded idle plugin: {} (threshold={}s, priority={})",
                  plugin.name, plugin.threshold, plugin.priority);
     }
 
@@ -237,7 +237,7 @@ void ActiveTriggerManager::SchedulerLoop() {
     IdleState idle_state = IdleState::Monitoring;
     int64_t last_interaction_time = now_sec();
 
-    LOG_INFO("ActiveTriggerManager scheduler loop started");
+    LOG_DEBUG("ActiveTriggerManager scheduler loop started");
 
     while (running_) {
         try {

@@ -67,23 +67,40 @@ struct AgentConfig {
     int DynamicMaxIterations() const;
 };
 
+/// Configuration for a single provider entry (each array item keeps its own api_key/base_url)
+struct ProviderEntryConfig {
+    std::string api_key;
+    std::string base_url;
+    int timeout = 30;
+    std::unordered_map<std::string, AgentConfig> agents;
+};
+
 /// Configuration for an LLM provider
-/// Format: provider_name: { apiKey, baseUrl, apiType, timeout, agents: { name: { model, ... } } }
+/// agents key format: "{provider_name}/{model_name}" → agent params
 struct ProviderConfig {
     std::string api_key;
     std::string base_url;
-    std::string api_type;  // "anthropic-messages", "openai-completions"
     int timeout = 30;
 
-    // Multiple agent configurations per provider
+    // agents key: "{provider_name}/{model_name}"
     std::unordered_map<std::string, AgentConfig> agents;
 
     std::vector<ModelDefinition> models;
+
+    // All entries from the config array (each keeps its own api_key/base_url)
+    std::vector<ProviderEntryConfig> entries;
 
     static ProviderConfig FromJson(const nlohmann::json& json);
 
     // Get default agent
     const AgentConfig& GetDefaultAgent() const;
+
+    // Find entry by model name and return its base_url and api_key
+    bool FindEntryForModel(const std::string& provider_name,
+                           const std::string& model,
+                           std::string& out_base_url,
+                           std::string& out_api_key,
+                           int& out_timeout) const;
 };
 
 /// Tool configuration settings
@@ -140,7 +157,6 @@ struct SecurityConfig {
 struct ProsophorConfig {
     std::string log_level = "info";
     std::string default_role = "default";  // Default role to use when not specified
-    bool show_buddy = true;
 
     SecurityConfig security;
     std::unordered_map<std::string, ProviderConfig> providers;

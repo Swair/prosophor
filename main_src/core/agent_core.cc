@@ -58,7 +58,7 @@ void AgentCore::SetSessionOutput(AgentSession& session, AgentRuntimeState state,
     session.state_message = state_msg;
 
     // Add message to history if provided
-    if (reply && state != AgentRuntimeState::STREAM_TYPING) {
+    if (reply && state != AgentRuntimeState::STREAM_CONTENT_TYPING) {
         session.messages.push_back(*reply);
     }
     
@@ -73,6 +73,7 @@ void AgentCore::SetSessionOutput(AgentSession& session, AgentRuntimeState state,
 /// Execute tool calls and build messages - shared by CloseLoop and CloseLoopStream
 bool AgentCore::ExecuteToolCalls(const std::vector<ToolUseSchema>& tool_calls,
                                   AgentSession& session,
+                                  MessageSchema& assistant_msg,
                                   std::string& accumulated_text,
                                   int& iterations) {
     if (tool_calls.empty()) {
@@ -81,12 +82,7 @@ bool AgentCore::ExecuteToolCalls(const std::vector<ToolUseSchema>& tool_calls,
 
     LOG_DEBUG("LLM requested {} tool calls", tool_calls.size());
 
-    // Build assistant message with tool calls
-    MessageSchema assistant_msg;
-    assistant_msg.role = "assistant";
-    assistant_msg.AddTextContent(accumulated_text);
-
-    // Execute tools and build results message
+    // Build results message
     MessageSchema results_msg;
     results_msg.role = "user";
     bool has_tool_error = false;
@@ -169,16 +165,16 @@ void AgentCore::MaybeCompact(AgentSession& session) {
 
     auto llm_callback = [&session](const std::string& prompt) -> std::string {
         ChatRequest req;
-        // 从 role 获取模型配置
         if (session.role) {
             req.model = session.role->model;
             req.temperature = session.role->temperature;
             req.max_tokens = 4096;
-        } else {
-            req.model = "claude-sonnet-4-6";
-            req.temperature = 0.7;
-            req.max_tokens = 4096;
         }
+        if (!session.base_url.empty()) {
+            req.base_url = session.base_url;
+        }
+        req.api_key = session.api_key;
+        req.timeout = session.timeout;
         req.AddUserMessage(prompt);
         return session.provider->Chat(req).content_text;
     };
@@ -199,17 +195,36 @@ void AgentCore::MaybeCompact(AgentSession& session) {
 ChatRequest AgentCore::BuildRequest(const AgentSession& session) {
     ChatRequest req;
 
-    // 从 role 获取模型配置
-    if (session.role) {
-        req.model = session.role->model;
-        req.temperature = session.role->temperature;
-        req.max_tokens = session.role->max_tokens;
-    } else {
-        // 降级使用默认值
-        req.model = "claude-sonnet-4-6";
-        req.temperature = 0.7;
-        req.max_tokens = 8192;
+    // session.role 由 session_manager 在创建/切换时保证非空
+    if (!session.role) {
+        LOG_FATAL("session.role is null");
+        throw std::runtime_error("session.role must not be null");
     }
+    if (session.base_url.empty()) {
+        LOG_FATAL("session.base_url is empty for session {} (role: {})",
+                  session.session_id, session.role_id);
+        throw std::runtime_error("session.base_url must not be empty");
+    }
+    if (session.api_key.empty()) {
+        LOG_FATAL("session.api_key is empty for session {} (role: {}, provider: '{}')",
+                  session.session_id, session.role_id,
+                  session.role ? session.role->provider_prot : "N/A");
+        throw std::runtime_error(
+            "API key is empty. Please check your provider config in settings.json "
+            "(api_key field) or set the corresponding environment variable.");
+    }
+    if (session.timeout <= 0) {
+        LOG_WARN("session.timeout is invalid ({}), using default 60s", session.timeout);
+        req.timeout = 60;
+    } else {
+        req.timeout = session.timeout;
+    }
+    req.model = session.role->model;
+    req.temperature = session.role->temperature;
+    req.max_tokens = session.role->max_tokens;
+    req.thinking = session.role->thinking;
+    req.base_url = session.base_url;
+    req.api_key = session.api_key;
 
     req.messages = session.messages;
     req.system = session.system_prompt;
@@ -222,6 +237,11 @@ ChatRequest AgentCore::BuildRequest(const AgentSession& session) {
              session.use_tools,
              session.role ? session.role->tools.size() : 0,
              req.tools.size());
+    LOG_DEBUG("BuildRequest: model='{}', base_url='{}', timeout={}s, api_key={}",
+             req.model, req.base_url, req.timeout,
+             req.api_key.size() > 8 ? req.api_key.substr(0, 8) + "..." : req.api_key);
+    LOG_DEBUG("BuildRequest: thinking='{}', temperature={}, max_tokens={}",
+             req.thinking, req.temperature, req.max_tokens);
     return req;
 }
 
@@ -252,84 +272,76 @@ void AgentCore::Loop(const std::string& message, AgentSession& session) {
     int max_iterations = GetMaxIterations(session);
 
     while (iterations < max_iterations && !session.stop_requested) {
-        try {
-            ChatRequest request = BuildRequest(session);
-            request.stream = streaming;
+        ChatRequest request = BuildRequest(session);
+        request.stream = streaming;
 
-            // Call LLM - streaming or non-streaming
-            ChatResponse response;
-            if (streaming) {
-                // Streaming mode: send STREAM_MODE_START first, then STREAM_TYPING for each chunk
-                SetSessionOutput(session, AgentRuntimeState::STREAM_MODE_START, "");
-                response = session.provider->ChatStream(
-                    request, [&session](const ChatResponse& chunk) {
-                        if (!chunk.content_text.empty()){
-                            MessageSchema chunk_msg;
-                            chunk_msg.role = "assistant";
-                            chunk_msg.AddTextContent(chunk.content_text);
-                            SetSessionOutput(session, AgentRuntimeState::STREAM_TYPING, "", chunk_msg);
+        // Call LLM - streaming or non-streaming
+        ChatResponse response;
+        if (streaming) {
+            SetSessionOutput(session, AgentRuntimeState::STREAM_MODE_START, "");
+            response = session.provider->ChatStream(
+                request, [&session](const ChatResponse& chunk) {
+                    if (!chunk.thinking_phase.empty()) {
+                        MessageSchema thinking_msg;
+                        thinking_msg.role = "assistant";
+                        thinking_msg.AddThinkingContent(chunk.content_thinking);
+                        if (chunk.thinking_phase == "start") {
+                            SetSessionOutput(session, AgentRuntimeState::STREAM_THINKING_START, "", thinking_msg);
+                        } else if (chunk.thinking_phase == "delta") {
+                            SetSessionOutput(session, AgentRuntimeState::STREAM_THINKING, "", thinking_msg);
+                        } else if (chunk.thinking_phase == "end") {
+                            SetSessionOutput(session, AgentRuntimeState::STREAM_THINKING_END, "", thinking_msg);
                         }
-                    });
-            } else {
-                response = session.provider->Chat(request);
-            }
-
-            // Execute tool calls - use response.tool_calls directly
-            std::string response_text = response.content_text;
-            if (ExecuteToolCalls(response.tool_calls, session, response_text, iterations)) {
-                continue;  // Tool calls were executed, continue loop
-            }
-
-            // No tool calls - check for text response
-            if (!response.content_text.empty()) {
-                MessageSchema final_msg;
-                final_msg.role = "assistant";
-                final_msg.AddTextContent(response.content_text);
-
-                // Set COMPLETE state
-                if(streaming) {
-                    SetSessionOutput(session, AgentRuntimeState::STREAM_MODE_COMPLETE, "Done.", final_msg);
-                } else {
-                    SetSessionOutput(session, AgentRuntimeState::COMPLETE, "Done.", final_msg);
-                }
-                return;
-            }
-
-            if (session.stop_requested) {
-                MessageSchema stop_msg;
-                stop_msg.role = "assistant";
-                stop_msg.AddTextContent("[Agent turn stopped by user]");
-                SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, "Stopped by user", stop_msg);
-                return;
-            }
-
-            SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, "Unexpected LLM response format");
-            break;
-
-        } catch (const std::exception& e) {
-            // Re-throw interrupt exceptions immediately
-            std::string err = std::string(e.what());
-            if (err.find("Interrupted by user") != std::string::npos) {
-                SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, "Interrupted by user");
-                throw;
-            }
-
-            // Don't retry Ollama timeout errors - they are already retried in OllamaProvider
-            bool is_ollama_timeout = err.find("Ollama API error") != std::string::npos &&
-                                     err.find("Timeout was reached") != std::string::npos;
-
-            LOG_ERROR("Error in LLM processing: {}", e.what());
-            if (!is_ollama_timeout && iterations < max_iterations - 1) {
-                // Retry non-timeout errors (e.g., malformed response)
-                std::this_thread::sleep_for(
-                    std::chrono::seconds(1 << std::min(iterations, 4)));
-                iterations++;
-                continue;
-            }
-            // Set output: state + message
-            SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, e.what());
-            throw;
+                    } else if (!chunk.content_phase.empty()) {
+                        if (chunk.content_phase == "start") {
+                            SetSessionOutput(session, AgentRuntimeState::STREAM_CONTENT_START, "", std::nullopt);
+                        } else if (chunk.content_phase == "end") {
+                            SetSessionOutput(session, AgentRuntimeState::STREAM_CONTENT_END, "", std::nullopt);
+                        }
+                    } else if (!chunk.content_text.empty()) {
+                        MessageSchema chunk_msg;
+                        chunk_msg.role = "assistant";
+                        chunk_msg.AddTextContent(chunk.content_text);
+                        SetSessionOutput(session, AgentRuntimeState::STREAM_CONTENT_TYPING, "", chunk_msg);
+                    }
+                });
+        } else {
+            response = session.provider->Chat(request);
         }
+
+        // Build assistant message with thinking (if any)
+        MessageSchema assistant_msg;
+        assistant_msg.role = "assistant";
+        if (!response.content_thinking.empty()) {
+            assistant_msg.AddThinkingContent(response.content_thinking);
+        }
+
+        // Execute tool calls if present
+        if (ExecuteToolCalls(response.tool_calls, session, assistant_msg, response.content_text, iterations)) {
+            continue;
+        }
+
+        // No tool calls - check for text response
+        if (!response.content_text.empty()) {
+            assistant_msg.AddTextContent(response.content_text);
+
+            if (streaming) {
+                SetSessionOutput(session, AgentRuntimeState::STREAM_MODE_COMPLETE, "Done.", assistant_msg);
+            } else {
+                SetSessionOutput(session, AgentRuntimeState::COMPLETE, "Done.", assistant_msg);
+            }
+            return;
+        }
+
+        if (session.stop_requested) {
+            assistant_msg.role = "assistant";
+            assistant_msg.AddTextContent("[Agent turn stopped by user]");
+            SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, "Stopped by user", assistant_msg);
+            return;
+        }
+
+        SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, "Unexpected LLM response format");
+        break;
     }
 
     // Max iterations or stopped

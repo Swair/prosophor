@@ -2,54 +2,94 @@
   "default_role": "default",
   "log_level": "info",
   "providers": {
-    "dashscope": {
-      "agents": {
-        "default": {
-          "context_window": 128000,
-          "max_tokens": 8192,
-          "model": "qwen3.5-plus",
-          "temperature": 0.7
-        },
-        "fast": {
-          "context_window": 128000,
-          "max_tokens": 1024,
-          "model": "qwen-turbo",
-          "temperature": 0.1
+    "anthropic": [
+      {
+        "api_key": "sk-sp-198786439e234d0abc2ffexxxxxxxx",
+        "base_url": "https://coding.dashscope.aliyuncs.com/apps/anthropic/v1/messages",
+        "timeout": 60,
+        "agents": {
+          "default": {
+            "model": "qwen3.5-plus",
+            "temperature": 0.7,
+            "max_tokens": 8192,
+            "context_window": 128000,
+            "thinking": "off"
+          },
+          "fast": {
+            "model": "qwen-turbo",
+            "temperature": 0.1,
+            "max_tokens": 1024,
+            "context_window": 128000
+          }
         }
       },
-      "api_key": "sk-sp-198786439e234d0abc2xxxxxxxxxxxxx",
-      "api_type": "qwen",
-      "base_url": "https://coding.dashscope.aliyuncs.com/apps/anthropic",
-      "timeout": 60
-    },
-    "ollama": {
-      "agents": {
-        "default": {
-          "context_window": 32768,
-          "max_tokens": 8192,
-          "model": "qwen3:8b",
-          "temperature": 0.7
-        },
-        "gemma4": {
-          "context_window": 128000,
-          "max_tokens": 4096,
-          "model": "gemma4:e4b",
-          "temperature": 0.1
+      {
+        "api_key": "sk-198786439e234d0abc2ffexxxxxxxx",
+        "base_url": "https://api.deepseek.com/anthropic/v1/messages",
+        "timeout": 60,
+        "agents": {
+          "pro": {
+            "model": "deepseek-v4-pro",
+            "temperature": 0.7,
+            "max_tokens": 8192,
+            "context_window": 128000,
+            "thinking": "high"
+          },
+          "flash": {
+            "model": "deepseek-v4-flash",
+            "temperature": 0.1,
+            "max_tokens": 1024,
+            "context_window": 128000,
+            "thinking": "high"
+          }
         }
-      },
-      "api_key": "",
-      "api_type": "ollama",
-      "base_url": "http://localhost:11434",
-      "timeout": 180
-    }
+      }
+    ],
+    "ollama": [
+      {
+        "api_key": "",
+        "base_url": "http://localhost:11434/api/chat",
+        "timeout": 180,
+        "agents": {
+          "default": {
+            "model": "qwen3:8b",
+            "temperature": 0.7,
+            "max_tokens": 8192,
+            "context_window": 32768
+          },
+          "gemma4": {
+            "model": "gemma4:e4b",
+            "temperature": 0.1,
+            "max_tokens": 4096,
+            "context_window": 128000
+          }
+        }
+      }
+    ],
+    "openai": [
+      {
+        "api_key": "",
+        "base_url": "https://api.openai.com/v1/chat/completions",
+        "timeout": 60,
+        "agents": {
+          "default": {
+            "model": "gpt-4o",
+            "temperature": 0.7,
+            "max_tokens": 8192,
+            "context_window": 128000
+          },
+          "fast": {
+            "model": "gpt-4o-mini",
+            "temperature": 0.1,
+            "max_tokens": 1024,
+            "context_window": 128000
+          }
+        }
+      }
+    ]
   },
   "security": {
     "allow_local_execute": true,
     "permission_level": "auto"
-  },
-  "show_buddy": true,
-  "tools": {
-    "enabled": true,
-    "timeout": 60
   }
 }

@@ -3,11 +3,9 @@
 
 #include "scene/ui_renderer.h"
 #include "components/chat_panel.h"
-#include "components/input_panel.h"
+#include "ui_component/input_panel.h"
 #include "components/status_bar.h"
-#include "media_core.h"
-#include "drawer.h"
-#include "colors.h"
+#include "media_engine/media_engine.h"
 #include "common/log_wrapper.h"
 
 namespace prosophor {
@@ -16,6 +14,9 @@ UIRenderer& UIRenderer::Instance() {
     static UIRenderer instance;
     return instance;
 }
+
+UIRenderer::UIRenderer() = default;
+UIRenderer::~UIRenderer() = default;
 
 // 更新布局（窗口大小改变时调用）
 void UIRenderer::UpdateLayout() {
@@ -122,14 +123,14 @@ bool UIRenderer::ProcessInput(std::string& out_message) {
 
 void UIRenderer::SubmitUserMessage(const std::string& message) {
     LOG_DEBUG("SubmitUserMessage submitted: {}, {}", "user", message.c_str());
-    AddMessage("user", message);
+    SendToChatPanel("user", message);
 
     if (on_message_submit_) {
         on_message_submit_(message);
     }
 }
 
-void UIRenderer::AddMessage(const std::string& role, const std::string& content) {
+void UIRenderer::SendToChatPanel(const std::string& role, const std::string& content) {
     if (chat_panel_) {
         chat_panel_->AddMessage(role, content);
     }
@@ -166,14 +167,9 @@ void UIRenderer::SetVisible(bool visible) {
 
 void UIRenderer::RenderFloatingText(const std::string& text, float x, float y,
                                      uint8_t r, uint8_t g, uint8_t b, float alpha) {
-    uint8_t alpha_byte = static_cast<uint8_t>(alpha * 255);
-    for (size_t i = 0; i < text.size() && i < 50; i++) {
-        char c = text[i];
-        if (c >= 32 && c < 127) {
-            ::Drawer::Instance().DrawFillRect(x + i * 12, y, 8, 14,
-                                              Color(r, g, b, alpha_byte));
-        }
-    }
+    static const char* kFontPath = "C:/Windows/Fonts/msyh.ttc";
+    MediaUtil::DrawTextRect(text, x, y, 300, 14, r, g, b,
+                             static_cast<uint8_t>(alpha * 255), kFontPath);
 }
 
 }  // namespace prosophor

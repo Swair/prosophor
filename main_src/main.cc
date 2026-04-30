@@ -26,7 +26,7 @@ int main(int argc, char* argv[]) {
 
     const auto& config = prosophor::ProsophorConfig::GetInstance();
     prosophor::InitLog(config.log_level);
-    LOG_INFO("Prosophor v{}", PROSOPHOR_VERSION);
+    LOG_DEBUG("Prosophor v{}", PROSOPHOR_VERSION);
 
     try {
 #ifdef PROSOPHOR_SDL_UI

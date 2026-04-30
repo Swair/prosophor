@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "media/colors.h"
+#include "media_engine/media_engine.h"
 #include "scene/character_sprite.h"
 
 namespace prosophor {

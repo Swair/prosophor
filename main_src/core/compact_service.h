@@ -35,7 +35,7 @@ struct CompactConfig {
     int max_tokens = 100000;        // Max total tokens before compaction
     std::string summary_prompt;     // Custom prompt for summary generation
 
-    static constexpr CompactConfig Default() {
+    static CompactConfig Default() {
         return {CompactStrategy::Hybrid, 100, 20, 100000,
             "Please provide a concise summary of the conversation so far, "
             "including: key decisions made, code changes discussed, "

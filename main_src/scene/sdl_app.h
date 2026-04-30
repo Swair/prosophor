@@ -5,6 +5,7 @@
 
 #include "common/noncopyable.h"
 #include "common/input_event.h"
+#include "scene/home_screen.h"
 #include <functional>
 
 namespace prosophor {
@@ -31,6 +32,9 @@ class SdlApp : public Noncopyable {
     using InputCallback = std::function<void(const InputEvent&)>;
     void SetInputCallback(InputCallback callback);
 
+    /// Get current UI mode
+    UIMode GetCurrentMode() const { return current_scene_; }
+
  private:
     SdlApp();
     ~SdlApp();
@@ -38,7 +42,19 @@ class SdlApp : public Noncopyable {
     void Initialize();
     void Shutdown();
 
+    /// Switch to a different UI mode
+    void SwitchMode(UIMode mode);
+
+    /// Mode-specific render handlers
+    void RenderHome();
+    void RenderVirtualHuman();
+    void RenderGalgame();
+    void RenderTerminal();
+
     InputCallback input_callback_;
+    UIMode current_scene_ = UIMode::HOME;
+
+    InputCallback saved_callback_;
 };
 
 }  // namespace prosophor

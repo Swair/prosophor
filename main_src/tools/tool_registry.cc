@@ -33,14 +33,7 @@
 #include "managers/token_tracker.h"
 #include "managers/permission_manager.h"
 #include "mcp/mcp_client.h"
-#include "tools/agent_tools/agent_tool.h"
 #include "tools/command_tools/background_run_tool.h"
-#include "tools/search_tools/glob_tool.h"
-#include "tools/search_tools/grep_tool.h"
-#include "tools/task_tools/cron_tool.h"
-#include "tools/task_tools/task_tool.h"
-#include "tools/lsp_tools/lsp_tool.h"
-#include "tools/worktree_tools/worktree_tool.h"
 
 namespace prosophor {
 
@@ -66,6 +59,15 @@ static std::string ConvertToUTF8(const std::string& mbcs_str) {
     WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, &result[0], utf8_len, nullptr, nullptr);
     return result;
 }
+
+/// Convert UTF-8 string to wide string (UTF-16)
+static std::wstring UTF8ToWide(const std::string& utf8_str) {
+    int wide_len = MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(), -1, nullptr, 0);
+    if (wide_len <= 1) return L"";
+    std::wstring wide(wide_len - 1, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(), -1, &wide[0], wide_len);
+    return wide;
+}
 #endif
 
 /// Format command result with exit code (DRY helper)
@@ -82,7 +84,6 @@ static std::string FormatCommandResult(const std::string& result, int status,
 }
 
 /// Execute a shell command and capture output (cross-platform, thread-safe)
-/// Inspired by QuantClaw::platform::exec_capture
 /// @param command Command to execute
 /// @param timeout_seconds Timeout in seconds (0 = no timeout)
 /// @param workdir Working directory (empty = current)
@@ -113,11 +114,9 @@ static std::pair<std::string, int> ExecuteCommand(const std::string& command,
 
     // Directly execute command without shell (cmd /c or sh -c)
     // This lets Windows find the executable from PATH
-    std::string cmd_line = command;
-    std::vector<char> cmd_buf(cmd_line.begin(), cmd_line.end());
-    cmd_buf.push_back('\0');
+    std::wstring wcmd_line = UTF8ToWide(command);
 
-    STARTUPINFOA si = {};
+    STARTUPINFOW si = {};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdOutput = write_pipe;
@@ -128,12 +127,13 @@ static std::pair<std::string, int> ExecuteCommand(const std::string& command,
     PROCESS_INFORMATION pi = {};
 
     // lpCurrentDirectory needs a mutable string
-    std::string mutable_workdir = workdir;
+    std::wstring wworkdir = workdir.empty() ? L"" : UTF8ToWide(workdir);
 
-    BOOL ok = CreateProcessA(nullptr, cmd_buf.data(), nullptr, nullptr,
+    BOOL ok = CreateProcessW(nullptr, wcmd_line.data(), nullptr, nullptr,
                              TRUE, CREATE_NO_WINDOW,
-                             workdir.empty() ? nullptr : const_cast<char*>(mutable_workdir.c_str()),
-                             nullptr, &si, &pi);
+                             nullptr,
+                             wworkdir.empty() ? nullptr : wworkdir.c_str(),
+                             &si, &pi);
 
     CloseHandle(write_pipe);
 
@@ -199,7 +199,7 @@ static std::pair<std::string, int> ExecuteCommand(const std::string& command,
     return {result, static_cast<int>(exit_code)};
 
 #else
-    // POSIX implementation using pipe + fork (inspired by QuantClaw::platform::exec_capture)
+    // POSIX implementation using pipe + fork
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         return {"Failed to create pipe", -1};
@@ -303,7 +303,7 @@ ToolRegistry& ToolRegistry::GetInstance() {
 
 ToolRegistry::ToolRegistry()
     : workspace_path_("~/.prosophor/workspace") {
-    LOG_INFO("ToolRegistry initialized");
+    LOG_DEBUG("ToolRegistry initialized");
 
     // Initialize permission manager with default config
     auto& perm_manager = PermissionManager::GetInstance();
@@ -356,24 +356,24 @@ void ToolRegistry::RegisterBuiltinTools() {
                      [this](const nlohmann::json& p) { return BashTool(p); });
     }
 
-    // glob
+    // background_run - manage long-running background shell sessions
     {
         nlohmann::json params = nlohmann::json::object();
-        params["pattern"] = nlohmann::json::object();
-        params["pattern"]["type"] = "string";
-        RegisterTool("glob", "Find files by pattern", params,
-                     [this](const nlohmann::json& p) { return GlobTool(p); });
-    }
-
-    // grep
-    {
-        nlohmann::json params = nlohmann::json::object();
-        params["pattern"] = nlohmann::json::object();
-        params["pattern"]["type"] = "string";
-        params["path"] = nlohmann::json::object();
-        params["path"]["type"] = "string";
-        RegisterTool("grep", "Search for a pattern in files", params,
-                     [this](const nlohmann::json& p) { return GrepTool(p); });
+        params["action"] = nlohmann::json::object();
+        params["action"]["type"] = "string";
+        params["action"]["enum"] = {"run", "get", "list", "cancel", "drain"};
+        params["action"]["description"] = "Action: run (start command), get (status), list (all), cancel (stop), drain (notifications)";
+        params["command"] = nlohmann::json::object();
+        params["command"]["type"] = "string";
+        params["command"]["description"] = "Shell command to run (required for run action)";
+        params["cwd"] = nlohmann::json::object();
+        params["cwd"]["type"] = "string";
+        params["cwd"]["description"] = "Working directory (required for run action)";
+        params["task_id"] = nlohmann::json::object();
+        params["task_id"]["type"] = "string";
+        params["task_id"]["description"] = "Task ID (required for get/cancel actions)";
+        RegisterTool("background_run", "Manage long-running background shell sessions", params,
+                     [this](const nlohmann::json& p) { return BackgroundRunTool(p); });
     }
 
     // web_search
@@ -398,6 +398,39 @@ void ToolRegistry::RegisterBuiltinTools() {
                      [this](const nlohmann::json& p) { return WebFetchTool(p); });
     }
 
+    // memory_search - Search workspace memory files (MEMORY.md, docs)
+    {
+        nlohmann::json params = nlohmann::json::object();
+        params["query"] = nlohmann::json::object();
+        params["query"]["type"] = "string";
+        params["query"]["description"] = "Search query (keyword match)";
+        params["max_results"] = nlohmann::json::object();
+        params["max_results"]["type"] = "integer";
+        params["max_results"]["description"] = "Max results to return (default 10)";
+        RegisterTool("memory_search", "Search agent memory files (MEMORY.md and workspace docs) using keyword matching", params,
+                     [this](const nlohmann::json& p) { return MemorySearchTool(p); });
+    }
+
+    // memory_get - Read a specific file from workspace
+    {
+        nlohmann::json params = nlohmann::json::object();
+        params["path"] = nlohmann::json::object();
+        params["path"]["type"] = "string";
+        params["path"]["description"] = "Relative path within workspace (e.g. MEMORY.md or docs/notes.md)";
+        RegisterTool("memory_get", "Read a specific file from the agent workspace (MEMORY.md, notes, etc.)", params,
+                     [this](const nlohmann::json& p) { return MemoryGetTool(p); });
+    }
+
+    // apply_patch - Apply multi-file patches in *** Begin Patch format
+    {
+        nlohmann::json params = nlohmann::json::object();
+        params["patch"] = nlohmann::json::object();
+        params["patch"]["type"] = "string";
+        params["patch"]["description"] = "Patch text in *** Begin Patch ... *** End Patch format";
+        RegisterTool("apply_patch", "Apply a multi-file patch in *** Begin Patch / *** End Patch format. Supports: *** Add File, *** Update File (unified diff hunks), *** Delete File", params,
+                     [this](const nlohmann::json& p) { return ApplyPatchTool(p); });
+    }
+
     // token_count - Count tokens in text
     {
         nlohmann::json params = nlohmann::json::object();
@@ -420,557 +453,10 @@ void ToolRegistry::RegisterBuiltinTools() {
                      [this](const nlohmann::json& p) { return TokenUsageTool(p); });
     }
 
-    // // mcp_list_tools - List available MCP tools
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["server"] = nlohmann::json::object();
-    //     params["server"]["type"] = "string";
-    //     params["server"]["description"] = "Server name (optional, omit for all)";
-    //     RegisterTool("mcp_list_tools", "List available MCP tools", params,
-    //                  [this](const nlohmann::json& p) { return McpListToolsTool(p); });
-    // }
-
-    // // mcp_call_tool - Call an MCP tool
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["tool_name"] = nlohmann::json::object();
-    //     params["tool_name"]["type"] = "string";
-    //     params["tool_name"]["description"] = "Name of the tool to call";
-    //     params["arguments"] = nlohmann::json::object();
-    //     params["arguments"]["type"] = "object";
-    //     params["arguments"]["description"] = "Arguments to pass to the tool";
-    //     RegisterTool("mcp_call_tool", "Call an MCP tool", params,
-    //                  [this](const nlohmann::json& p) { return McpCallToolTool(p); });
-    // }
-
-    // // mcp_list_resources - List available MCP resources
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     RegisterTool("mcp_list_resources", "List available MCP resources", params,
-    //                  [this](const nlohmann::json& p) { return McpListResourcesTool(p); });
-    // }
-
-    // // mcp_read_resource - Read an MCP resource
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["uri"] = nlohmann::json::object();
-    //     params["uri"]["type"] = "string";
-    //     params["uri"]["description"] = "URI of the resource to read";
-    //     RegisterTool("mcp_read_resource", "Read an MCP resource", params,
-    //                  [this](const nlohmann::json& p) { return McpReadResourceTool(p); });
-    // }
-
-    // // git_status - Show git repository status
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["path"] = nlohmann::json::object();
-    //     params["path"]["type"] = "string";
-    //     params["path"]["description"] = "Repository path (default: workspace)";
-    //     RegisterTool("git_status", "Show git repository status", params,
-    //                  [this](const nlohmann::json& p) { return GitStatusTool(p); });
-    // }
-
-    // // git_diff - Show changes in git repository
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["path"] = nlohmann::json::object();
-    //     params["path"]["type"] = "string";
-    //     params["path"]["description"] = "Repository path (default: workspace)";
-    //     params["cached"] = nlohmann::json::object();
-    //     params["cached"]["type"] = "boolean";
-    //     params["cached"]["description"] = "Show staged changes (default: false)";
-    //     RegisterTool("git_diff", "Show git changes", params,
-    //                  [this](const nlohmann::json& p) { return GitDiffTool(p); });
-    // }
-
-    // // git_log - Show git commit history
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["path"] = nlohmann::json::object();
-    //     params["path"]["type"] = "string";
-    //     params["path"]["description"] = "Repository path (default: workspace)";
-    //     params["max_count"] = nlohmann::json::object();
-    //     params["max_count"]["type"] = "integer";
-    //     params["max_count"]["description"] = "Maximum number of commits to show (default: 10)";
-    //     RegisterTool("git_log", "Show git commit history", params,
-    //                  [this](const nlohmann::json& p) { return GitLogTool(p); });
-    // }
-
-    // // git_commit - Create a git commit
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["message"] = nlohmann::json::object();
-    //     params["message"]["type"] = "string";
-    //     params["message"]["description"] = "Commit message";
-    //     params["all"] = nlohmann::json::object();
-    //     params["all"]["type"] = "boolean";
-    //     params["all"]["description"] = "Auto-stage all changes before commit (default: false)";
-    //     RegisterTool("git_commit", "Create a git commit", params,
-    //                  [this](const nlohmann::json& p) { return GitCommitTool(p); });
-    // }
-
-    // // git_add - Stage file changes
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["files"] = nlohmann::json::object();
-    //     params["files"]["type"] = "array";
-    //     params["files"]["items"] = {{"type", "string"}};
-    //     params["files"]["description"] = "Files to stage (empty = stage all)";
-    //     RegisterTool("git_add", "Stage file changes for commit", params,
-    //                  [this](const nlohmann::json& p) { return GitAddTool(p); });
-    // }
-
-    // // git_branch - List or create git branches
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["path"] = nlohmann::json::object();
-    //     params["path"]["type"] = "string";
-    //     params["path"]["description"] = "Repository path (default: workspace)";
-    //     params["create"] = nlohmann::json::object();
-    //     params["create"]["type"] = "string";
-    //     params["create"]["description"] = "Branch name to create";
-    //     params["checkout"] = nlohmann::json::object();
-    //     params["checkout"]["type"] = "boolean";
-    //     params["checkout"]["description"] = "Checkout the branch after creating (default: false)";
-    //     RegisterTool("git_branch", "List or create git branches", params,
-    //                  [this](const nlohmann::json& p) { return GitBranchTool(p); });
-    // }
-
-    // // ask_user_question - Interactive user questions
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["questions"] = nlohmann::json::object();
-    //     params["questions"]["type"] = "array";
-    //     params["questions"]["description"] = "List of questions to ask (1-4)";
-    //     params["questions"]["items"] = nlohmann::json::object();
-    //     params["questions"]["items"]["type"] = "object";
-    //     params["questions"]["items"]["properties"] = nlohmann::json::object();
-    //     params["questions"]["items"]["properties"]["question"] = nlohmann::json::object();
-    //     params["questions"]["items"]["properties"]["question"]["type"] = "string";
-    //     params["questions"]["items"]["properties"]["header"] = nlohmann::json::object();
-    //     params["questions"]["items"]["properties"]["header"]["type"] = "string";
-    //     params["questions"]["items"]["properties"]["options"] = nlohmann::json::object();
-    //     params["questions"]["items"]["properties"]["options"]["type"] = "array";
-    //     params["questions"]["items"]["properties"]["multiSelect"] = nlohmann::json::object();
-    //     params["questions"]["items"]["properties"]["multiSelect"]["type"] = "boolean";
-    //     RegisterTool("ask_user_question", "Ask the user interactive questions with multiple choice options", params,
-    //                  [this](const nlohmann::json& p) { return this->AskUserQuestionTool(p); });
-    // }
-
-    // // todo_write - TODO list management
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["operation"] = nlohmann::json::object();
-    //     params["operation"]["type"] = "string";
-    //     params["operation"]["description"] = "Operation: create, update, delete, list, clear";
-    //     params["id"] = nlohmann::json::object();
-    //     params["id"]["type"] = "string";
-    //     params["id"]["description"] = "Todo item ID (for update/delete)";
-    //     params["content"] = nlohmann::json::object();
-    //     params["content"]["type"] = "string";
-    //     params["content"]["description"] = "Todo content (for create)";
-    //     params["status"] = nlohmann::json::object();
-    //     params["status"]["type"] = "string";
-    //     params["status"]["description"] = "Status: pending, completed, cancelled (for update)";
-    //     params["priority"] = nlohmann::json::object();
-    //     params["priority"]["type"] = "string";
-    //     params["priority"]["description"] = "Priority: low, medium, high (for create)";
-    //     RegisterTool("todo_write", "Manage TODO list items", params,
-    //                  [this](const nlohmann::json& p) { return this->TodoWriteTool(p); });
-    // }
-
-    // // Task management tools
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["subject"] = nlohmann::json::object();
-    //     params["subject"]["type"] = "string";
-    //     params["subject"]["description"] = "Task subject";
-    //     params["description"] = nlohmann::json::object();
-    //     params["description"]["type"] = "string";
-    //     params["description"]["description"] = "Task description";
-    //     params["active_form"] = nlohmann::json::object();
-    //     params["active_form"]["type"] = "string";
-    //     params["active_form"]["description"] = "Present continuous form for spinner display";
-    //     RegisterTool("task_create", "Create a new task with subject and description", params,
-    //                  [](const nlohmann::json& p) { return TaskTool::Execute("create", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["task_id"] = nlohmann::json::object();
-    //     params["task_id"]["type"] = "string";
-    //     params["task_id"]["description"] = "Task ID";
-    //     RegisterTool("task_get", "Get task details by ID", params,
-    //                  [](const nlohmann::json& p) { return TaskTool::Execute("get", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["task_id"] = nlohmann::json::object();
-    //     params["task_id"]["type"] = "string";
-    //     params["task_id"]["description"] = "Task ID";
-    //     params["status"] = nlohmann::json::object();
-    //     params["status"]["type"] = "string";
-    //     params["status"]["description"] = "New status: pending, in_progress, completed, cancelled, failed";
-    //     params["owner"] = nlohmann::json::object();
-    //     params["owner"]["type"] = "string";
-    //     params["owner"]["description"] = "Task owner/assignee";
-    //     RegisterTool("task_update", "Update task status, owner, or description", params,
-    //                  [](const nlohmann::json& p) { return TaskTool::Execute("update", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["status"] = nlohmann::json::object();
-    //     params["status"]["type"] = "string";
-    //     params["status"]["description"] = "Filter by status (optional)";
-    //     RegisterTool("task_list", "List all tasks, optionally filtered by status", params,
-    //                  [](const nlohmann::json& p) { return TaskTool::Execute("list", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["task_id"] = nlohmann::json::object();
-    //     params["task_id"]["type"] = "string";
-    //     params["task_id"]["description"] = "Task ID to delete";
-    //     RegisterTool("task_delete", "Delete a task by ID", params,
-    //                  [](const nlohmann::json& p) { return TaskTool::Execute("delete", p); });
-    // }
-
-    // // Cron scheduled task tools
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["cron"] = nlohmann::json::object();
-    //     params["cron"]["type"] = "string";
-    //     params["cron"]["description"] = "Cron expression (5-field: M H DoM Mon DoW)";
-    //     params["prompt"] = nlohmann::json::object();
-    //     params["prompt"]["type"] = "string";
-    //     params["prompt"]["description"] = "Prompt to execute";
-    //     params["recurring"] = nlohmann::json::object();
-    //     params["recurring"]["type"] = "boolean";
-    //     params["recurring"]["description"] = "Whether to repeat (default true)";
-    //     params["durable"] = nlohmann::json::object();
-    //     params["durable"]["type"] = "boolean";
-    //     params["durable"]["description"] = "Persist to file (default false)";
-    //     RegisterTool("cron_create", "Schedule a new recurring or one-shot task", params,
-    //                  [](const nlohmann::json& p) { return CronTool::Execute("create", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     RegisterTool("cron_list", "List all scheduled tasks", params,
-    //                  [](const nlohmann::json& p) { return CronTool::Execute("list", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["task_id"] = nlohmann::json::object();
-    //     params["task_id"]["type"] = "string";
-    //     params["task_id"]["description"] = "Task ID to delete";
-    //     RegisterTool("cron_delete", "Delete a scheduled task", params,
-    //                  [](const nlohmann::json& p) { return CronTool::Execute("delete", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["task_id"] = nlohmann::json::object();
-    //     params["task_id"]["type"] = "string";
-    //     params["task_id"]["description"] = "Task ID to run immediately";
-    //     RegisterTool("cron_run", "Run a scheduled task immediately", params,
-    //                  [](const nlohmann::json& p) { return CronTool::Execute("run", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["task_id"] = nlohmann::json::object();
-    //     params["task_id"]["type"] = "string";
-    //     params["task_id"]["description"] = "Task ID to pause";
-    //     RegisterTool("cron_pause", "Pause a scheduled task", params,
-    //                  [](const nlohmann::json& p) { return CronTool::Execute("pause", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["task_id"] = nlohmann::json::object();
-    //     params["task_id"]["type"] = "string";
-    //     params["task_id"]["description"] = "Task ID to resume";
-    //     RegisterTool("cron_resume", "Resume a paused scheduled task", params,
-    //                  [](const nlohmann::json& p) { return CronTool::Execute("resume", p); });
-    // }
-
-    // // LSP tools - Language Server Protocol integration
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["uri"] = nlohmann::json::object();
-    //     params["uri"]["type"] = "string";
-    //     params["uri"]["description"] = "File URI (file://path/to/file)";
-    //     params["severity"] = nlohmann::json::object();
-    //     params["severity"]["type"] = "string";
-    //     params["severity"]["description"] = "Filter by severity: error|warning|information|hint";
-    //     RegisterTool("lsp_diagnostics", "Get diagnostics (errors, warnings) for a file", params,
-    //                  [this](const nlohmann::json& p) { return this->LspDiagnosticsTool(p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["uri"] = nlohmann::json::object();
-    //     params["uri"]["type"] = "string";
-    //     params["uri"]["description"] = "File URI (file://path/to/file)";
-    //     params["line"] = nlohmann::json::object();
-    //     params["line"]["type"] = "integer";
-    //     params["line"]["description"] = "Line number (0-based)";
-    //     params["character"] = nlohmann::json::object();
-    //     params["character"]["type"] = "integer";
-    //     params["character"]["description"] = "Character position (0-based)";
-    //     RegisterTool("lsp_go_to_definition", "Go to definition of symbol at position", params,
-    //                  [this](const nlohmann::json& p) { return this->LspGoToDefinitionTool(p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["uri"] = nlohmann::json::object();
-    //     params["uri"]["type"] = "string";
-    //     params["uri"]["description"] = "File URI";
-    //     params["line"] = nlohmann::json::object();
-    //     params["line"]["type"] = "integer";
-    //     params["line"]["description"] = "Line number (0-based)";
-    //     params["character"] = nlohmann::json::object();
-    //     params["character"]["type"] = "integer";
-    //     params["character"]["description"] = "Character position (0-based)";
-    //     params["include_declaration"] = nlohmann::json::object();
-    //     params["include_declaration"]["type"] = "boolean";
-    //     params["include_declaration"]["description"] = "Include declaration in results";
-    //     RegisterTool("lsp_find_references", "Find all references to symbol at position", params,
-    //                  [this](const nlohmann::json& p) { return this->LspFindReferencesTool(p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["uri"] = nlohmann::json::object();
-    //     params["uri"]["type"] = "string";
-    //     params["uri"]["description"] = "File URI";
-    //     params["line"] = nlohmann::json::object();
-    //     params["line"]["type"] = "integer";
-    //     params["line"]["description"] = "Line number (0-based)";
-    //     params["character"] = nlohmann::json::object();
-    //     params["character"]["type"] = "integer";
-    //     params["character"]["description"] = "Character position (0-based)";
-    //     RegisterTool("lsp_get_hover", "Get hover information (type, docs) for symbol at position", params,
-    //                  [this](const nlohmann::json& p) { return this->LspGetHoverTool(p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["uri"] = nlohmann::json::object();
-    //     params["uri"]["type"] = "string";
-    //     params["uri"]["description"] = "File URI";
-    //     RegisterTool("lsp_document_symbols", "Get all symbols (functions, classes, etc.) in document", params,
-    //                  [this](const nlohmann::json& p) { return this->LspDocumentSymbolsTool(p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["query"] = nlohmann::json::object();
-    //     params["query"]["type"] = "string";
-    //     params["query"]["description"] = "Symbol search query";
-    //     RegisterTool("lsp_workspace_symbols", "Search for symbols across entire workspace", params,
-    //                  [this](const nlohmann::json& p) { return this->LspWorkspaceSymbolsTool(p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["uri"] = nlohmann::json::object();
-    //     params["uri"]["type"] = "string";
-    //     params["uri"]["description"] = "File URI";
-    //     RegisterTool("lsp_format_document", "Format document according to language rules", params,
-    //                  [this](const nlohmann::json& p) { return this->LspFormatDocumentTool(p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     RegisterTool("lsp_all_diagnostics", "Get all diagnostics across all open files", params,
-    //                  [this](const nlohmann::json& p) { return this->LspAllDiagnosticsTool(p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     RegisterTool("lsp_list_servers", "List all registered LSP servers", params,
-    //                  [this](const nlohmann::json& p) { return this->LspListServersTool(p); });
-    // }
-
-    // // Agent tools - Sub-agent launching and skill execution
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["prompt"] = nlohmann::json::object();
-    //     params["prompt"]["type"] = "string";
-    //     params["prompt"]["description"] = "Task description for the sub-agent";
-    //     params["subagent_type"] = nlohmann::json::object();
-    //     params["subagent_type"]["type"] = "string";
-    //     params["subagent_type"]["description"] = "Type: general-purpose, Explore, Plan, Code (optional)";
-    //     params["model"] = nlohmann::json::object();
-    //     params["model"]["type"] = "string";
-    //     params["model"]["description"] = "Model to use (optional)";
-    //     RegisterTool("agent_launch", "Launch a sub-agent to handle a complex task", params,
-    //                  [](const nlohmann::json& p) { return AgentTool::Execute("launch", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["skill"] = nlohmann::json::object();
-    //     params["skill"]["type"] = "string";
-    //     params["skill"]["description"] = "Name of the skill to execute";
-    //     params["args"] = nlohmann::json::object();
-    //     params["args"]["type"] = "string";
-    //     params["args"]["description"] = "Arguments for the skill (optional)";
-    //     RegisterTool("agent_skill", "Execute a skill", params,
-    //                  [](const nlohmann::json& p) { return AgentTool::Execute("skill", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["query"] = nlohmann::json::object();
-    //     params["query"]["type"] = "string";
-    //     params["query"]["description"] = "Search query to find tools";
-    //     RegisterTool("agent_tool_search", "Search for available tools by name or description", params,
-    //                  [](const nlohmann::json& p) { return AgentTool::Execute("tool_search", p); });
-    // }
-
-    // // Worktree tools - git worktree management for task isolation
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["name"] = nlohmann::json::object();
-    //     params["name"]["type"] = "string";
-    //     params["name"]["description"] = "Worktree name";
-    //     params["task_id"] = nlohmann::json::object();
-    //     params["task_id"]["type"] = "string";
-    //     params["task_id"]["description"] = "Associated task ID (optional)";
-    //     params["base_branch"] = nlohmann::json::object();
-    //     params["base_branch"]["type"] = "string";
-    //     params["base_branch"]["description"] = "Base branch to create from (optional)";
-    //     RegisterTool("worktree_create", "Create a new git worktree for task isolation", params,
-    //                  [](const nlohmann::json& p) { return WorktreeTool::GetInstance().Execute("create", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["name"] = nlohmann::json::object();
-    //     params["name"]["type"] = "string";
-    //     params["name"]["description"] = "Worktree name";
-    //     params["force"] = nlohmann::json::object();
-    //     params["force"]["type"] = "boolean";
-    //     params["force"]["description"] = "Force removal (default: false)";
-    //     params["complete_task"] = nlohmann::json::object();
-    //     params["complete_task"]["type"] = "boolean";
-    //     params["complete_task"]["description"] = "Complete associated task (default: false)";
-    //     RegisterTool("worktree_remove", "Remove a git worktree", params,
-    //                  [](const nlohmann::json& p) { return WorktreeTool::GetInstance().Execute("remove", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["name"] = nlohmann::json::object();
-    //     params["name"]["type"] = "string";
-    //     params["name"]["description"] = "Worktree name";
-    //     RegisterTool("worktree_keep", "Keep a worktree (mark as persistent)", params,
-    //                  [](const nlohmann::json& p) { return WorktreeTool::GetInstance().Execute("keep", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["name"] = nlohmann::json::object();
-    //     params["name"]["type"] = "string";
-    //     params["name"]["description"] = "Worktree name";
-    //     RegisterTool("worktree_get", "Get worktree details", params,
-    //                  [](const nlohmann::json& p) { return WorktreeTool::GetInstance().Execute("get", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     RegisterTool("worktree_list", "List all worktrees", params,
-    //                  [](const nlohmann::json& p) { return WorktreeTool::GetInstance().Execute("list", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["worktree"] = nlohmann::json::object();
-    //     params["worktree"]["type"] = "string";
-    //     params["worktree"]["description"] = "Worktree name";
-    //     params["command"] = nlohmann::json::object();
-    //     params["command"]["type"] = "string";
-    //     params["command"]["description"] = "Command to execute";
-    //     params["timeout"] = nlohmann::json::object();
-    //     params["timeout"]["type"] = "integer";
-    //     params["timeout"]["description"] = "Timeout in seconds (default: 300)";
-    //     RegisterTool("worktree_exec", "Execute a command in a worktree", params,
-    //                  [](const nlohmann::json& p) { return WorktreeTool::GetInstance().Execute("exec", p); });
-    // }
-
-    // // Background run tools - async command execution
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["command"] = nlohmann::json::object();
-    //     params["command"]["type"] = "string";
-    //     params["command"]["description"] = "Shell command to run in background";
-    //     params["cwd"] = nlohmann::json::object();
-    //     params["cwd"]["type"] = "string";
-    //     params["cwd"]["description"] = "Working directory (optional)";
-    //     RegisterTool("background_run", "Run a command in background", params,
-    //                  [](const nlohmann::json& p) { return BackgroundRunTool::GetInstance().Execute("run", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["task_id"] = nlohmann::json::object();
-    //     params["task_id"]["type"] = "string";
-    //     params["task_id"]["description"] = "Background task ID";
-    //     RegisterTool("background_get", "Get background task status and result", params,
-    //                  [](const nlohmann::json& p) { return BackgroundRunTool::GetInstance().Execute("get", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     RegisterTool("background_list", "List all background tasks", params,
-    //                  [](const nlohmann::json& p) { return BackgroundRunTool::GetInstance().Execute("list", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["task_id"] = nlohmann::json::object();
-    //     params["task_id"]["type"] = "string";
-    //     params["task_id"]["description"] = "Background task ID";
-    //     RegisterTool("background_cancel", "Cancel a background task", params,
-    //                  [](const nlohmann::json& p) { return BackgroundRunTool::GetInstance().Execute("cancel", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     RegisterTool("background_drain", "Drain background task notifications", params,
-    //                  [](const nlohmann::json& p) { return BackgroundRunTool::GetInstance().Execute("drain", p); });
-    // }
-
-    // // Task claim and scan tools for autonomous agents
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     params["task_id"] = nlohmann::json::object();
-    //     params["task_id"]["type"] = "string";
-    //     params["task_id"]["description"] = "Task ID to claim";
-    //     params["agent_id"] = nlohmann::json::object();
-    //     params["agent_id"]["type"] = "string";
-    //     params["agent_id"]["description"] = "Agent ID claiming the task";
-    //     RegisterTool("task_claim", "Claim an unclaimed task", params,
-    //                  [](const nlohmann::json& p) { return TaskTool::Execute("claim", p); });
-    // }
-
-    // {
-    //     nlohmann::json params = nlohmann::json::object();
-    //     RegisterTool("task_scan_unclaimed", "Scan for unclaimed tasks", params,
-    //                  [](const nlohmann::json& p) { return TaskTool::Execute("scan_unclaimed", p); });
-    // }
-
-    // // Register MCP tools dynamically
+    // Register MCP tools dynamically
     // RegisterMcpTools();
 
-    LOG_INFO("Registered {} built-in tools", tool_schemas_.size());
+    LOG_DEBUG("Registered built-in tools", tool_schemas_.size());
 }
 
 void ToolRegistry::RegisterTool(
@@ -1011,13 +497,13 @@ bool ToolRegistry::HasTool(const std::string& tool_name) const {
 
 void ToolRegistry::SetWorkspace(const std::string& path) {
     workspace_path_ = path;
-    LOG_INFO("Set workspace: {}", workspace_path_);
+    LOG_DEBUG("Set workspace: {}", workspace_path_);
 }
 
 void ToolRegistry::SetPermissionConfirmCallback(PermissionManager::ConfirmCallback cb) {
     auto& perm_manager = PermissionManager::GetInstance();
     perm_manager.SetConfirmCallback(std::move(cb));
-    LOG_INFO("Permission confirmation callback set");
+    LOG_DEBUG("Permission confirmation callback set");
 }
 
 std::string ToolRegistry::ExecuteTool(const std::string& tool_name,
@@ -1149,14 +635,6 @@ std::string ToolRegistry::BashTool(const nlohmann::json& params) {
     // Always return output + exit code, even if non-zero
     // Let the LLM decide how to interpret the result
     return FormatCommandResult(result, status);
-}
-
-std::string ToolRegistry::GlobTool(const nlohmann::json& params) {
-    return GlobTool::GetInstance().Execute(params);
-}
-
-std::string ToolRegistry::GrepTool(const nlohmann::json& params) {
-    return GrepTool::GetInstance().Execute(params);
 }
 
 std::string ToolRegistry::WebFetchTool(const nlohmann::json& params) {
@@ -1305,8 +783,6 @@ std::string ToolRegistry::WebSearchTool(const nlohmann::json& params) {
     // Get API keys from environment
     const char* brave_key = std::getenv("BRAVE_API_KEY");
     const char* tavily_key = std::getenv("TAVILY_API_KEY");
-    const char* perp_key = std::getenv("PERPLEXITY_API_KEY");
-    const char* xai_key = std::getenv("XAI_API_KEY");
 
     std::string last_error;
     std::ostringstream result;
@@ -1919,148 +1395,344 @@ std::string ToolRegistry::GitBranchTool(const nlohmann::json& params) {
     return result;
 }
 
-std::string ToolRegistry::AskUserQuestionTool(const nlohmann::json& params) {
-    auto& question_tool = prosophor::AskUserQuestionTool::GetInstance();
+// ==================== Memory Tools ====================
 
-    // Parse questions from parameters
-    std::vector<Question> questions;
-    if (params.contains("questions") && params["questions"].is_array()) {
-        questions = question_tool.ParseQuestions(params["questions"]);
+std::string ToolRegistry::MemorySearchTool(const nlohmann::json& params) {
+    std::string query = params.value("query", "");
+    int max_results = params.value("max_results", 10);
+
+    if (query.empty()) {
+        throw std::runtime_error("query is required");
     }
 
-    if (questions.empty()) {
-        return "Error: No valid questions provided";
+    // Convert query to lowercase for case-insensitive matching
+    std::string query_lower = query;
+    std::transform(query_lower.begin(), query_lower.end(), query_lower.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    // Collect tokens from query for matching
+    std::vector<std::string> tokens;
+    std::istringstream iss(query_lower);
+    std::string token;
+    while (iss >> token) {
+        tokens.push_back(token);
     }
 
-    // Validate questions
-    std::string error;
-    if (!question_tool.ValidateQuestions(questions, error)) {
-        return "Error: " + error;
+    if (tokens.empty()) {
+        throw std::runtime_error("query is required");
     }
 
-    // Ask questions and collect answers
-    auto result = question_tool.Ask(questions);
+    struct SearchResult {
+        std::string source;
+        std::string content;
+        int score;
+        int line_number;
+    };
 
-    // Format result
-    nlohmann::json json;
-    json["questions"] = nlohmann::json::array();
-    for (const auto& q : result.questions) {
-        nlohmann::json qj;
-        qj["question"] = q.question;
-        qj["header"] = q.header;
-        qj["options"] = nlohmann::json::array();
-        for (const auto& opt : q.options) {
-            nlohmann::json oj;
-            oj["label"] = opt.label;
-            oj["description"] = opt.description;
-            oj["preview"] = opt.preview;
-            qj["options"].push_back(oj);
+    std::vector<SearchResult> results;
+
+    // Search workspace directory for text files
+    namespace fs = std::filesystem;
+    fs::path ws(workspace_path_);
+
+    if (fs::exists(ws) && fs::is_directory(ws)) {
+        for (auto& entry : fs::recursive_directory_iterator(ws)) {
+            if (!entry.is_regular_file()) continue;
+
+            auto ext = entry.path().extension().string();
+            // Only search text-based files
+            bool is_text = (ext == ".md" || ext == ".txt" || ext == ".cc" ||
+                           ext == ".h" || ext == ".cpp" || ext == ".hpp" ||
+                           ext == ".json" || ext == ".yaml" || ext == ".yml" ||
+                           ext == ".py" || ext == ".js" || ext == ".ts" ||
+                           ext == ".rs" || ext == ".go" || ext == ".cmake" ||
+                           ext == ".sh" || ext == ".ini" || ext == ".cfg");
+            if (!is_text) continue;
+
+            // Skip binary or very large files (>500KB)
+            if (entry.file_size() > 512000) continue;
+
+            std::ifstream file(entry.path());
+            if (!file.is_open()) continue;
+
+            std::string line;
+            int line_num = 0;
+            while (std::getline(file, line)) {
+                line_num++;
+                std::string line_lower = line;
+                std::transform(line_lower.begin(), line_lower.end(), line_lower.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
+
+                // Count matching tokens
+                int match_count = 0;
+                for (const auto& t : tokens) {
+                    if (line_lower.find(t) != std::string::npos) {
+                        match_count++;
+                    }
+                }
+
+                if (match_count > 0) {
+                    SearchResult sr;
+                    sr.source = fs::relative(entry.path(), ws).string();
+                    sr.line_number = line_num;
+
+                    // Trim line for display
+                    if (line.size() > 200) {
+                        sr.content = line.substr(0, 200) + "...";
+                    } else {
+                        sr.content = line;
+                    }
+
+                    sr.score = match_count;
+                    results.push_back(sr);
+
+                    // Limit per-file results to avoid flooding
+                    if (results.size() >= (size_t)max_results * 3) break;
+                }
+            }
         }
-        qj["multiSelect"] = q.multiSelect;
-        json["questions"].push_back(qj);
     }
 
-    json["answers"] = nlohmann::json::object();
-    for (const auto& [q, a] : result.answers) {
-        json["answers"][q] = a;
+    // Sort by score descending
+    std::sort(results.begin(), results.end(),
+              [](const SearchResult& a, const SearchResult& b) {
+                  return a.score > b.score;
+              });
+
+    // Trim to max_results
+    if (results.size() > (size_t)max_results) {
+        results.resize(max_results);
     }
 
-    return "User answered:\n" + json.dump(2);
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto& r : results) {
+        nlohmann::json entry;
+        entry["source"] = r.source;
+        entry["content"] = r.content;
+        entry["score"] = r.score;
+        entry["lineNumber"] = r.line_number;
+        arr.push_back(entry);
+    }
+
+    nlohmann::json result;
+    result["results"] = arr;
+    result["count"] = arr.size();
+    result["query"] = query;
+    return result.dump(2);
 }
 
-std::string ToolRegistry::TodoWriteTool(const nlohmann::json& params) {
-    auto& todo_tool = prosophor::TodoWriteTool::GetInstance();
-
-    std::string operation = params.value("operation", "list");
-
-    if (operation == "list") {
-        return todo_tool.FormatTodos();
+std::string ToolRegistry::MemoryGetTool(const nlohmann::json& params) {
+    std::string rel_path = params.value("path", "");
+    if (rel_path.empty()) {
+        throw std::runtime_error("path is required");
     }
 
-    if (operation == "create") {
-        std::string content = params.value("content", "");
-        if (content.empty()) {
-            return "Error: content is required for create operation";
+    namespace fs = std::filesystem;
+    fs::path ws(workspace_path_);
+    fs::path full_path = ws / rel_path;
+
+    // Security: resolve and verify path stays within workspace
+    std::error_code ec;
+    auto canonical_full = fs::weakly_canonical(full_path, ec);
+    if (ec) {
+        throw std::runtime_error("Invalid path: " + rel_path);
+    }
+
+    auto canonical_ws = fs::weakly_canonical(ws, ec);
+    if (ec) {
+        throw std::runtime_error("Workspace not accessible: " + workspace_path_);
+    }
+
+    // Check prefix match (path must be under workspace)
+    auto ws_str = canonical_ws.string();
+    auto full_str = canonical_full.string();
+    if (full_str.find(ws_str) != 0) {
+        throw std::runtime_error("Access denied: path outside workspace");
+    }
+
+    if (!fs::exists(full_path)) {
+        throw std::runtime_error("File not found: " + rel_path);
+    }
+
+    if (!fs::is_regular_file(full_path)) {
+        throw std::runtime_error("Not a file: " + rel_path);
+    }
+
+    std::ifstream f(full_path);
+    if (!f) {
+        throw std::runtime_error("Cannot read: " + rel_path);
+    }
+
+    std::string content((std::istreambuf_iterator<char>(f)),
+                         std::istreambuf_iterator<char>());
+
+    nlohmann::json result;
+    result["path"] = rel_path;
+    result["content"] = content;
+    return result.dump(2);
+}
+
+std::string ToolRegistry::ApplyPatchTool(const nlohmann::json& params) {
+    std::string patch = params.value("patch", "");
+    if (patch.empty()) {
+        throw std::runtime_error("patch is required");
+    }
+
+    // Find Begin/End markers
+    const std::string kBegin = "*** Begin Patch";
+    const std::string kEnd = "*** End Patch";
+    size_t begin_pos = patch.find(kBegin);
+    size_t end_pos = patch.find(kEnd);
+
+    if (begin_pos == std::string::npos) {
+        throw std::runtime_error("Missing '*** Begin Patch' marker");
+    }
+
+    std::string body;
+    if (end_pos != std::string::npos) {
+        body = patch.substr(begin_pos + kBegin.size(), end_pos - begin_pos - kBegin.size());
+    } else {
+        body = patch.substr(begin_pos + kBegin.size());
+    }
+
+    // Split into lines
+    std::vector<std::string> lines;
+    std::istringstream iss(body);
+    std::string line;
+    while (std::getline(iss, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        lines.push_back(line);
+    }
+
+    namespace fs = std::filesystem;
+    int applied = 0;
+    std::string current_file;
+    enum class FileOp { None, Add, Update, Delete } op = FileOp::None;
+    std::vector<std::string> add_content;
+    std::vector<std::string> diff_hunks;
+
+    auto flush_file = [&]() {
+        if (current_file.empty()) return;
+
+        fs::path fpath(current_file);
+
+        if (op == FileOp::Add) {
+            fs::create_directories(fpath.parent_path());
+            std::ofstream f(fpath);
+            for (const auto& l : add_content) {
+                f << l << "\n";
+            }
+            applied++;
+        } else if (op == FileOp::Delete) {
+            if (fs::exists(fpath)) fs::remove(fpath);
+            applied++;
+        } else if (op == FileOp::Update && !diff_hunks.empty()) {
+            if (!fs::exists(fpath)) {
+                LOG_WARN("ApplyPatch: file not found for update: {}", current_file);
+                current_file.clear();
+                op = FileOp::None;
+                diff_hunks.clear();
+                return;
+            }
+
+            std::ifstream f(fpath);
+            std::vector<std::string> file_lines;
+            std::string fl;
+            while (std::getline(f, fl)) {
+                if (!fl.empty() && fl.back() == '\r') fl.pop_back();
+                file_lines.push_back(fl);
+            }
+            f.close();
+
+            // Apply hunks (simple line-based application)
+            std::vector<std::string> result_lines = file_lines;
+            int line_offset = 0;
+            size_t i = 0;
+            while (i < diff_hunks.size()) {
+                std::string& hl = diff_hunks[i];
+                if (hl.size() >= 2 && hl.substr(0, 2) == "@@") {
+                    // Parse @@ -old_start,old_count +new_start,new_count @@
+                    int old_start = 0;
+                    int old_count = 0;
+                    sscanf(hl.c_str(), "@@ -%d,%d", &old_start, &old_count);
+                    int apply_at = old_start - 1 + line_offset;
+
+                    // Collect hunk lines
+                    std::vector<std::string> removed, added;
+                    size_t j = i + 1;
+                    while (j < diff_hunks.size() && diff_hunks[j].size() >= 2 &&
+                           diff_hunks[j].substr(0, 2) != "@@") {
+                        char ch = diff_hunks[j][0];
+                        std::string content = diff_hunks[j].substr(1);
+                        if (ch == '-') removed.push_back(content);
+                        else if (ch == '+') added.push_back(content);
+                        j++;
+                    }
+
+                    // Splice: replace removed lines with added lines
+                    if (apply_at >= 0 &&
+                        apply_at <= static_cast<int>(result_lines.size())) {
+                        result_lines.erase(
+                            result_lines.begin() + apply_at,
+                            result_lines.begin() + apply_at +
+                                static_cast<int>(removed.size()));
+                        result_lines.insert(result_lines.begin() + apply_at,
+                                            added.begin(), added.end());
+                        line_offset += static_cast<int>(added.size()) -
+                                       static_cast<int>(removed.size());
+                    }
+                    i = j;
+                } else {
+                    i++;
+                }
+            }
+
+            std::ofstream out(fpath);
+            for (const auto& l : result_lines) {
+                out << l << "\n";
+            }
+            applied++;
         }
-        std::string priority = params.value("priority", "medium");
-        std::string id = todo_tool.CreateTodo(content, priority);
-        return "Created todo: " + id + "\n  Content: " + content + "\n  Priority: " + priority;
+
+        current_file.clear();
+        op = FileOp::None;
+        add_content.clear();
+        diff_hunks.clear();
+    };
+
+    for (const auto& l : lines) {
+        if (l.substr(0, 16) == "*** Add File: ") {
+            flush_file();
+            current_file = l.substr(14);
+            op = FileOp::Add;
+        } else if (l.substr(0, 19) == "*** Update File: ") {
+            flush_file();
+            current_file = l.substr(17);
+            op = FileOp::Update;
+        } else if (l.substr(0, 19) == "*** Delete File: ") {
+            flush_file();
+            current_file = l.substr(17);
+            op = FileOp::Delete;
+        } else if (op == FileOp::Add) {
+            add_content.push_back(l);
+        } else if (op == FileOp::Update) {
+            diff_hunks.push_back(l);
+        }
     }
+    flush_file();
 
-    if (operation == "update") {
-        std::string id = params.value("id", "");
-        if (id.empty()) {
-            return "Error: id is required for update operation";
-        }
-        std::string status = params.value("status", "pending");
-        TodoStatus todo_status;
-        if (status == "completed") {
-            todo_status = TodoStatus::Completed;
-        } else if (status == "cancelled") {
-            todo_status = TodoStatus::Cancelled;
-        } else {
-            todo_status = TodoStatus::Pending;
-        }
-        if (todo_tool.UpdateTodoStatus(id, todo_status)) {
-            return "Updated todo " + id + " status to " + status;
-        }
-        return "Error: Todo not found: " + id;
-    }
-
-    if (operation == "delete") {
-        std::string id = params.value("id", "");
-        if (id.empty()) {
-            return "Error: id is required for delete operation";
-        }
-        if (todo_tool.DeleteTodo(id)) {
-            return "Deleted todo: " + id;
-        }
-        return "Error: Todo not found: " + id;
-    }
-
-    if (operation == "clear") {
-        int count = todo_tool.ClearCompleted();
-        return "Cleared " + std::to_string(count) + " completed/cancelled todos";
-    }
-
-    return "Error: Unknown operation: " + operation + ". Use: list, create, update, delete, clear";
+    nlohmann::json result;
+    result["ok"] = true;
+    result["applied"] = applied;
+    result["message"] = "Applied patch: " + std::to_string(applied) + " file(s) modified";
+    return result.dump(2);
 }
 
-// LSP Tool implementations
-std::string ToolRegistry::LspDiagnosticsTool(const nlohmann::json& params) {
-    return prosophor::LspTool::GetInstance().Diagnostics(params);
-}
+// ==================== Background Process Tool ====================
 
-std::string ToolRegistry::LspGoToDefinitionTool(const nlohmann::json& params) {
-    return prosophor::LspTool::GetInstance().GoToDefinition(params);
-}
-
-std::string ToolRegistry::LspFindReferencesTool(const nlohmann::json& params) {
-    return prosophor::LspTool::GetInstance().FindReferences(params);
-}
-
-std::string ToolRegistry::LspGetHoverTool(const nlohmann::json& params) {
-    return prosophor::LspTool::GetInstance().GetHover(params);
-}
-
-std::string ToolRegistry::LspDocumentSymbolsTool(const nlohmann::json& params) {
-    return prosophor::LspTool::GetInstance().GetDocumentSymbols(params);
-}
-
-std::string ToolRegistry::LspWorkspaceSymbolsTool(const nlohmann::json& params) {
-    return prosophor::LspTool::GetInstance().WorkspaceSymbols(params);
-}
-
-std::string ToolRegistry::LspFormatDocumentTool(const nlohmann::json& params) {
-    return prosophor::LspTool::GetInstance().FormatDocument(params);
-}
-
-std::string ToolRegistry::LspAllDiagnosticsTool(const nlohmann::json& params) {
-    return prosophor::LspTool::GetInstance().GetAllDiagnostics(params);
-}
-
-std::string ToolRegistry::LspListServersTool(const nlohmann::json& params) {
-    return prosophor::LspTool::GetInstance().ListServers(params);
+std::string ToolRegistry::BackgroundRunTool(const nlohmann::json& params) {
+    std::string action = params.value("action", "run");
+    return prosophor::BackgroundRunTool::GetInstance().Execute(action, params);
 }
 
 }  // namespace prosophor

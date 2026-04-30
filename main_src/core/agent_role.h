@@ -26,11 +26,12 @@ struct AgentRole {
     std::string avatar;                // 头像/emoji，如 "👨‍💻"
 
     // === Provider 配置（角色可绑定专属 Provider）===
-    std::string provider_name;         // ""=使用全局默认，或指定"anthropic"/"ollama"/"qwen"
+    std::string provider_prot;          // ""=使用全局默认，或指定"anthropic"/"ollama"/"deepseek"
     std::string model;                 // 专属模型
     double temperature = 0.7;
     int max_tokens = 8192;
     bool enable_streaming = true;      // 是否启用流式输出
+    std::string thinking = "off";      // "off" | "low" | "medium" | "high"
 
     // === 性格配置 ===
     std::string personality;           // "concise", "detailed", "cautious", "creative"
@@ -52,7 +53,7 @@ struct AgentRole {
 
     /// 检查是否绑定了专属 Provider
     bool HasCustomProvider() const {
-        return !provider_name.empty();
+        return !provider_prot.empty();
     }
 
     /// 生成角色专属 prompt（包含 system prompt 和 personality）

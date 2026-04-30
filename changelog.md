@@ -1,5 +1,63 @@
 # Changelog
 
+## [Unreleased] - v0.4.0 重大重构
+
+### 新增功能
+- **OpenAI Provider**: 新增 OpenAI 兼容接口支持 (`providers/openai_provider.cc/h`)
+- **语音合成 (TTS)**: 新增文本转语音播报功能 (`common/tts_speaker.cc/h`)
+- **Galgame 模式**: 新增美少女游戏风格界面 (`scene/galgame_mode.cc/h`)
+- **Anime 角色系统**: 新增动画角色渲染 (`scene/anime_character.cc/h`)
+- **Home Screen**: 新增主页场景 (`scene/home_screen.cc/h`)
+- **Media Engine UI 组件**: 从 `components/` 迁移并重构 UI 组件到 `media_engine/ui_component/`
+  - `header_bar.cc/h` - 顶部导航栏
+  - `input_panel.cc/h` - 输入面板
+  - `ui_container.cc/h` - UI 容器
+  - `ui_panel.cc/h` - 通用面板
+- **配置增强**: `config.cc/h` 大幅扩展配置项支持
+
+### 重构优化
+- **架构重构 - UI 模块**:
+  - `components/input_panel.cc/h` → `media_engine/ui_component/input_panel.cc/h`
+  - `components/ui_panel.cc/h` → `media_engine/ui_component/ui_panel.cc/h`
+  - 移除旧版 `components/ui_panel.h`、`components/ui_types.h` 中的废弃接口
+- **Provider 体系重构**:
+  - 新增 `providers/openai_provider.cc` (479 行)，统一兼容 OpenAI 格式接口
+  - 移除 `providers/qwen_provider.cc/h` (Qwen 功能合并至 OpenAI 兼容模式)
+  - 重构 `anthropic_provider.cc/h`、`ollama_provider.cc/h`、`llm_provider.cc/h`
+- **工具系统大规模精简**: 删除 20 个工具文件
+  - 移除 `agent_tool` (subagent 协调工具)
+  - 移除 `ask_user_question_tool` (交互工具)
+  - 移除 `lsp_tool` (LSP 语言服务器工具)
+  - 移除 `glob_tool`、`grep_tool` (搜索工具)
+  - 移除 `cron_tool`、`task_tool`、`todo_write_tool` (任务管理工具)
+  - 移除 `worktree_tool` (Git worktree 工具)
+  - `tool_registry.cc` 从 ~1070 行变更，大幅精简
+- **管理器精简**:
+  - 移除 `buddy_manager.cc/h`、`buddy_types.cc/h` (伙伴系统)
+  - 移除 `worktree_manager.cc/h` (worktree 管理)
+- **CLI 精简**: `command_registry.cc` 删除 ~121 行冗余代码
+
+### 性能与质量
+- `agent_core.cc` 核心逻辑重构优化 (~194 行变更)
+- `agent_session_manager.cc` 会话管理增强 (~135 行变更)
+- `agent_role_loader.cc` 角色加载逻辑改进 (~90 行变更)
+- `agent_state_observer.cc` 状态同步机制优化 (~205 行变更)
+- `sdl_app.cc` SDL 应用框架增强 (~184 行变更)
+
+### 配置更新
+- `config/.prosophor/settings.json` 大幅扩展 (126 行变更)
+- `config/.prosophor/roles/` 下所有角色配置微调 (architect, coder, default, reviewer, teacher)
+- `CMakeLists.txt` 构建系统更新，适配新文件结构
+- `.gitignore` 忽略规则更新
+
+### 文件统计
+- 变更文件：110 个
+- 新增：+4,359 行
+- 删除：-6,575 行
+- 净变化：-2,216 行（大规模精简）
+
+---
+
 ## [2026-04-19] - 重大更新，增加 UI
 
 ### 新增功能

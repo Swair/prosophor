@@ -2,14 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "colors.h"
 #include "components/ui_types.h"
-#include "components/chat_panel.h"
-#include "components/input_panel.h"
-#include "components/status_bar.h"
 #include "scene/layout_config.h"
 #include <string>
 #include <functional>
+#include <memory>
 
 // ============================================================================
 // UI 渲染器 - 统一处理 SDL + ImGui 渲染，对外不暴露 ImGui/SDL 头文件
@@ -17,6 +14,10 @@
 // ============================================================================
 
 namespace prosophor {
+
+class ChatPanel;
+class InputPanel;
+class StatusBar;
 
 /// UI 渲染器 - 统一处理 SDL + ImGui 渲染
 class UIRenderer {
@@ -39,7 +40,7 @@ public:
     bool ProcessInput(std::string& out_message);
 
     // 消息管理
-    void AddMessage(const std::string& role, const std::string& content);
+    void SendToChatPanel(const std::string& role, const std::string& content);
     void StartAssistantMessage();  // 开始流式响应时创建空消息
     void UpdateLastMessage(const std::string& content);
     void SubmitUserMessage(const std::string& message);
@@ -67,7 +68,8 @@ public:
                            uint8_t r, uint8_t g, uint8_t b, float alpha = 1.0f);
 
 private:
-    UIRenderer() = default;
+    UIRenderer();
+    ~UIRenderer();
 
     // 成员变量
     bool visible_ = true;

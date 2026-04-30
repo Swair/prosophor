@@ -3,9 +3,7 @@
 
 #include "scene/office_background.h"
 #include "scene/layout_config.h"
-#include "media_core.h"
-#include "drawer.h"
-#include "colors.h"
+#include "media_engine/media_engine.h"
 #include "common/log_wrapper.h"
 
 namespace prosophor {

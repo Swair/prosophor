@@ -4,7 +4,7 @@ name: 默认助手
 description: 默认全能型助手，自动加载所有技能和工具
 avatar: 🤖
 
-provider_name: dashscope
+provider_prot: anthropic
 model: qwen3.5-plus
 
 personality: balanced

@@ -1142,6 +1142,10 @@ void imgui_widget::ImGuiSetCursorPos(float x, float y) {
     ImGui::SetCursorPos(ImVec2(x, y));
 }
 
+void imgui_widget::ImGuiSetCursorScreenPos(float x, float y) {
+    ImGui::SetCursorScreenPos(ImVec2(x, y));
+}
+
 /**
  * @brief 推入文本换行位置
  * @param wrap_width 换行宽度
@@ -1166,12 +1170,41 @@ void imgui_widget::ImGuiPushStyleVar_ItemSpacing(float x, float y) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(x, y));
 }
 
+void imgui_widget::ImGuiPushStyleVar_WindowPadding(float x, float y) {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(x, y));
+}
+
+void imgui_widget::ImGuiPushStyleVar_FramePadding(float x, float y) {
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(x, y));
+}
+
+void imgui_widget::ImGuiPushStyleVar_ItemInnerSpacing(float x, float y) {
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(x, y));
+}
+
 /**
  * @brief 弹出样式变量
  * @param count 弹出数量
  */
 void imgui_widget::ImGuiPopStyleVar(int count) {
     ImGui::PopStyleVar(count);
+}
+
+bool imgui_widget::ImGuiInvisibleButton(const char* id, float w, float h) {
+    return ImGui::InvisibleButton(id, ImVec2(w, h));
+}
+
+void imgui_widget::DrawFilledRoundRect(float x, float y, float w, float h,
+                                        float radius, uint32_t color_rgba) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), color_rgba, radius);
+}
+
+void imgui_widget::DrawRoundRectOutline(float x, float y, float w, float h,
+                                         float radius, uint32_t color_rgba,
+                                         float thickness) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRect(ImVec2(x, y), ImVec2(x + w, y + h), color_rgba, radius, 0, thickness);
 }
 
 /**

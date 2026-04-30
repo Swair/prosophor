@@ -5,21 +5,14 @@
 #include <memory>
 #include <string>
 
-#include "common/log_wrapper.h"
-
-#include "common/curl_client.h"
 #include "providers/llm_provider.h"
 
 namespace prosophor {
 
-/// Anthropic API provider implementation
+/// Anthropic API provider implementation (supports any Anthropic-compatible API)
 class AnthropicProvider : public LLMProvider {
  public:
-    explicit AnthropicProvider(const std::string& api_key,
-                               const std::string& base_url = "https://api.anthropic.com",
-                               int timeout = 30);
-
-    ChatResponse Chat(const ChatRequest& request) override;
+    explicit AnthropicProvider() = default;
 
     ChatResponse ChatStream(const ChatRequest& request,
         std::function<void(const ChatResponse&)> callback) override;
@@ -31,19 +24,11 @@ class AnthropicProvider : public LLMProvider {
     }
 
  protected:
-    /// Print request log for debugging
-    virtual void PrintRequestLog(const std::string& url,
-                                 const std::string& api_key_prefix) const;
+    HeaderList CreateHeaders(const ChatRequest& request) const override;
+    void PrintRequestLog(const ChatRequest& request) const override;
 
     std::string Serialize(const ChatRequest& request) const override;
     ChatResponse Deserialize(const std::string& json_str) const override;
-
- private:
-    HeaderList CreateHeaders() const;
-
-    std::string api_key_;
-    std::string base_url_;
-    int timeout_;
 };
 
 }  // namespace prosophor

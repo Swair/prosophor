@@ -1,5 +1,6 @@
 build
 build_win
 .claude
+thirdparty_src/
 ./tool/curl_demo.sh
 

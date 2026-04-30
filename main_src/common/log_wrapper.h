@@ -24,7 +24,7 @@ inline void InitLog(const std::string& level = "info") {
     spdlog::level::level_enum log_level = (it != kLevelMap.end()) ? it->second : spdlog::level::info;
     spdlog::set_level(log_level);
 
-    spdlog::info("Log level set to: {}", level);
+    spdlog::debug("Log level set to: {}", level);
 }
 
 }  // namespace prosophor
@@ -33,4 +33,5 @@ inline void InitLog(const std::string& level = "info") {
 #define LOG_DEBUG(...) spdlog::debug(__VA_ARGS__)
 #define LOG_WARN(...) spdlog::warn(__VA_ARGS__)
 #define LOG_ERROR(...) spdlog::error(__VA_ARGS__)
+#define LOG_FATAL(...) spdlog::error(__VA_ARGS__)
 

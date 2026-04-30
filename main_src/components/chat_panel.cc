@@ -4,7 +4,6 @@
 #include "components/chat_panel.h"
 #include "media/imgui_widget.h"
 #include "media/colors.h"
-#include "drawer.h"
 #include "common/log_wrapper.h"
 
 namespace prosophor {
@@ -13,53 +12,48 @@ namespace prosophor {
 // ChatPanel 实现
 // ============================================================================
 
-// 构造函数：初始化滚动窗口（应用 30 像素内边距）
+// 构造函数：初始化容器和滚动窗口
 ChatPanel::ChatPanel(float x, float y, float width, float height) {
-    scroll_window_ = std::make_unique<imgui_widget::ScrollWindow>(x, y, width, height);
+    container_ = std::make_unique<UIContainer>(x, y, width, height, PanelStyle::ChatPanel());
+    scroll_window_ = std::make_unique<imgui_widget::ScrollWindow>(0, 0, 0, 0);
 }
 
 // 析构函数（在 .cc 中实现，避免 unique_ptr 不完整类型问题）
 ChatPanel::~ChatPanel() = default;
 
-// 设置面板位置（应用 30 像素内边距）
+// 设置面板位置
 void ChatPanel::SetPosition(float x, float y) {
-    x_ = x;
-    y_ = y;
-    scroll_window_->SetPosition(x + 30, y + 30);
+    container_->SetPosition(x, y);
 }
 
-// 设置面板尺寸（应用 60 像素内边距）
+// 设置面板尺寸
 void ChatPanel::SetSize(float width, float height) {
-    width_ = width;
-    height_ = height;
-    scroll_window_->SetSize(width - 60, height - 60);
+    container_->SetSize(width, height);
 }
 
 // 渲染背景（SDL 层）
 void ChatPanel::Render() const {
     if (!visible_) return;
-
-    // 绘制外层边框（红色）
-    ::Drawer::Instance().DrawFilledRectWithBorder(
-        x_, y_, width_, height_,
-        Colors::Black,    // 背景色
-        Colors::Black);     // 外边框颜色
+    container_->Render();
 }
 
 // 渲染聊天内容（ImGui 层）
 void ChatPanel::RenderContent() {
-    if (!visible_ || !scroll_window_) return;
+    if (!visible_) return;
 
-    // 开始滚动窗口渲染（标题颜色：蓝色）
-    scroll_window_->Begin("______________________________", &Colors::LightBlue);
+    container_->SetContentCallback([this](float /*cx*/, float /*cy*/, float content_width, float content_height) {
+        scroll_window_->SetPosition(container_->GetContentX(), container_->GetContentY());
+        scroll_window_->SetSize(content_width, content_height);
+        scroll_window_->Begin("______________________________", &Colors::LightBlue);
 
-    // 遍历所有消息并渲染
-    for (size_t i = 0; i < messages_.size(); i++) {
-        RenderMessage(messages_[i], i);
-    }
+        for (size_t i = 0; i < messages_.size(); i++) {
+            RenderMessage(messages_[i], i);
+        }
 
-    // 结束滚动窗口渲染
-    scroll_window_->End();
+        scroll_window_->End();
+    });
+
+    container_->RenderContent("ChatPanel");
 }
 
 // 渲染单条消息气泡

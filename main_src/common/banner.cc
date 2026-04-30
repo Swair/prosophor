@@ -4,43 +4,27 @@
 #include "common/banner.h"
 
 #include <iostream>
-#include "managers/buddy_manager.h"
 
 namespace prosophor {
 
-void PrintBanner(const std::string& version, bool show_buddy) {
+void PrintBanner(const std::string& version) {
     std::cout << "\n";
 
-    if (show_buddy) {
-        // Print buddy sprite if available
-        auto& buddy = BuddyManager::GetInstance();
-        if (buddy.HasCompanion()) {
-            auto sprite = buddy.RenderSprite(0);
-            for (const auto& line : sprite) {
-                std::cout << "  " << line << "\n";
-            }
-            std::cout << "\n";
-        }
-    }
-
     // Default robot face
-    if (!show_buddy || !BuddyManager::GetInstance().HasCompanion()) {
-        std::cout << "          ____        \n";
-        std::cout << "     ╭─(─|    |─)-──╮\n";
-        std::cout << "    ╭─────────────╮ |\n";
-        std::cout << " )==│  ◉      ◉   │ |==( \n";
-        std::cout << "    │     V       │ |\n";
-        std::cout << "    ╰─────────────╯|\n";
-        std::cout << "    ╰──────────────╯   \n";
-        std::cout << "     ╰────╯  ╰────╯    \n";
-        std::cout << "\n";
-    }
+    std::cout << "          ____        \n";
+    std::cout << "     ╭─(─|    |─)-──╮\n";
+    std::cout << "    ╭─────────────╮ |\n";
+    std::cout << " )==│  ◉      ◉   │ |==( \n";
+    std::cout << "    │     V       │ |\n";
+    std::cout << "    ╰─────────────╯|\n";
+    std::cout << "    ╰──────────────╯   \n";
+    std::cout << "     ╰────╯  ╰────╯    \n";
+    std::cout << "\n";
 
     std::cout << "Prosophor v" << version << "\n";
     std::cout << "AI Coding Assistant"  << "\n";
     std::cout << "\n";
     std::cout << "  Type 'exit' or Ctrl+D to quit, Ctrl+C to interrupt\n";
-    std::cout << "  Type '/buddy' to see your companion pet\n";
     std::cout << "\n";
 }
 

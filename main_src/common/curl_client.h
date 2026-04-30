@@ -37,8 +37,6 @@ struct HttpRequest {
 
     // Streaming callback: called for each chunk of data received
     // If nullptr, the request is treated as blocking and body is collected
-    using DataCallback = size_t (*)(void*, size_t, size_t, void*);
-    DataCallback write_function = nullptr;
     void* write_data = nullptr;
 };
 
@@ -60,7 +58,7 @@ class HttpClient {
     static HttpResponse Get(const HttpRequest& request);
 
     // Perform a blocking HTTP POST request
-    // If request.write_function is set, performs streaming request instead
+    // If request.write_data is set, performs streaming request instead
     static HttpResponse Post(const HttpRequest& request);
 
     // Perform a blocking HTTP POST request with simple parameters

@@ -5,6 +5,7 @@
 #include <functional>
 #include <vector>
 #include <cstdarg>
+#include <stdint.h>
 #include "colors.h"
 
 // ============================================================================
@@ -263,6 +264,14 @@ constexpr int ImGuiChildFlags_Borders = 1 << 1;
 constexpr int ImGuiCol_ChildBg = 2;
 constexpr int ImGuiCol_Border = 5;
 
+// Color → IM_COL32 (RGBA packed 32-bit, 用于 draw list 函数)
+inline uint32_t ColorToIM_COL32(const Color& c) {
+    return (static_cast<uint32_t>(c.a) << 24) |
+           (static_cast<uint32_t>(c.r) << 16) |
+           (static_cast<uint32_t>(c.g) << 8)  |
+           (static_cast<uint32_t>(c.b));
+}
+
 // ImVec2 封装
 struct ImVec2Wrapper {
     float x, y;
@@ -292,12 +301,24 @@ void ImGuiPushItemWidth(float width);
 void ImGuiPopItemWidth();
 void ImGuiSameLine();
 void ImGuiSetCursorPos(float x, float y);
+void ImGuiSetCursorScreenPos(float x, float y);
 
 /// 样式控制
 void ImGuiPushTextWrapPos(float wrap_width);
 void ImGuiPopTextWrapPos();
 void ImGuiPushStyleVar_ItemSpacing(float x, float y);
+void ImGuiPushStyleVar_WindowPadding(float x, float y);
+void ImGuiPushStyleVar_FramePadding(float x, float y);
+void ImGuiPushStyleVar_ItemInnerSpacing(float x, float y);
 void ImGuiPopStyleVar(int count = 1);
+
+/// 不可见按钮（用于点击区域检测，返回是否被点击）
+bool ImGuiInvisibleButton(const char* id, float w, float h);
+
+/// ImGui 窗口内绘制圆角矩形（填充，color 为 ARGB/IM_COL32 格式）
+void DrawFilledRoundRect(float x, float y, float w, float h, float radius, uint32_t color_rgba);
+/// ImGui 窗口内绘制圆角矩形（边框）
+void DrawRoundRectOutline(float x, float y, float w, float h, float radius, uint32_t color_rgba, float thickness = 1.0f);
 
 /// 样式颜色
 void ImGuiPushStyleColor_TitleText(const Color& color);

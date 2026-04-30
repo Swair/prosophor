@@ -26,7 +26,7 @@ LspManager& LspManager::GetInstance() {
 }
 
 void LspManager::Initialize() {
-    LOG_INFO("LspManager initialized");
+    LOG_DEBUG("LspManager initialized");
 
     // Register common LSP servers
     // TypeScript

@@ -22,7 +22,6 @@
 #include "managers/permission_manager.h"
 #include "common/config.h"
 #include "common/effort_config.h"
-#include "managers/worktree_manager.h"
 #include "services/cron_scheduler.h"
 #include "services/lsp_manager.h"
 #include "mcp/mcp_client.h"
@@ -389,12 +388,11 @@ void CommandRegistry::Initialize() {
             return CmdModel(ctx, args);
         };
         cmd.completer = [](const std::string& partial) {
-            // Complete provider names from config
             std::vector<std::string> completions;
-            std::vector<std::string> providers = {"dashscope", "ollama", "anthropic"};
-            for (const auto& p : providers) {
-                if (p.find(partial) == 0) {
-                    completions.push_back(p);
+            const auto& config = ProsophorConfig::GetInstance();
+            for (const auto& [name, _] : config.providers) {
+                if (name.find(partial) == 0) {
+                    completions.push_back(name);
                 }
             }
             return completions;
@@ -461,7 +459,7 @@ void CommandRegistry::Initialize() {
         RegisterCommand(cmd);
     }
 
-    LOG_INFO("CommandRegistry initialized with {} commands", commands_.size());
+    LOG_DEBUG("CommandRegistry initialized with {} commands", commands_.size());
 }
 
 void CommandRegistry::RegisterCommand(const Command& cmd) {
@@ -1197,89 +1195,6 @@ CommandResult CommandRegistry::CmdSkills(const CommandContext&, const std::vecto
     }
 
     return CommandResult::Fail("Unknown skills subcommand. Use: list");
-}
-
-CommandResult CommandRegistry::CmdWorktree(const CommandContext&, const std::vector<std::string>& args) {
-    auto& wt_mgr = prosophor::WorktreeManager::GetInstance();
-    std::ostringstream oss;
-
-    if (args.empty() || args[0] == "list" || args[0] == "ls") {
-        auto worktrees = wt_mgr.ListWorktrees();
-        if (worktrees.empty()) {
-            oss << "No worktrees found.\n\n";
-            oss << "Create one with: /worktree new <name> [branch]\n";
-        } else {
-            oss << "Git worktrees:\n\n";
-            for (const auto& wt : worktrees) {
-                oss << "  " << wt.name << "\n";
-                oss << "    Path: " << wt.path << "\n";
-                oss << "    Branch: " << wt.branch << "\n";
-                if (!wt.head_commit.empty()) {
-                    oss << "    HEAD: " << wt.head_commit << "\n";
-                }
-                if (wt.is_locked) {
-                    oss << "    Locked: " << wt.locked_reason << "\n";
-                }
-                oss << "\n";
-            }
-        }
-        return CommandResult::Ok(oss.str());
-    }
-
-    if (args[0] == "new" || args[0] == "create") {
-        if (args.size() < 2) {
-            return CommandResult::Fail("Usage: /worktree new <name> [branch]");
-        }
-
-        std::string name = args[1];
-        std::string branch = (args.size() > 2) ? args[2] : "";
-
-        auto info = wt_mgr.Create(name, "", branch);
-        if (info.path.empty()) {
-            return CommandResult::Fail("Failed to create worktree. Check if name already exists.");
-        }
-
-        oss << "Created worktree: " << name << "\n";
-        oss << "  Path: " << info.path << "\n";
-        if (!branch.empty()) {
-            oss << "  Branch: " << info.branch << "\n";
-        }
-        oss << "\nSwitch to it with: /worktree switch " << name << "\n";
-        return CommandResult::Ok(oss.str());
-    }
-
-    if (args[0] == "switch" || args[0] == "cd") {
-        if (args.size() < 2) {
-            return CommandResult::Fail("Usage: /worktree switch <name>");
-        }
-
-        std::string path = wt_mgr.SwitchWorktree(args[1]);
-        if (path.empty()) {
-            return CommandResult::Fail("Worktree not found: " + args[1]);
-        }
-
-        return CommandResult::Ok("Switched to worktree: " + args[1] + "\n  Path: " + path);
-    }
-
-    if (args[0] == "remove" || args[0] == "rm" || args[0] == "delete") {
-        if (args.size() < 2) {
-            return CommandResult::Fail("Usage: /worktree remove <name> [--force]");
-        }
-
-        bool force = (args.size() > 2 && (args[2] == "--force" || args[2] == "-f"));
-        if (!wt_mgr.Remove(args[1], force, false)) {
-            return CommandResult::Fail("Failed to remove worktree. Use --force to override.");
-        }
-
-        return CommandResult::Ok("Removed worktree: " + args[1]);
-    }
-
-    if (args[0] == "prune") {
-        int pruned = wt_mgr.PruneStaleWorktrees();
-        return CommandResult::Ok("Pruned " + std::to_string(pruned) + " stale worktrees.");
-    }
-
-    return CommandResult::Fail("Unknown worktree subcommand. Use: list, new, switch, remove, prune");
 }
 
 CommandResult CommandRegistry::CmdSchedule(const CommandContext&, const std::vector<std::string>& args) {
@@ -2052,7 +1967,7 @@ CommandResult CommandRegistry::CmdRole(const CommandContext& ctx, const std::vec
         // Show actual runtime config from AgentSession
         if (ctx.agent_session && ctx.agent_session->role) {
             oss << "\n  Current session role: " << ctx.agent_session->role->id << "\n";
-            oss << "    Provider: " << ctx.agent_session->role->provider_name << "\n";
+            oss << "    Provider: " << ctx.agent_session->role->provider_prot << "\n";
             oss << "    Model: " << ctx.agent_session->role->model << "\n";
             oss << "    Temperature: " << ctx.agent_session->role->temperature << "\n";
             oss << "    Max tokens: " << ctx.agent_session->role->max_tokens << "\n";
@@ -2107,33 +2022,43 @@ CommandResult CommandRegistry::CmdModel(const CommandContext& ctx, const std::ve
         oss << "Current provider/model configuration:\n";
 
         if (ctx.agent_session) {
-            // Show session-level config (with overrides)
-            if (!ctx.agent_session->override_provider_name.empty()) {
-                oss << "  Session provider (overridden): " << ctx.agent_session->override_provider_name << "\n";
+            // Show session-level config
+            bool overridden = ctx.agent_session->mutable_role_.has_value();
+            if (overridden) {
+                oss << "  Session provider: " << ctx.agent_session->role->provider_prot
+                    << " (switched)" << "\n";
+                oss << "  Session model: " << ctx.agent_session->role->model
+                    << " (switched)" << "\n";
             } else if (ctx.agent_session->role) {
-                oss << "  Session provider (from role): " << ctx.agent_session->role->provider_name << "\n";
-            }
-
-            if (!ctx.agent_session->override_model.empty()) {
-                oss << "  Session model (overridden): " << ctx.agent_session->override_model << "\n";
-            } else if (ctx.agent_session->role) {
-                oss << "  Session model (from role): " << ctx.agent_session->role->model << "\n";
+                oss << "  Session provider: " << ctx.agent_session->role->provider_prot
+                    << " (from role)" << "\n";
+                oss << "  Session model: " << ctx.agent_session->role->model
+                    << " (from role)" << "\n";
             }
 
             oss << "\n  Current session: " << ctx.agent_session->session_id << "\n";
             oss << "  Role: " << ctx.agent_session->role_id << "\n";
         }
 
-        // List available providers
+        // List available providers with their models
         oss << "\nAvailable providers:\n";
-        oss << "  dashscope  - Alibaba Qwen (DashScope)\n";
-        oss << "  ollama     - Local Ollama models\n";
-        oss << "  anthropic  - Anthropic Claude API\n";
+        const auto& config = ProsophorConfig::GetInstance();
+        for (const auto& [prov_name, prov_config] : config.providers) {
+            std::vector<std::string> models;
+            for (const auto& [agent_name, agent_config] : prov_config.agents) {
+                models.push_back(agent_config.model);
+            }
+            std::string model_list;
+            for (size_t i = 0; i < models.size(); ++i) {
+                if (i > 0) model_list += ", ";
+                model_list += models[i];
+            }
+            oss << "  " << std::left << std::setw(14) << prov_name
+                << (model_list.empty() ? "" : " (" + model_list + ")") << "\n";
+        }
         oss << "\nUsage:\n";
         oss << "  /model <provider>              - Switch provider (keeps current model)\n";
         oss << "  /model <provider> <model>      - Switch provider and model\n";
-        oss << "  e.g., /model ollama qwen3:8b\n";
-        oss << "  e.g., /model dashscope\n";
 
         return CommandResult::Ok(oss.str());
     }

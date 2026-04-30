@@ -2,12 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "scene/sdl_app.h"
-#include "scene/office_background.h"
 #include "scene/agent_state_observer.h"
-#include "scene/office_character_manager.h"
-#include "scene/pixel_character.h"
-#include "media_core.h"
+#include "scene/galgame_mode.h"
 #include "scene/ui_renderer.h"
+#include "scene/layout_config.h"
+#include "media_engine/media_engine.h"
 #include "common/log_wrapper.h"
 #include "common/config.h"
 
@@ -38,6 +37,10 @@ void SdlApp::HandleTextInput(const char* text) {
 }
 
 void SdlApp::HandleKeyDown(int key_code) {
+    if (current_scene_ == UIMode::GALGAME) {
+        GalgameScene::Instance().HandleKeyDown(key_code);
+        return;
+    }
     if (input_callback_) {
         InputEvent event;
         event.source = InputSource::SDL;
@@ -64,31 +67,37 @@ void SdlApp::SetInputCallback(InputCallback callback) {
 void SdlApp::Initialize() {
     LOG_INFO("Initializing SDL application...");
 
-    // Set AgentCommander to SDL mode
-    auto& commander = AgentCommander::GetInstance();
-    commander.SetMode(RunMode::SDL);
-
-    prosophor::AgentCommander::GetInstance();
-
     MediaCore::Instance().MediaInit(2500, 1400);
     MediaCore::Instance().SetFPS(60);
 
     AgentStateVisualizer::GetInstance().Initialize();
+    GalgameScene::Instance().Initialize();
     UIRenderer::Instance().Initialize();
-    OfficeBackground::GetInstance().Initialize();
-    PixelCharacterRenderer::Instance().Initialize();
+    HomeScreen::GetInstance().Initialize();
 
-    UIRenderer::Instance().SetOnMessageSubmit([this](const std::string& message) {
-        if (!message.empty() && message[0] == '/') {
-            if (prosophor::AgentCommander::GetInstance().HandleCommand(message)) {
-                UIRenderer::Instance().AddMessage("system", message);
-            } else {
-                UIRenderer::Instance().AddMessage("system", "命令执行失败：" + message);
-            }
-            return;
+    // Set state props getter (used by UIRenderer when in virtual human mode)
+    UIRenderer::Instance().SetStatePropsGetter([](prosophor::AgentRuntimeState state) {
+        switch (state) {
+            case prosophor::AgentRuntimeState::IDLE:
+                return prosophor::StateVisualProps{100, 100, 100, 255, "Idle"};
+            case prosophor::AgentRuntimeState::THINKING:
+                return prosophor::StateVisualProps{65, 105, 225, 255, "Thinking"};
+            case prosophor::AgentRuntimeState::EXECUTING_TOOL:
+                return prosophor::StateVisualProps{255, 165, 0, 255, "Executing"};
+            case prosophor::AgentRuntimeState::WAITING_PERMISSION:
+                return prosophor::StateVisualProps{255, 255, 0, 255, "Waiting"};
+            case prosophor::AgentRuntimeState::STATE_ERROR:
+                return prosophor::StateVisualProps{255, 0, 0, 255, "Error"};
+            case prosophor::AgentRuntimeState::COMPLETE:
+                return prosophor::StateVisualProps{0, 255, 0, 255, "Complete"};
+            default:
+                return prosophor::StateVisualProps{128, 128, 128, 255, "Idle"};
         }
+    });
 
-        prosophor::AgentCommander::GetInstance().ProcessUserMessage(message);
+    // Home screen mode select callback
+    HomeScreen::GetInstance().SetOnModeSelect([this](UIMode mode) {
+        SwitchMode(mode);
     });
 
     // Register event handler for MediaCore events
@@ -96,8 +105,12 @@ void SdlApp::Initialize() {
         for (const auto& event : event_list) {
             switch (event) {
                 case EventType::ESCAPE:
-                    // Interrupt event
-                    HandleKeyDown(0);  // Send as key event
+                    // Return to home from virtual human/Terminal mode
+                    if (current_scene_ != UIMode::HOME) {
+                        SwitchMode(UIMode::HOME);
+                    } else {
+                        HandleKeyDown(0);
+                    }
                     break;
                 case EventType::ENTER:
                 case EventType::KP_ENTER:
@@ -115,32 +128,22 @@ void SdlApp::Initialize() {
     MediaCore::Instance().RegUpdateHandler([]() {
         float dt = MediaCore::Instance().GetDeltaTimeS();
         AgentStateVisualizer::GetInstance().Update(dt);
-        OfficeCharacterManager::Instance().Update(dt);
+        GalgameScene::Instance().Update(dt);
     });
 
-    MediaCore::Instance().RegRenderHandler([]() {
-        OfficeBackground::GetInstance().Render();
-        AgentStateVisualizer::GetInstance().Render();
-        UIRenderer::Instance().Render();
-        UIRenderer::Instance().RenderImGui();
-    });
-
-    UIRenderer::Instance().SetStatePropsGetter([](prosophor::AgentRuntimeState state) {
-        switch (state) {
-            case prosophor::AgentRuntimeState::IDLE:
-                return prosophor::StateVisualProps{100, 100, 100, 255, "Idle"};
-            case prosophor::AgentRuntimeState::THINKING:
-                return prosophor::StateVisualProps{65, 105, 225, 255, "Thinking"};
-            case prosophor::AgentRuntimeState::EXECUTING_TOOL:
-                return prosophor::StateVisualProps{255, 165, 0, 255, "Executing"};
-            case prosophor::AgentRuntimeState::WAITING_PERMISSION:
-                return prosophor::StateVisualProps{255, 255, 0, 255, "Waiting"};
-            case prosophor::AgentRuntimeState::STATE_ERROR:
-                return prosophor::StateVisualProps{255, 0, 0, 255, "Error"};
-            case prosophor::AgentRuntimeState::COMPLETE:
-                return prosophor::StateVisualProps{0, 255, 0, 255, "Complete"};
-            default:
-                return prosophor::StateVisualProps{128, 128, 128, 255, "Unknown"};
+    MediaCore::Instance().RegRenderHandler([this]() {
+        switch (current_scene_) {
+            case UIMode::HOME:
+                HomeScreen::GetInstance().Render();
+                break;
+            case UIMode::VIRTUAL_HUMAN:
+                RenderVirtualHuman();
+                break;
+            case UIMode::GALGAME:
+                RenderGalgame();
+                break;
+            case UIMode::TERMINAL:
+                break;
         }
     });
 
@@ -166,6 +169,91 @@ int SdlApp::Run() {
 
 void SdlApp::Stop() {
     MediaCore::Instance().Quit();
+}
+
+void SdlApp::SwitchMode(UIMode mode) {
+    if (current_scene_ == mode) return;
+
+    LOG_INFO("Switching mode: {} -> {}", static_cast<int>(current_scene_), static_cast<int>(mode));
+    current_scene_ = mode;
+
+    switch (mode) {
+        case UIMode::HOME:
+            // Restore default input callback behavior for home
+            input_callback_ = saved_callback_;
+            break;
+
+        case UIMode::VIRTUAL_HUMAN: {
+            // Set up virtual human mode
+            auto& commander = AgentCommander::GetInstance();
+            commander.SetMode(RunMode::SDL);
+
+            // Save previous callback and set new one
+            saved_callback_ = input_callback_;
+            UIRenderer::Instance().SetOnMessageSubmit([this](const std::string& message) {
+                if (!message.empty() && message[0] == '/') {
+                    if (prosophor::AgentCommander::GetInstance().HandleCommand(message)) {
+                        UIRenderer::Instance().SendToChatPanel("system", message);
+                    } else {
+                        UIRenderer::Instance().SendToChatPanel("system", "命令执行失败：" + message);
+                    }
+                    return;
+                }
+                prosophor::AgentCommander::GetInstance().ProcessUserMessage(message);
+            });
+
+            // Show the UI
+            UIRenderer::Instance().SetVisible(true);
+            AgentStateVisualizer::GetInstance().SetVisible(true);
+            break;
+        }
+
+        case UIMode::GALGAME: {
+            // Set up GALGAME mode
+            auto& commander = AgentCommander::GetInstance();
+            commander.SetMode(RunMode::SDL);
+
+            saved_callback_ = input_callback_;
+            UIRenderer::Instance().SetOnMessageSubmit([this](const std::string& message) {
+                if (!message.empty() && message[0] == '/') {
+                    if (prosophor::AgentCommander::GetInstance().HandleCommand(message)) {
+                        UIRenderer::Instance().SendToChatPanel("system", message);
+                    } else {
+                        UIRenderer::Instance().SendToChatPanel("system", "命令执行失败：" + message);
+                    }
+                    return;
+                }
+                prosophor::AgentCommander::GetInstance().ProcessUserMessage(message);
+            });
+            break;
+        }
+
+        case UIMode::TERMINAL:
+            saved_callback_ = input_callback_;
+            break;
+    }
+}
+
+void SdlApp::RenderHome() {
+    HomeScreen::GetInstance().Render();
+}
+
+void SdlApp::RenderVirtualHuman() {
+    AgentStateVisualizer::GetInstance().Render();
+    UIRenderer::Instance().Render();
+    UIRenderer::Instance().RenderImGui();
+}
+
+void SdlApp::RenderGalgame() {
+    GalgameScene::Instance().Render();
+    UIRenderer::Instance().Render();
+    UIRenderer::Instance().RenderImGui();
+}
+
+void SdlApp::RenderTerminal() {
+    // Terminal mode: just show the UI renderer (ChatPanel + InputPanel + StatusBar)
+    UIRenderer::Instance().Render();
+    UIRenderer::Instance().RenderImGui();
 }
 
 }  // namespace prosophor

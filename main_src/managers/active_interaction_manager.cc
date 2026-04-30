@@ -28,7 +28,7 @@ void ActiveInteractionManager::Initialize(AgentSessionManager* session_manager) 
     session_manager_ = session_manager;
     running_ = true;
     scheduler_thread_ = std::thread(&ActiveInteractionManager::SchedulerLoop, this);
-    LOG_INFO("ActiveInteractionManager initialized");
+    LOG_DEBUG("ActiveInteractionManager initialized");
 }
 
 std::string ActiveInteractionManager::GetChangelogDir() {

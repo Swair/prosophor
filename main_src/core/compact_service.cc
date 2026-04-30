@@ -18,7 +18,7 @@ CompactService& CompactService::GetInstance() {
 
 void CompactService::Initialize(const CompactConfig& config) {
     config_ = config;
-    LOG_INFO("CompactService initialized: max_messages={}, keep_recent={}, max_tokens={}, strategy={}",
+    LOG_DEBUG("CompactService initialized: max_messages={}, keep_recent={}, max_tokens={}, strategy={}",
              config_.max_messages, config_.keep_recent, config_.max_tokens,
              config_.strategy == CompactStrategy::Summary ? "Summary" :
              config_.strategy == CompactStrategy::Truncate ? "Truncate" : "Hybrid");

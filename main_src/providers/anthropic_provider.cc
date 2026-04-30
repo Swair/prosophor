@@ -6,6 +6,7 @@
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include "common/log_wrapper.h"
+#include "common/string_utils.h"
 
 #include "common/curl_client.h"
 #include "providers/llm_provider.h"
@@ -42,18 +43,28 @@ static void ApplyThinkingParams(nlohmann::json& payload_json,
 static nlohmann::json SerializeMessageContent(const std::vector<ContentSchema>& content) {
     // Check if message has tool-related content
     bool has_tool_content = false;
+    bool has_thinking = false;
     for (const auto& block : content) {
         if (block.type == "tool_use" || block.type == "tool_result") {
             has_tool_content = true;
-            break;
+        }
+        if (block.type == "thinking" && !block.text.empty()) {
+            has_thinking = true;
         }
     }
 
-    if (has_tool_content) {
-        // Use array format for tool messages
+    if (has_tool_content || has_thinking) {
+        // Use array format for tool messages or thinking blocks
         nlohmann::json content_arr = nlohmann::json::array();
         for (const auto& block : content) {
-            if (block.type == "text" || block.type == "thinking") {
+            if (block.type == "thinking") {
+                if (!block.text.empty()) {
+                    nlohmann::json block_json;
+                    block_json["type"] = "thinking";
+                    block_json["thinking"] = block.text;
+                    content_arr.push_back(block_json);
+                }
+            } else if (block.type == "text") {
                 if (!block.text.empty()) {
                     nlohmann::json block_json;
                     block_json["type"] = "text";
@@ -80,7 +91,7 @@ static nlohmann::json SerializeMessageContent(const std::vector<ContentSchema>& 
         // Use string format for simple text messages
         std::string text;
         for (const auto& block : content) {
-            if (block.type == "text" || block.type == "thinking") {
+            if (block.type == "text") {
                 if (!text.empty()) text += "\n";
                 text += block.text;
             }
@@ -110,18 +121,6 @@ static nlohmann::json SerializeTools(const std::vector<ToolsSchema>& tools) {
 
 // --- Provider implementation ---
 
-AnthropicProvider::AnthropicProvider(const std::string& api_key,
-     const std::string& base_url, int timeout)
-    : api_key_(api_key),
-      base_url_(base_url),
-      timeout_(timeout) {
-    if (base_url_.empty()) {
-        base_url_ = "https://api.anthropic.com";
-    }
-
-    LOG_INFO("AnthropicProvider initialized with base_url: {}",
-             base_url_);
-}
 
 /**
  * Serialize ChatRequest to Anthropic API compatible JSON payload
@@ -179,6 +178,29 @@ std::string AnthropicProvider::Serialize(const ChatRequest& request) const {
     payload_json["temperature"] = request.temperature;
     payload_json["max_tokens"] = request.max_tokens;
 
+    // Serialize system messages as a single string (DashScope Anthropic-compatible format)
+    if (!request.system.empty()) {
+        std::string system_text;
+        for (size_t i = 0; i < request.system.size(); ++i) {
+            if (i > 0) system_text += "\n";
+            system_text += request.system[i].text;
+        }
+        payload_json["system"] = system_text;
+    }
+    // if (!request.system.empty()) {
+    //     nlohmann::json system_json = nlohmann::json::array();
+    //     for (const auto& sys_msg : request.system) {
+    //         nlohmann::json block;
+    //         block["type"] = "text";
+    //         block["text"] = sys_msg.text;
+    //         if (sys_msg.cache_control) {
+    //             block["cache_control"] = {{"type", "global"}};
+    //         }
+    //         system_json.push_back(block);
+    //     }
+    //     payload_json["system"] = system_json;
+    // }
+
     // Serialize messages (excluding system role - those go in system field)
     nlohmann::json messages_json = nlohmann::json::array();
     for (const auto& msg : request.messages) {
@@ -196,19 +218,6 @@ std::string AnthropicProvider::Serialize(const ChatRequest& request) const {
         messages_json.push_back(msg_obj);
     }
     payload_json["messages"] = messages_json;
-    if (!request.system.empty()) {
-        nlohmann::json system_json = nlohmann::json::array();
-        for (const auto& sys_msg : request.system) {
-            nlohmann::json block;
-            block["type"] = "text";
-            block["text"] = sys_msg.text;
-            if (sys_msg.cache_control) {
-                block["cache_control"] = {{"type", "global"}};
-            }
-            system_json.push_back(block);
-        }
-        payload_json["system"] = system_json;
-    }
 
     if (request.stream) {
         payload_json["stream"] = true;
@@ -224,7 +233,9 @@ std::string AnthropicProvider::Serialize(const ChatRequest& request) const {
 
     ApplyThinkingParams(payload_json, request);
 
-    return payload_json.dump(2);
+    LOG_DEBUG("Request body:\n {}", payload_json.dump(4));
+
+    return payload_json.dump();
 }
 
 /**
@@ -267,20 +278,31 @@ std::string AnthropicProvider::Serialize(const ChatRequest& request) const {
  */
 ChatResponse AnthropicProvider::Deserialize(const std::string& json_str) const {
     nlohmann::json response_json;
+
     try {
-        response_json = nlohmann::json::parse(json_str);
+	#ifdef _WIN32
+        // Convert to UTF-8 if necessary
+        std::string utf8_json = ConvertToUtf8(json_str);
+        response_json = nlohmann::json::parse(utf8_json);
+	#else
+        response_json = nlohmann::json::parse(json_str);	
+	#endif
+	
+        LOG_DEBUG(" response body: {}", response_json.dump(4));
     } catch (...) {
-        LOG_INFO("Response (raw):\n{}", json_str);
+        LOG_INFO("  response (raw):\n{}", json_str);
         throw;
     }
 
-
-    // 解析出 content.text, content.tool_use
     ChatResponse result;
+
+    // Parse content blocks
     if (response_json.contains("content") && response_json["content"].is_array()) {
         for (const auto& block : response_json["content"]) {
             std::string block_type = block.value("type", "");
-            if (block_type == "text") {
+            if (block_type == "thinking") {
+                result.AddThinking(block.value("thinking", ""));
+            } else if (block_type == "text") {
                 result.AddText(block.value("text", ""));
             } else if (block_type == "tool_use") {
                 result.AddToolCall(block.value("id", ""),
@@ -290,19 +312,10 @@ ChatResponse AnthropicProvider::Deserialize(const std::string& json_str) const {
         }
     }
 
-    // 解析出 stop_reason
-    std::string stop_reason = response_json.value("stop_reason", "");
-    if (stop_reason == "end_turn") {
-        result.stop_reason = "stop";
-    } else if (stop_reason == "tool_use") {
-        result.stop_reason = "tool_calls";
-    } else if (stop_reason == "max_tokens") {
-        result.stop_reason = "length";
-    } else {
-        result.stop_reason = stop_reason;
-    }
+    // tool use end turn
+    result.stop_reason = response_json.value("stop_reason", "");
 
-    // 解析出 token使用情况
+    // Parse usage
     if (response_json.contains("usage")) {
         auto& usage = response_json["usage"];
         result.usage.prompt_tokens = usage.value("input_tokens", 0);
@@ -314,72 +327,36 @@ ChatResponse AnthropicProvider::Deserialize(const std::string& json_str) const {
     return result;
 }
 
-void AnthropicProvider::PrintRequestLog(const std::string& url,
-     const std::string& api_key_prefix) const {
-    LOG_INFO("=== Sending request to Anthropic API ===");
-    LOG_INFO("URL: {}", url);
-    LOG_INFO("Headers:");
-    LOG_INFO("  Content-Type: application/json");
-    LOG_INFO("  Authorization: Bearer {}", api_key_.substr(0, 8) + "...");
-    LOG_INFO("  anthropic-version: 2023-06-01");
+// --- Provider-specific implementations ---
+
+void AnthropicProvider::PrintRequestLog(const ChatRequest& request) const {
+    LOG_DEBUG("=== Sending request to Anthropic API ===");
+    LOG_DEBUG("URL: {}", request.base_url);
+    LOG_DEBUG("Model: {}", request.model);
+    LOG_DEBUG("Max tokens: {}", request.max_tokens);
+    LOG_DEBUG("Messages count: {}", request.messages.size());
+    LOG_DEBUG("System blocks: {}", request.system.size());
+    LOG_DEBUG("Tools count: {}", request.tools.size());
+    LOG_DEBUG("Streaming: {}", request.stream);
+    LOG_DEBUG("Thinking: {}", request.thinking);
+    LOG_DEBUG("Headers:");
+    LOG_DEBUG("  Content-Type: application/json");
+    LOG_DEBUG("  x-api-key: {}", request.api_key.substr(0, 8) + "...");
+    LOG_DEBUG("  anthropic-version: 2023-06-01");
 }
 
-// 模仿OSI协议，把ChatRequest和ChatResponse当作一层调用大模型得协议层，下一层就是Http
-ChatResponse AnthropicProvider::Chat(const ChatRequest& request) {
-    // http 请求
-    HttpRequest http_request;
-    http_request.url = base_url_ + "/v1/messages";
-    http_request.post_data = Serialize(request);
-    http_request.timeout_seconds = timeout_;
-
-    HeaderList headers = CreateHeaders();
-    http_request.headers = headers.get();
-
-    PrintRequestLog(http_request.url, api_key_.substr(0, 8) + "...");
-
-    HttpResponse http_response = HttpClient::Post(http_request);
-
-    LOG_DEBUG("=== Received response from Anthropic API ===");
-
-    if (http_response.failed()) {
-        std::string error_msg = http_response.error.empty() ? http_response.body : http_response.error;
-        if (http_response.retry_after_seconds > 0) {
-            LOG_WARN("Anthropic API HTTP {}: rate limited, retry-after={}s",
-                     http_response.status_code, http_response.retry_after_seconds);
-        } else {
-            LOG_ERROR("Anthropic API HTTP {}: {}", http_response.status_code,
-                      error_msg.substr(0, 256));
-        }
-        throw std::runtime_error("Anthropic API error (HTTP " +
-                                 std::to_string(http_response.status_code) + "): " +
-                                 error_msg);
-    }
-
-    ChatResponse response = Deserialize(http_response.body);
-
-    // Record token usage
-    if (response.usage.total_tokens > 0) {
-        RecordTokenUsage(request.model, response.usage);
-        LOG_INFO("Token usage: {} prompt, {} completion, {} total (${:.4f})",
-                 response.usage.prompt_tokens, response.usage.completion_tokens,
-                 response.usage.total_tokens, response.usage.prompt_tokens / 1000.0 * 3.0 + response.usage.completion_tokens / 1000.0 * 15.0);
-    }
-
-    return response;
-}
-
-HeaderList AnthropicProvider::CreateHeaders() const {
+HeaderList AnthropicProvider::CreateHeaders(const ChatRequest& request) const {
     HeaderList headers;
     headers.append("Content-Type: application/json");
-    std::string auth_header = "Authorization: Bearer " + api_key_;
-    headers.append(auth_header.c_str());
+    std::string api_key_header = "x-api-key: " + request.api_key;
+    headers.append(api_key_header.c_str());
     headers.append("anthropic-version: 2023-06-01");
     return headers;
 }
 
 // --- SSE Streaming support ---
 
-// Anthropic-specific SSE stream handler
+// Anthropic SSE stream handler - pushes response to callback via external worker
 struct AnthropicStreamHandler : public SseStreamHandler {
     std::function<void(const ChatResponse&)> chat_response_callback;
     std::string stop_reason;
@@ -393,14 +370,17 @@ struct AnthropicStreamHandler : public SseStreamHandler {
     std::vector<PendingToolCall> pending_tool_calls;
     int current_block_index = -1;
     std::string current_block_type;
+    std::string current_thinking;
+    bool thinking_started = false;
 
     // Accumulated response for return value
     ChatResponse accumulated_response;
+    bool thinking_active = false;
 
     explicit AnthropicStreamHandler(std::function<void(const ChatResponse&)> cb)
         : chat_response_callback(std::move(cb)) {}
 
-    void OnEvent(const std::string& event_type, const std::string& data) override {
+    void OnEvent(const std::string& event_type, const std::string& data) {
         auto j = nlohmann::json::parse(data, nullptr, false);
         if (j.is_discarded()) return;
 
@@ -409,19 +389,52 @@ struct AnthropicStreamHandler : public SseStreamHandler {
             if (j.contains("content_block")) {
                 const auto& block = j["content_block"];
                 current_block_type = block.value("type", "");
-                if (current_block_type == "tool_use") {
+                if (current_block_type == "thinking") {
+                    thinking_started = true;
+                    thinking_active = true;
+                    current_thinking.clear();
+                    ChatResponse resp;
+                    resp.thinking_phase = "start";
+                    chat_response_callback(resp);
+                } else if (current_block_type == "text") {
+                    ChatResponse resp;
+                    resp.content_phase = "start";
+                    chat_response_callback(resp);
+                } else if (current_block_type == "tool_use") {
+                    //LOG_DEBUG("response tool_use name: {}", block.dump());
                     PendingToolCall ptc;
                     ptc.id = block.value("id", "");
                     ptc.name = block.value("name", "");
                     pending_tool_calls.push_back(ptc);
                 }
             }
+        } else if (event_type == "content_block_stop") {
+            if (current_block_type == "thinking" && thinking_active) {
+                thinking_active = false;
+                ChatResponse resp;
+                resp.thinking_phase = "end";
+                chat_response_callback(resp);
+            } else if (current_block_type == "text") {
+                ChatResponse resp;
+                resp.content_phase = "end";
+                chat_response_callback(resp);
+            }
+            current_block_type.clear();
         } else if (event_type == "content_block_delta") {
             if (j.contains("delta")) {
                 const auto& delta = j["delta"];
                 std::string delta_type = delta.value("type", "");
 
-                if (delta_type == "text_delta") {
+                if (delta_type == "thinking_delta") {
+                    std::string text = delta.value("thinking", "");
+                    if (!text.empty()) {
+                        current_thinking += text;
+                        ChatResponse resp;
+                        resp.thinking_phase = "delta";
+                        resp.content_thinking = std::move(text);
+                        chat_response_callback(resp);
+                    }
+                } else if (delta_type == "text_delta") {
                     std::string text = delta.value("text", "");
                     if (!text.empty()) {
                         ChatResponse resp;
@@ -430,7 +443,8 @@ struct AnthropicStreamHandler : public SseStreamHandler {
                         chat_response_callback(resp);
                     }
                 } else if (delta_type == "input_json_delta") {
-                    if (!pending_tool_calls.empty()) {
+                    if (!pending_tool_calls.empty()) {                        
+                        //LOG_DEBUG("response tool_use input: {}", delta.dump());
                         pending_tool_calls.back().arguments +=
                             delta.value("partial_json", "");
                     }
@@ -449,6 +463,13 @@ struct AnthropicStreamHandler : public SseStreamHandler {
                 accumulated_response.usage = usage;
             }
         } else if (event_type == "message_stop") {
+            // Add accumulated thinking blocks
+            if (thinking_started && !current_thinking.empty()) {
+                accumulated_response.AddThinking(current_thinking);
+                thinking_started = false;
+                current_thinking.clear();
+            }
+
             // Finalize any pending tool calls
             if (!pending_tool_calls.empty()) {
                 for (const auto& ptc : pending_tool_calls) {
@@ -473,22 +494,8 @@ struct AnthropicStreamHandler : public SseStreamHandler {
 
 ChatResponse AnthropicProvider::ChatStream(const ChatRequest& request, std::function<void(const ChatResponse&)> callback) {
     AnthropicStreamHandler stream_handler(std::move(callback));
-
-    HttpRequest stream_req;
-    stream_req.url = base_url_ + "/v1/messages";
-    stream_req.post_data = Serialize(request);
-    stream_req.timeout_seconds = timeout_;
-    stream_req.low_speed_limit = 1;
-    stream_req.low_speed_time = 60;
-
-    HeaderList headers = CreateHeaders();
-    stream_req.headers = headers.get();
-    stream_req.write_data = &stream_handler;
-
-    // curl blocks here, callbacks execute in curl thread
-    HttpClient::Post(stream_req);
-
-    // Return accumulated response
+    PrintRequestLog(request);
+    ExecuteStream(request, &stream_handler);
     return stream_handler.accumulated_response;
 }
 
