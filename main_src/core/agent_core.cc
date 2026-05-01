@@ -57,8 +57,12 @@ void AgentCore::SetSessionOutput(AgentSession& session, AgentRuntimeState state,
     session.state = state;
     session.state_message = state_msg;
 
-    // Add message to history if provided
-    if (reply && state != AgentRuntimeState::STREAM_CONTENT_TYPING) {
+    // Add message to history if provided (skip streaming intermediate states)
+    if (reply && (
+        state == AgentRuntimeState::STREAM_MODE_COMPLETE ||
+        state == AgentRuntimeState::COMPLETE ||
+        state == AgentRuntimeState::TOOL_USE ||
+        state == AgentRuntimeState::STATE_ERROR)) {
         session.messages.push_back(*reply);
     }
     
@@ -114,8 +118,8 @@ bool AgentCore::ExecuteToolCalls(const std::vector<ToolUseSchema>& tool_calls,
     }
 
     // Set EXECUTING_TOOL state and add messages to history
-    SetSessionOutput(session, AgentRuntimeState::TOOL_MSG, "", assistant_msg);
-    SetSessionOutput(session, AgentRuntimeState::TOOL_MSG, "", results_msg);
+    SetSessionOutput(session, AgentRuntimeState::TOOL_USE, "", assistant_msg);
+    SetSessionOutput(session, AgentRuntimeState::TOOL_USE, "", results_msg);
 
     iterations++;
 
@@ -282,27 +286,27 @@ void AgentCore::Loop(const std::string& message, AgentSession& session) {
             response = session.provider->ChatStream(
                 request, [&session](const ChatResponse& chunk) {
                     if (!chunk.thinking_phase.empty()) {
-                        MessageSchema thinking_msg;
-                        thinking_msg.role = "assistant";
-                        thinking_msg.AddThinkingContent(chunk.content_thinking);
                         if (chunk.thinking_phase == "start") {
-                            SetSessionOutput(session, AgentRuntimeState::STREAM_THINKING_START, "", thinking_msg);
+                            SetSessionOutput(session, AgentRuntimeState::STREAM_THINKING_START, "", std::nullopt);
                         } else if (chunk.thinking_phase == "delta") {
+                            MessageSchema thinking_msg;
+                            thinking_msg.role = "assistant";
+                            thinking_msg.AddThinkingContent(chunk.content_thinking);
                             SetSessionOutput(session, AgentRuntimeState::STREAM_THINKING, "", thinking_msg);
                         } else if (chunk.thinking_phase == "end") {
-                            SetSessionOutput(session, AgentRuntimeState::STREAM_THINKING_END, "", thinking_msg);
+                            SetSessionOutput(session, AgentRuntimeState::STREAM_THINKING_END, "", std::nullopt);
                         }
                     } else if (!chunk.content_phase.empty()) {
                         if (chunk.content_phase == "start") {
                             SetSessionOutput(session, AgentRuntimeState::STREAM_CONTENT_START, "", std::nullopt);
+                        } else if (chunk.content_phase == "delta") {
+                            MessageSchema chunk_msg;
+                            chunk_msg.role = "assistant";
+                            chunk_msg.AddTextContent(chunk.content_text);
+                            SetSessionOutput(session, AgentRuntimeState::STREAM_CONTENT_TYPING, "", chunk_msg);
                         } else if (chunk.content_phase == "end") {
                             SetSessionOutput(session, AgentRuntimeState::STREAM_CONTENT_END, "", std::nullopt);
                         }
-                    } else if (!chunk.content_text.empty()) {
-                        MessageSchema chunk_msg;
-                        chunk_msg.role = "assistant";
-                        chunk_msg.AddTextContent(chunk.content_text);
-                        SetSessionOutput(session, AgentRuntimeState::STREAM_CONTENT_TYPING, "", chunk_msg);
                     }
                 });
         } else {

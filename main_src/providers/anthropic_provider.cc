@@ -438,6 +438,7 @@ struct AnthropicStreamHandler : public SseStreamHandler {
                     std::string text = delta.value("text", "");
                     if (!text.empty()) {
                         ChatResponse resp;
+                        resp.content_phase = "delta";
                         resp.content_text = std::move(text);
                         accumulated_response.content_text += resp.content_text;
                         chat_response_callback(resp);

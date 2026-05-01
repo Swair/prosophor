@@ -51,7 +51,8 @@ SubprocessResult ExecuteScriptWithTimeout(const std::string& script_path, int ti
         return result;
     }
 
-    STARTUPINFOA si = { sizeof(STARTUPINFOA) };
+    STARTUPINFOA si{};
+    si.cb = sizeof(STARTUPINFOA);
     si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
     si.wShowWindow = SW_HIDE;
     si.hStdOutput = hWrite;

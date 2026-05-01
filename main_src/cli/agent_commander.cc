@@ -151,25 +151,25 @@ void AgentCommander::InitializeComponents() {
                 // std::cout << session_id << " - " << role_id << ": " << state_msg << std::endl;
             }
             else if(state == AgentRuntimeState::STREAM_MODE_START) {
-                std::cout << "< " << std::flush;
+                // std::cout << "< " << std::flush;
             }
             else if(state == AgentRuntimeState::STREAM_THINKING_START) {
-                std::cout << "\n<thinking>" << std::flush;
+                std::cout << "\n<thinking> " << std::flush;
             }
             else if(state == AgentRuntimeState::STREAM_THINKING) {
                 std::cout << (reply ? reply->text() : "") << std::flush;
             }
             else if(state == AgentRuntimeState::STREAM_THINKING_END) {
-                std::cout << "</thinking>\n" << std::flush;
+                std::cout << " </thinking>\n" << std::flush;
+            }
+            else if(state == AgentRuntimeState::STREAM_CONTENT_START) {
+                std::cout << "< " << std::flush;
             }
             else if(state == AgentRuntimeState::STREAM_CONTENT_TYPING) {
                 std::cout << reply->text() << std::flush;
             }
-            else if(state == AgentRuntimeState::STREAM_CONTENT_START) {
-                // content block start (no output, already have STREAM_MODE_START)
-            }
             else if(state == AgentRuntimeState::STREAM_CONTENT_END) {
-                // content block end (no output)
+                std::cout << " " << std::flush;
             }
             else if(state == AgentRuntimeState::STREAM_MODE_COMPLETE) {
                 std::cout << "\n> " << std::flush;

@@ -205,6 +205,11 @@ struct AgentSession {
             auto& agent_map = prov_it->second.agents;
             const AgentConfig* matched = nullptr;
 
+            // Set provider-level defaults first
+            base_url = prov_it->second.base_url;
+            api_key = prov_it->second.api_key;
+            timeout = prov_it->second.timeout;
+
             // Try 1: model as agent key
             auto agent_it = agent_map.find(model);
             if (agent_it != agent_map.end()) {
@@ -230,8 +235,6 @@ struct AgentSession {
                     base_url = entry_base_url;
                     api_key = entry_api_key;
                     timeout = entry_timeout;
-                } else {
-                    base_url = prov_it->second.base_url;
                 }
                 role->temperature = matched->temperature;
                 role->max_tokens = matched->max_tokens;
@@ -239,7 +242,8 @@ struct AgentSession {
                 LOG_DEBUG("Applied provider override: provider={}, model={}, base_url={}",
                          provider_name, matched->model, base_url);
             } else {
-                LOG_WARN("No matching agent for '{}' in provider '{}'", model, provider_name);
+                LOG_WARN("No matching agent for '{}' in provider '{}', using provider defaults",
+                         model, provider_name);
             }
         }
     }

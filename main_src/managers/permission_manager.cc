@@ -160,7 +160,7 @@ const PermissionRule* PermissionManager::FindMatchingRule(
     return nullptr;
 }
 
-std::string PermissionManager::ExtractPath(const std::string& tool_name,
+std::string PermissionManager::ExtractPath(const std::string& /*tool_name*/,
                                            const nlohmann::json& input) const {
     // Common path parameter names
     static const std::vector<std::string> path_keys = {"path", "file", "filepath", "filename"};

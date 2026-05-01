@@ -16,7 +16,7 @@ enum class AgentRuntimeState {
     IDLE,
     THINKING,
     EXECUTING_TOOL,
-    TOOL_MSG,
+    TOOL_USE,
     WAITING_PERMISSION,
     STATE_ERROR,
     COMPLETE,
