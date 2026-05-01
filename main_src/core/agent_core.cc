@@ -259,7 +259,7 @@ void AgentCore::Loop(const std::string& message, AgentSession& session) {
     LOG_DEBUG("Processing message (streaming={})", streaming);
 
     // Set initial THINKING state
-    SetSessionOutput(session, AgentRuntimeState::THINKING, "Processing...");
+    SetSessionOutput(session, AgentRuntimeState::BEGINNING, "Processing...");
 
     // Process message - resolve @file references
     std::string processed_message = ProcessFileRefs(message, session);
@@ -282,7 +282,6 @@ void AgentCore::Loop(const std::string& message, AgentSession& session) {
         // Call LLM - streaming or non-streaming
         ChatResponse response;
         if (streaming) {
-            SetSessionOutput(session, AgentRuntimeState::STREAM_MODE_START, "");
             response = session.provider->ChatStream(
                 request, [&session](const ChatResponse& chunk) {
                     if (!chunk.thinking_phase.empty()) {

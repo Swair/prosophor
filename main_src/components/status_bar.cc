@@ -40,7 +40,7 @@ void StatusBar::RenderContent(const std::string& status_text, AgentRuntimeState 
     const char* icon = "";
     switch (state) {
         case AgentRuntimeState::IDLE: icon = "○"; break;
-        case AgentRuntimeState::THINKING: icon = "◐"; break;
+        case AgentRuntimeState::BEGINNING: icon = "◐"; break;
         case AgentRuntimeState::EXECUTING_TOOL: icon = "⚙"; break;
         case AgentRuntimeState::WAITING_PERMISSION: icon = "⏳"; break;
         case AgentRuntimeState::STATE_ERROR: icon = "⚠"; break;

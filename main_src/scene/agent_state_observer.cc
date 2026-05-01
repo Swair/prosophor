@@ -161,7 +161,7 @@ void AgentStateVisualizer::DrawVirtualHumanCharacter() {
 
     // 脉冲效果
     float pulse_alpha = 1.0f;
-    if (agent_state_ == AgentRuntimeState::THINKING ||
+    if (agent_state_ == AgentRuntimeState::BEGINNING ||
         agent_state_ == AgentRuntimeState::EXECUTING_TOOL) {
         pulse_alpha = 0.88f + 0.12f * std::sin(animation_time_ * 8.0f);
     }

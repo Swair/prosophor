@@ -30,7 +30,7 @@ void CharacterStateObserver::OnAgentStateChanged(const std::string& session_id,
     if (new_state == AgentRuntimeState::EXECUTING_TOOL) {
         // Active with current tool
         char_mgr.SetCharacterActivity(role_id, true, current_tool_);
-    } else if (new_state == AgentRuntimeState::THINKING) {
+    } else if (new_state == AgentRuntimeState::BEGINNING) {
         // Thinking - typing animation
         char_mgr.SetCharacterActivity(role_id, true, "");
     } else if (new_state == AgentRuntimeState::WAITING_PERMISSION) {
@@ -58,7 +58,7 @@ void CharacterStateObserver::SetCurrentTool(const std::string& tool_name) {
 
 CharacterState CharacterStateObserver::MapToCharacterState(AgentRuntimeState state) {
     switch (state) {
-        case AgentRuntimeState::THINKING:
+        case AgentRuntimeState::BEGINNING:
             return CharacterState::TYPE;
         case AgentRuntimeState::EXECUTING_TOOL:
             return IsReadingTool(current_tool_) ? CharacterState::READ : CharacterState::TYPE;

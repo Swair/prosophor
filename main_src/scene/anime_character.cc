@@ -253,7 +253,7 @@ void AnimeCharacterRenderer::DrawEyes(AnimeCharacterType type, float cx, float c
             ::Drawer::Instance().DrawFillCircle(ex, eye_y, 2.5 * s, eye_pupil);
             ::Drawer::Instance().DrawFillCircle(ex - 2 * s, eye_y - 3 * s, 1.5 * s, eye_highlight);
         }
-    } else if (state == AgentRuntimeState::THINKING) {
+    } else if (state == AgentRuntimeState::BEGINNING) {
         for (float ex : {cx - eye_spacing, cx + eye_spacing}) {
             ::Drawer::Instance().DrawFillEllipse(ex, eye_y, 7 * s, 9 * s, eye_white);
             ::Drawer::Instance().DrawFillEllipse(ex + 2 * s, eye_y - 2 * s, 5 * s, 6 * s, eye_iris);
@@ -380,7 +380,7 @@ void AnimeCharacterRenderer::DrawMouth(AnimeCharacterType type, float cx, float 
     } else if (state == AgentRuntimeState::STATE_ERROR) {
         ::Drawer::Instance().DrawFillTriangle(
             cx - 5 * s, cy, cx, cy + 3 * s, cx + 5 * s, cy, mouth);
-    } else if (state == AgentRuntimeState::THINKING) {
+    } else if (state == AgentRuntimeState::BEGINNING) {
         ::Drawer::Instance().DrawFillRect(cx - 4 * s, cy - 1 * s, 8 * s, 2 * s, mouth);
     } else {
         ::Drawer::Instance().DrawFillTriangle(
@@ -394,7 +394,7 @@ void AnimeCharacterRenderer::DrawMouth(AnimeCharacterType type, float cx, float 
 void AnimeCharacterRenderer::DrawBlush(AnimeCharacterType type, float cx, float cy, float s,
                                         AgentRuntimeState state, uint8_t a) {
     (void)type;
-    if (state == AgentRuntimeState::COMPLETE || state == AgentRuntimeState::THINKING) {
+    if (state == AgentRuntimeState::COMPLETE || state == AgentRuntimeState::BEGINNING) {
         Color blush(255, 150, 150, static_cast<uint8_t>(a * 0.3f));
         ::Drawer::Instance().DrawFillEllipse(cx - 16 * s, cy, 6 * s, 3 * s, blush);
         ::Drawer::Instance().DrawFillEllipse(cx + 16 * s, cy, 6 * s, 3 * s, blush);
@@ -599,7 +599,7 @@ void AnimeCharacterRenderer::DrawArms(AnimeCharacterType type, float cx, float c
         case AnimeCharacterType::COOL_SEMPAI: arm_color = Color(100, 130, 180, a); break;
     }
 
-    if (state == AgentRuntimeState::THINKING) {
+    if (state == AgentRuntimeState::BEGINNING) {
         ::Drawer::Instance().DrawFillTriangle(
             cx + 18 * s, cy - 6 * s, cx + 28 * s, cy - 8 * s, cx + 28 * s, cy + 2 * s, arm_color);
         ::Drawer::Instance().DrawFillEllipse(cx + 28 * s, cy - 4 * s, 5 * s, 5 * s, skin);

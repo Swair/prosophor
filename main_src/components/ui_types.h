@@ -14,13 +14,12 @@ namespace prosophor {
 /// Agent 运行时状态
 enum class AgentRuntimeState {
     IDLE,
-    THINKING,
+    BEGINNING,
     EXECUTING_TOOL,
     TOOL_USE,
     WAITING_PERMISSION,
     STATE_ERROR,
     COMPLETE,
-    STREAM_MODE_START,      // 流式响应开始
     STREAM_CONTENT_TYPING,      // 流式响应中
     STREAM_MODE_COMPLETE,   // 流式响应完成
     STREAM_THINKING_START,  // 流式思考开始

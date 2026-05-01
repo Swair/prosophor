@@ -80,7 +80,7 @@ void SdlApp::Initialize() {
         switch (state) {
             case prosophor::AgentRuntimeState::IDLE:
                 return prosophor::StateVisualProps{100, 100, 100, 255, "Idle"};
-            case prosophor::AgentRuntimeState::THINKING:
+            case prosophor::AgentRuntimeState::BEGINNING:
                 return prosophor::StateVisualProps{65, 105, 225, 255, "Thinking"};
             case prosophor::AgentRuntimeState::EXECUTING_TOOL:
                 return prosophor::StateVisualProps{255, 165, 0, 255, "Executing"};

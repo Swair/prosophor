@@ -12,7 +12,7 @@ inline StateVisualProps GetStateVisualProps(AgentRuntimeState state) {
     switch (state) {
         case AgentRuntimeState::IDLE:
             return StateVisualProps{100, 100, 100, 255, "Idle"};
-        case AgentRuntimeState::THINKING:
+        case AgentRuntimeState::BEGINNING:
             return StateVisualProps{65, 105, 225, 255, "Thinking"};  // Royal Blue
         case AgentRuntimeState::EXECUTING_TOOL:
             return StateVisualProps{255, 165, 0, 255, "Executing"};  // Orange

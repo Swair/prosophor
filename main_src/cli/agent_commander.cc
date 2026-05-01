@@ -147,11 +147,8 @@ void AgentCommander::InitializeComponents() {
             // Notify message UI based on run mode
 
             // Terminal mode: output via OutputManager
-            if (state == AgentRuntimeState::THINKING) {
+            if (state == AgentRuntimeState::BEGINNING) {
                 // std::cout << session_id << " - " << role_id << ": " << state_msg << std::endl;
-            }
-            else if(state == AgentRuntimeState::STREAM_MODE_START) {
-                // std::cout << "< " << std::flush;
             }
             else if(state == AgentRuntimeState::STREAM_THINKING_START) {
                 std::cout << "\n<thinking> " << std::flush;
@@ -189,7 +186,7 @@ void AgentCommander::InitializeComponents() {
 
             if (mode_ == RunMode::SDL) {
                 // SDL mode: add message to chat history
-                if (state == AgentRuntimeState::THINKING) {
+                if (state == AgentRuntimeState::BEGINNING) {
                     // THINKING 状态：创建空的 Agent 消息占位（流式响应的容器）
                     UIRenderer::Instance().StartAssistantMessage();
                 }
