@@ -31,7 +31,7 @@ struct AgentRole {
     double temperature = 0.7;
     int max_tokens = 8192;
     bool enable_streaming = true;      // 是否启用流式输出
-    std::string thinking = "off";      // "off" | "low" | "medium" | "high"
+    bool thinking = false;
 
     // === 性格配置 ===
     std::string personality;           // "concise", "detailed", "cautious", "creative"

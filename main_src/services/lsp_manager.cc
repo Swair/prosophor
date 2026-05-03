@@ -227,7 +227,8 @@ nlohmann::json LspManager::SendRequest(ServerInstance& server,
     header << "Content-Length: " << body.size() << "\r\n\r\n";
 
     std::string message = header.str() + body;
-    write(server.stdin_fd, message.c_str(), message.size());
+    ssize_t written = write(server.stdin_fd, message.c_str(), message.size());
+    (void)written;
 
     return ReadResponse(server);
 }
@@ -245,7 +246,8 @@ void LspManager::SendNotification(ServerInstance& server,
     header << "Content-Length: " << body.size() << "\r\n\r\n";
 
     std::string message = header.str() + body;
-    write(server.stdin_fd, message.c_str(), message.size());
+    ssize_t written = write(server.stdin_fd, message.c_str(), message.size());
+    (void)written;
 }
 
 std::string LspManager::ReadResponse(ServerInstance& server) {

@@ -136,15 +136,15 @@ target_include_directories(prosophor PRIVATE
 
 # Compiler flags
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(prosophor_core PRIVATE -Wall -Wextra -O2)
-    target_compile_options(prosophor PRIVATE -Wall -Wextra -O2)
+    target_compile_options(prosophor_core PRIVATE -Wall -Wextra -Wpedantic -Wshadow -Werror -O2)
+    target_compile_options(prosophor PRIVATE -Wall -Wextra -Wpedantic -Wshadow -Werror -O2)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        target_compile_options(prosophor_core PRIVATE /W4 /Od /RTC1 /EHsc)
-        target_compile_options(prosophor PRIVATE /W4 /Od /RTC1 /EHsc)
+        target_compile_options(prosophor_core PRIVATE /W4 /WX /Od /RTC1 /EHsc)
+        target_compile_options(prosophor PRIVATE /W4 /WX /Od /RTC1 /EHsc)
     else()
-        target_compile_options(prosophor_core PRIVATE /W4 /O2 /EHsc)
-        target_compile_options(prosophor PRIVATE /W4 /O2 /EHsc)
+        target_compile_options(prosophor_core PRIVATE /W4 /WX /O2 /EHsc)
+        target_compile_options(prosophor PRIVATE /W4 /WX /O2 /EHsc)
     endif()
 endif()
 

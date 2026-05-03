@@ -265,7 +265,9 @@ std::string AgentSessionManager::CreateSession(const std::string& role_id,
             LOG_FATAL("Failed to set base_url for session '{}' (role: {}, provider: '{}')",
                       session_id, role_id, role.provider_prot);
         }
-        if (session.api_key.empty()) {
+        bool is_local = session.base_url.find("localhost") != std::string::npos
+                        || session.base_url.find("127.0.0.1") != std::string::npos;
+        if (session.api_key.empty() && !is_local) {
             LOG_FATAL("Failed to set api_key for session '{}' (role: {}, provider: '{}'). "
                       "Please check your settings.json provider configuration.",
                       session_id, role_id, role.provider_prot);

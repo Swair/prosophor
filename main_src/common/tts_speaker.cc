@@ -197,11 +197,10 @@ std::string TtsSpeaker::Synthesize(const std::string& text) {
 
     // 等待子进程完成（带超时）
     auto start = std::chrono::steady_clock::now();
-    bool done = false;
     while (true) {
         int status;
         pid_t result = waitpid(pid, &status, WNOHANG);
-        if (result != 0) { done = true; break; }
+        if (result != 0) break;
 
         auto elapsed = std::chrono::steady_clock::now() - start;
         if (elapsed >= std::chrono::milliseconds(TTS_TIMEOUT_MS)) {

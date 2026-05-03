@@ -18,16 +18,16 @@ HttpResponse LLMProvider::ExecuteStream(const ChatRequest& request,
     int default_timeout) const {
     HttpRequest stream_req;
     stream_req.url = request.base_url;
-    stream_req.post_data = Serialize(request);
+    stream_req.body = Serialize(request);
     stream_req.timeout_seconds = request.timeout > 0 ? request.timeout : default_timeout;
     stream_req.low_speed_limit = 1;
-    stream_req.low_speed_time = 60;
+    stream_req.low_speed_time = 120;
 
     HeaderList headers = CreateHeaders(request);
     stream_req.headers = headers.get();
     stream_req.write_data = stream_handler;
 
-    return HttpClient::Post(stream_req);
+    return HttpClient::Instance().Post(stream_req);
 }
 
 ChatResponse LLMProvider::Chat(const ChatRequest& request) {
@@ -40,18 +40,18 @@ ChatResponse LLMProvider::Chat(const ChatRequest& request) {
 
     PrintRequestLog(request);
 
-    http_request.post_data = Serialize(request);
+    http_request.body = Serialize(request);
 
-    HttpResponse http_response = HttpClient::Post(http_request);
+    HttpResponse http_response = HttpClient::Instance().Post(http_request);
 
     LOG_DEBUG("=== Received response ===");
 
     if (http_response.failed()) {
-        std::string error_msg = http_response.error.empty() ? http_response.body : http_response.error;
-        LOG_ERROR("{} API HTTP {}: {}", GetProviderName(), http_response.status_code, error_msg.substr(0, 256));
+        std::string error_detail = http_response.error_msg.empty() ? http_response.body : http_response.error_msg;
+        LOG_ERROR("{} API HTTP {}: {}", GetProviderName(), http_response.status_code, error_detail.substr(0, 256));
         throw std::runtime_error(GetProviderName() + " API error (HTTP " +
                                  std::to_string(http_response.status_code) + "): " +
-                                 error_msg);
+                                 error_detail);
     }
 
     ChatResponse response = Deserialize(http_response.body);

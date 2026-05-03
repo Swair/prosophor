@@ -8,6 +8,7 @@
 #include "common/log_wrapper.h"
 #include "common/string_utils.h"
 #include "common/curl_client.h"
+#include "providers/detail/ollama_stream_handler.h"
 
 using namespace nlohmann;
 
@@ -25,7 +26,7 @@ std::vector<std::string> OllamaProvider::GetSupportedModels() const {
     req.url = "http://localhost:11434/api/tags";
     req.timeout_seconds = 10;
 
-    HttpResponse resp = HttpClient::Get(req);
+    HttpResponse resp = HttpClient::Instance().Get(req);
 
     if (resp.success()) {
         try {
@@ -39,8 +40,8 @@ std::vector<std::string> OllamaProvider::GetSupportedModels() const {
             LOG_ERROR("Failed to parse Ollama models: {}", e.what());
         }
     } else {
-        std::string error_msg = resp.error.empty() ? resp.body : resp.error;
-        LOG_ERROR("Failed to fetch Ollama models: HTTP {} - {}", resp.status_code, error_msg);
+        std::string error_detail = resp.error_msg.empty() ? resp.body : resp.error_msg;
+        LOG_ERROR("Failed to fetch Ollama models: HTTP {} - {}", resp.status_code, error_detail);
     }
 
     return models;
@@ -50,19 +51,27 @@ nlohmann::json OllamaProvider::SerializeMessage(const MessageSchema& msg) const 
     nlohmann::json msg_json = nlohmann::json::object();
     msg_json["role"] = msg.role;
 
-    // Build content string
+    // Build content string (skip thinking — Ollama doesn't need past thinking in history)
     std::string content;
     for (const auto& block : msg.content) {
-        if (block.type == "text" || block.type == "thinking") {
-            if (!content.empty()) content += "\n";
+        if (block.type == "thinking") {
+            continue;
+        } else if (block.type == "text") {
+            if (!content.empty()) {
+                content += "\n";
+            }
             content += block.text;
         } else if (block.type == "tool_use") {
             // Ollama doesn't support tool_use in messages the same way
             // Convert to text representation
-            if (!content.empty()) content += "\n";
+            if (!content.empty()) {
+                content += "\n";
+            }
             content += "[Tool call: " + block.name + " with id " + block.tool_use_id + "]";
         } else if (block.type == "tool_result") {
-            if (!content.empty()) content += "\n";
+            if (!content.empty()) {
+                content += "\n";
+            }
             content += "[Tool result: " + block.content + "]";
         }
     }
@@ -107,8 +116,14 @@ std::string OllamaProvider::Serialize(const ChatRequest& request) const {
     payload["model"] = request.model;
     payload["stream"] = request.stream;
 
-    // Serialize messages
+    // Serialize messages — prepend system messages as OpenAI-compatible format
     nlohmann::json messages = nlohmann::json::array();
+    for (const auto& sys : request.system) {
+        nlohmann::json sys_msg;
+        sys_msg["role"] = "system";
+        sys_msg["content"] = sys.text;
+        messages.push_back(std::move(sys_msg));
+    }
     for (const auto& msg : request.messages) {
         messages.push_back(SerializeMessage(msg));
     }
@@ -125,6 +140,11 @@ std::string OllamaProvider::Serialize(const ChatRequest& request) const {
     // Standard parameters
     payload["max_tokens"] = request.max_tokens;
     payload["temperature"] = request.temperature;
+
+    // Thinking support (Ollama 0.5+ compatible models: qwen3, gemma4, etc.)
+    if (request.thinking) {
+        payload["think"] = true;
+    }
 
     LOG_DEBUG("Ollama request payload: {}", payload.dump(4));
 
@@ -157,6 +177,15 @@ ChatResponse OllamaProvider::Deserialize(const std::string& json_str) const {
             result.content_text = msg.value("content", "");
         }
 
+        // Parse thinking content
+        if (msg.contains("thinking") && !msg["thinking"].is_null()) {
+            result.has_thinking = true;
+            std::string thinking = msg.value("thinking", "");
+            if (!thinking.empty()) {
+                result.AddThinking(thinking);
+            }
+        }
+
         // Parse tool calls
         if (msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
             for (const auto& tc : msg["tool_calls"]) {
@@ -165,12 +194,15 @@ ChatResponse OllamaProvider::Deserialize(const std::string& json_str) const {
                     std::string name = func.value("name", "");
                     std::string id = tc.value("id", "");
 
-                    nlohmann::json args;
+                    nlohmann::json args = nlohmann::json::object();
                     if (func.contains("arguments")) {
                         if (func["arguments"].is_object()) {
                             args = func["arguments"];
                         } else if (func["arguments"].is_string()) {
-                            // args = nlohmann::json::parse(func["arguments"], nullptr, R"({})"_json);
+                            auto parsed = nlohmann::json::parse(func["arguments"].get<std::string>(), nullptr, false);
+                            if (!parsed.is_discarded()) {
+                                args = parsed;
+                            }
                         }
                     }
 
@@ -216,94 +248,10 @@ HeaderList OllamaProvider::CreateHeaders(const ChatRequest& /*request*/) const {
     return headers;
 }
 
-// Streaming support for Ollama (NDJSON format)
-struct OllamaStreamHandler : public StreamHandler {
-    std::function<void(const ChatResponse&)> chat_response_callback;
-    std::string buffer;
-
-    // Accumulated response for return value
-    ChatResponse accumulated_response;
-
-    explicit OllamaStreamHandler(std::function<void(const ChatResponse&)> cb)
-        : chat_response_callback(std::move(cb)) {}
-
-    std::string& Buffer() override { return buffer; }
-
-    void OnLine(const std::string& line) override {
-        if (line.empty()) return;
-
-        try {
-            auto j = nlohmann::json::parse(line);
-
-            // Check for done signal
-            if (j.value("done", false)) {
-                ChatResponse end_resp;
-                end_resp.is_stream_end = true;
-                end_resp.stop_reason = "end_turn";
-                chat_response_callback(end_resp);
-                return;
-            }
-
-            ChatResponse resp;
-
-            // Parse message content
-            if (j.contains("message")) {
-                const auto& msg = j["message"];
-                if (msg.contains("content")) {
-                    std::string content = msg.value("content", "");
-                    if (!content.empty()) {
-                        resp.content_text = content;
-                        accumulated_response.content_text += content;
-                        chat_response_callback(resp);
-                    }
-                }
-
-                // Parse tool calls in streaming
-                if (msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
-                    for (const auto& tc : msg["tool_calls"]) {
-                        if (tc.contains("function")) {
-                            const auto& func = tc["function"];
-                            std::string name = func.value("name", "");
-                            std::string id = tc.value("id", "");
-
-                            nlohmann::json args;
-                            // if (func.contains("arguments")) {
-                            //     if (func["arguments"].is_object()) {
-                            //         args = func["arguments"];
-                            //     } else if (func["arguments"].is_string()) {
-                            //         args = nlohmann::json::parse(func["arguments"], nullptr, R"({})"_json);
-                            //     }
-                            // }
-
-                            resp.AddToolCall(id, name, args);
-                            accumulated_response.AddToolCall(id, name, args);
-                        }
-                    }
-                    if (resp.HasToolCalls()) {
-                        resp.stop_reason = "tool_use";
-                        accumulated_response.stop_reason = "tool_use";
-                        chat_response_callback(resp);
-                    }
-                }
-            }
-
-            // Parse usage if present
-            if (j.contains("usage")) {
-                const auto& usage = j["usage"];
-                resp.usage.prompt_tokens = usage.value("prompt_tokens", 0);
-                resp.usage.completion_tokens = usage.value("completion_tokens", 0);
-                resp.usage.total_tokens = resp.usage.prompt_tokens + resp.usage.completion_tokens;
-                accumulated_response.usage = resp.usage;
-            }
-
-        } catch (const std::exception& e) {
-            LOG_ERROR("Failed to parse Ollama stream chunk: {}", e.what());
-        }
-    }
-};
+// --- NDJSON Streaming support ---
 
 ChatResponse OllamaProvider::ChatStream(const ChatRequest& request,
-                                 std::function<void(const ChatResponse&)> callback) {
+                                 std::function<void(StreamEvent, std::string)> callback) {
     OllamaStreamHandler stream_handler(std::move(callback));
     PrintRequestLog(request);
     ExecuteStream(request, &stream_handler, 180);

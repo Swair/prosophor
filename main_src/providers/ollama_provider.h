@@ -17,7 +17,7 @@ class OllamaProvider : public LLMProvider {
     explicit OllamaProvider();
 
     ChatResponse ChatStream(const ChatRequest& request,
-                    std::function<void(const ChatResponse&)> callback) override;
+                    std::function<void(StreamEvent, std::string)> callback) override;
 
     std::string GetProviderName() const override { return "ollama"; }
 

@@ -42,7 +42,7 @@ struct ChatRequest {
     double temperature = 0.7;
     bool tool_choice_auto = true;
     bool stream = false;
-    std::string thinking = "off";  // "off" | "low" | "medium" | "high"
+    bool thinking = false;
 
     // Agent-specific base_url from config (set by BuildRequest from agent config)
     std::string base_url;
@@ -91,15 +91,26 @@ struct ChatRequest {
 };
 
 
+/// Stream event for ChatStream callback
+enum class StreamEvent {
+    kThinkingStart,
+    kThinkingDelta,
+    kThinkingEnd,
+    kContentStart,
+    kContentDelta,
+    kContentEnd,
+    kError,
+};
+
 /// Response from chat completion API
 struct ChatResponse {
     std::string content_thinking;
+    std::string thinking_signature;  // API-required signature for thinking blocks
     std::string content_text;
     std::vector<ToolUseSchema> tool_calls;
-    bool is_stream_end = false;
-    std::string thinking_phase;      // "start", "delta", "end" (for thinking blocks)
-    std::string content_phase;       // "start", "end" (for text blocks)
+    bool has_thinking = false;       // true if response contained a thinking block
     std::string stop_reason;
+    std::string error_msg;  // Non-empty means the API returned an error
     TokenUsageSchema usage;
 
     // Convenience methods
@@ -135,7 +146,7 @@ class LLMProvider {
 
     /// Streaming chat - returns accumulated ChatResponse after stream completes
     virtual ChatResponse ChatStream(const ChatRequest& request,
-      std::function<void(const ChatResponse&)> callback) = 0;
+      std::function<void(StreamEvent, std::string)> callback) = 0;
 
     virtual std::string GetProviderName() const = 0;
 

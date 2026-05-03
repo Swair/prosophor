@@ -68,17 +68,6 @@ void AgentCommander::InitializeComponents() {
     // Create workspace directory (.prosophor/workspace under current directory)
     std::filesystem::create_directories(workspace_path_);
 
-    // Create AGENTS.md if not exists
-    auto agents_file = workspace_path_ / "AGENTS.md";
-    if (!std::filesystem::exists(agents_file)) {
-        std::ofstream ofs(agents_file);
-        if (ofs) {
-            ofs << "# AI Agent Instructions\n\nThis file contains instructions for AI agents.\n";
-            ofs.close();
-            LOG_INFO("Created AGENTS.md in workspace: {}", agents_file.string());
-        }
-    }
-
     // Memory Manager
     memory_manager_ = std::make_shared<MemoryManager>(workspace_path_);
     memory_manager_->LoadWorkspaceFiles();
@@ -147,52 +136,57 @@ void AgentCommander::InitializeComponents() {
             // Notify message UI based on run mode
 
             // Terminal mode: output via OutputManager
-            if (state == AgentRuntimeState::BEGINNING) {
-                // std::cout << session_id << " - " << role_id << ": " << state_msg << std::endl;
-            }
-            else if(state == AgentRuntimeState::STREAM_THINKING_START) {
-                std::cout << "\n<thinking> " << std::flush;
-            }
-            else if(state == AgentRuntimeState::STREAM_THINKING) {
-                std::cout << (reply ? reply->text() : "") << std::flush;
-            }
-            else if(state == AgentRuntimeState::STREAM_THINKING_END) {
-                std::cout << " </thinking>\n" << std::flush;
-            }
-            else if(state == AgentRuntimeState::STREAM_CONTENT_START) {
-                std::cout << "< " << std::flush;
-            }
-            else if(state == AgentRuntimeState::STREAM_CONTENT_TYPING) {
-                std::cout << reply->text() << std::flush;
-            }
-            else if(state == AgentRuntimeState::STREAM_CONTENT_END) {
-                std::cout << " " << std::flush;
-            }
-            else if(state == AgentRuntimeState::STREAM_MODE_COMPLETE) {
-                std::cout << "\n> " << std::flush;
-            }
-            else if(state == AgentRuntimeState::COMPLETE) {
-                std::cout << "< " << reply->text() << std::endl;
-            }
-            else if(state == AgentRuntimeState::STATE_ERROR) {
-                LOG_ERROR("Error: {}", state_msg);
-                if (reply) {
-                    LOG_ERROR("Details: {}", reply->text());
-                }
-            }
-            else if(state == AgentRuntimeState::EXECUTING_TOOL) {
-                LOG_DEBUG("Executing tool: {}", state_msg);
+            switch (state) {
+                case AgentRuntimeState::BEGINNING:
+                    break;
+                case AgentRuntimeState::STREAM_THINKING_START:
+                    std::cout << "\n<thinking> " << std::flush;
+                    break;
+                case AgentRuntimeState::STREAM_THINKING:
+                    std::cout << (reply ? reply->text() : "") << std::flush;
+                    break;
+                case AgentRuntimeState::STREAM_THINKING_END:
+                    std::cout << " </thinking>\n" << std::flush;
+                    break;
+                case AgentRuntimeState::STREAM_CONTENT_START:
+                    std::cout << "< " << std::flush;
+                    break;
+                case AgentRuntimeState::STREAM_CONTENT_TYPING:
+                    std::cout << reply->text() << std::flush;
+                    break;
+                case AgentRuntimeState::STREAM_CONTENT_END:
+                    std::cout << " " << std::flush;
+                    break;
+                case AgentRuntimeState::STREAM_MODE_COMPLETE:
+                    std::cout << "\n> " << std::flush;
+                    break;
+                case AgentRuntimeState::COMPLETE:
+                    std::cout << "< " << reply->text() << std::endl;
+                    break;
+                case AgentRuntimeState::STATE_ERROR:
+                    LOG_ERROR("Error: {}", state_msg);
+                    if (reply) {
+                        LOG_ERROR("Details: {}", reply->text());
+                    }
+                    break;
+                case AgentRuntimeState::EXECUTING_TOOL:
+                    LOG_DEBUG("Executing tool: {}", state_msg);
+                    break;
+                default:
+                    break;
             }
 
             if (mode_ == RunMode::SDL) {
                 // SDL mode: add message to chat history
-                if (state == AgentRuntimeState::BEGINNING) {
-                    // THINKING 状态：创建空的 Agent 消息占位（流式响应的容器）
-                    UIRenderer::Instance().StartAssistantMessage();
-                }
-                else if (state == AgentRuntimeState::STREAM_CONTENT_TYPING) {
-                    // 流式输入：追加内容到 Agent 消息
-                    UIRenderer::Instance().UpdateLastMessage(reply->text());
+                switch (state) {
+                    case AgentRuntimeState::BEGINNING:
+                        UIRenderer::Instance().StartAssistantMessage();
+                        break;
+                    case AgentRuntimeState::STREAM_CONTENT_TYPING:
+                        UIRenderer::Instance().UpdateLastMessage(reply->text());
+                        break;
+                    default:
+                        break;
                 }
             }
         });

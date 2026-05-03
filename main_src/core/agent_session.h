@@ -198,6 +198,7 @@ struct AgentSession {
         // 创建 role 本地副本
         mutable_role_ = *role;
         role = &mutable_role_.value();
+        role->provider_prot = provider_name;
 
         auto& config = ProsophorConfig::GetInstance();
         auto prov_it = config.providers.find(provider_name);

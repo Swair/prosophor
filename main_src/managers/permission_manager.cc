@@ -45,8 +45,8 @@ static bool PatternMatches(const std::string& pattern, const std::string& value)
     }
 }
 
-bool PermissionRule::MatchesTool(const std::string& tool_name) const {
-    return PatternMatches(tool_name, tool_name);
+bool PermissionRule::MatchesTool(const std::string& name) const {
+    return PatternMatches(tool_name, name);
 }
 
 bool PermissionRule::MatchesCommand(const std::string& command) const {

@@ -5,10 +5,30 @@
 
 #include <algorithm>
 #include <cctype>
+#include <mutex>
 #include <stdexcept>
 #include <sstream>
+#include <nlohmann/json.hpp>
+#include "log_wrapper.h"
 
 namespace prosophor {
+
+// ============================================================================
+// HttpClient RAII singleton
+// ============================================================================
+
+HttpClient& HttpClient::Instance() {
+    static HttpClient instance;
+    return instance;
+}
+
+HttpClient::HttpClient() {
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+}
+
+HttpClient::~HttpClient() {
+    curl_global_cleanup();
+}
 
 // ============================================================================
 // Retry-After header parser
@@ -75,10 +95,9 @@ void HeaderList::clear() {
 HttpResponse HttpClient::Get(const HttpRequest& request) {
     HttpResponse response;
 
-    curl_global_init(CURL_GLOBAL_DEFAULT);
     CURL* curl = curl_easy_init();
     if (!curl) {
-        response.error = "Failed to initialize CURL handle";
+        response.error_msg = "Failed to initialize CURL handle";
         return response;
     }
 
@@ -130,39 +149,26 @@ HttpResponse HttpClient::Get(const HttpRequest& request) {
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
 
     curl_easy_cleanup(curl);
-    curl_global_cleanup();
 
-    // Streaming mode: throw exceptions on error
-    if (is_streaming) {
-        if (res != CURLE_OK) {
-            throw std::runtime_error("CURL streaming request failed: " + std::string(curl_easy_strerror(res)));
-        }
-        if (code >= 400) {
-            throw std::runtime_error("HTTP error: " + std::to_string(code));
-        }
-        return response;  // Return empty response for streaming
-    }
+    response.curl_code = res;
+    response.status_code = static_cast<int>(code);
 
-    // Blocking mode: populate response
     if (res != CURLE_OK) {
-        response.error = "CURL request failed: " + std::string(curl_easy_strerror(res));
+        response.error_msg = "CURL request failed: " + std::string(curl_easy_strerror(res));
         return response;
     }
 
-    response.status_code = static_cast<int>(code);
     response.body = res_body;
     response.retry_after_seconds = ParseRetryAfter(res_header);
-
     return response;
 }
 
 HttpResponse HttpClient::Post(const HttpRequest& request) {
     HttpResponse response;
 
-    curl_global_init(CURL_GLOBAL_DEFAULT);
     CURL* curl = curl_easy_init();
     if (!curl) {
-        response.error = "Failed to initialize CURL handle";
+        response.error_msg = "Failed to initialize CURL handle";
         return response;
     }
 
@@ -175,7 +181,7 @@ HttpResponse HttpClient::Post(const HttpRequest& request) {
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request.post_data.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request.body.c_str());
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, request.timeout_seconds);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
 
@@ -208,80 +214,42 @@ HttpResponse HttpClient::Post(const HttpRequest& request) {
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "gzip, deflate, br");
 
     // Execute
+    LOG_DEBUG("curl_easy_perform begin, req timeout_seconds {}", request.timeout_seconds);
+    LOG_DEBUG("req payload {}", request.body);
     CURLcode res = curl_easy_perform(curl);
+    LOG_DEBUG("curl_easy_perform end");
 
     long code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
 
-    // Streaming mode: for errors, re-perform to capture error response body
-    if (is_streaming && code >= 400 && res == CURLE_OK) {
-        std::string error_body;
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &error_body);
-        curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");  // Disable compression for error capture
-        CURLcode res2 = curl_easy_perform(curl);
-        long code2 = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code2);
-        curl_easy_cleanup(curl);
-        curl_global_cleanup();
-        std::string err_msg = "HTTP error: " + std::to_string(code);
-        if (res2 == CURLE_OK && !error_body.empty()) {
-            err_msg += " - " + error_body.substr(0, 2000);
-        }
-        throw std::runtime_error(err_msg);
-    }
-
     curl_easy_cleanup(curl);
-    curl_global_cleanup();
 
-    // Streaming mode: throw exceptions on error
-    if (is_streaming) {
-        if (res != CURLE_OK) {
-            throw std::runtime_error("CURL streaming request failed: " + std::string(curl_easy_strerror(res)));
-        }
-        return response;  // Return empty response for streaming
-    }
+    response.curl_code = res;
+    response.status_code = static_cast<int>(code);
 
-    // Blocking mode: populate response
     if (res != CURLE_OK) {
-        response.error = "CURL request failed: " + std::string(curl_easy_strerror(res));
+        response.error_msg = "CURL request failed: " + std::string(curl_easy_strerror(res));             
+        LOG_ERROR("{}", response.error_msg);
         return response;
     }
 
-    response.status_code = static_cast<int>(code);
+    if(!is_streaming) LOG_DEBUG("res_body = {}", res_body);
     response.body = res_body;
     response.retry_after_seconds = ParseRetryAfter(res_header);
-
     return response;
 }
 
 HttpResponse HttpClient::Post(const std::string& url,
-                              const std::string& post_data,
+                              const std::string& body,
                               void* headers,
                               long timeout_seconds) {
     HttpRequest request;
     request.url = url;
-    request.post_data = post_data;
+    request.body = body;
     request.headers = headers;
     request.timeout_seconds = timeout_seconds;
     return Post(request);
 }
-
-// ============================================================================
-// StreamHandler implementation
-// ============================================================================
-
-void StreamHandler::OnEvent(const std::string& /*event_type*/, const std::string& /*data*/) {
-    // Default: do nothing
-}
-
-void StreamHandler::OnStreamEnd() {
-    // Default: do nothing
-}
-
-// ============================================================================
-// SseStreamHandler implementation
-// ============================================================================
 
 void SseStreamHandler::OnLine(const std::string& line) {
     // Remove trailing CR if present
@@ -294,22 +262,38 @@ void SseStreamHandler::OnLine(const std::string& line) {
 
     // Parse SSE format
     if (cleaned.substr(0, 6) == "event:") {
-        current_event_ = cleaned.substr(6);
-        if (!current_event_.empty() && current_event_[0] == ' ') {
-            current_event_ = current_event_.substr(1);
+        current_event = cleaned.substr(6);
+        if (!current_event.empty() && current_event[0] == ' ') {
+            current_event = current_event.substr(1);
         }
         return;
     }
 
     if (cleaned.substr(0, 5) == "data:") {
-        current_data_ = cleaned.substr(5);
-        if (!current_data_.empty() && current_data_[0] == ' ') {
-            current_data_ = current_data_.substr(1);
+        current_data = cleaned.substr(5);
+        if (!current_data.empty() && current_data[0] == ' ') {
+            current_data = current_data.substr(1);
         }
         // exp. event:content_block_delta，data:{"delta":{"type":"text_delta","text":"Hello"}}
-        OnEvent(current_event_, current_data_);
-        current_event_.clear();
-        current_data_.clear();
+        OnEvent(current_event, current_data);
+        current_event.clear();
+        current_data.clear();
+        return;
+    }
+
+    // Non-SSE line — check for JSON error response
+    if (!cleaned.empty() && cleaned[0] == '{') {
+        try {
+            auto j = nlohmann::json::parse(cleaned);
+            if (j.contains("error")) {
+                error_msg = j["error"].is_string() ? j["error"].get<std::string>()
+                                                   : j["error"].dump();
+                LOG_ERROR("SSE stream API error: {}", error_msg);
+            }
+        } catch (...) {
+            error_msg = "SSE stream API unkown error: " + cleaned;
+            LOG_ERROR("SSE stream API unkown error: {}", cleaned);
+        }
     }
 }
 
@@ -343,6 +327,8 @@ size_t StreamWriteCallback(void* contents, size_t size, size_t nmemb, void* user
     // Process line by line
     std::string& buffer = handler->Buffer();
     buffer += chunk;
+
+    LOG_DEBUG("res StreamCallback = {}", buffer);
 
     size_t pos;
     while ((pos = buffer.find('\n')) != std::string::npos) {

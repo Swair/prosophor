@@ -32,7 +32,6 @@ int main(int argc, char* argv[]) {
 #ifdef PROSOPHOR_SDL_UI
         return prosophor::SdlApp::GetInstance().Run();
 #else
-        // 命令行 Agent 模式
         return prosophor::AgentCommander::GetInstance().Run();
 #endif
     } catch (const std::exception& e) {

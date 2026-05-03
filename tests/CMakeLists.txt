@@ -50,8 +50,8 @@ set(TEST_LINK_LIBS
 # ========================================
 
 # Get all .cc files (excluding main.cc which is a helper)
-file(GLOB TEST_SOURCES "*.cc")
-list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/main.cc")
+file(GLOB TEST_SOURCES "unittest/*.cc")
+list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/unittest/main.cc")
 
 # Create an executable for each test file
 foreach(TEST_FILE ${TEST_SOURCES})
@@ -62,7 +62,7 @@ foreach(TEST_FILE ${TEST_SOURCES})
     add_executable(${TEST_NAME} ${TEST_FILE})
     target_include_directories(${TEST_NAME} PRIVATE ${TEST_INCLUDE_DIRS})
 
-    # agent_core_sync_test uses different linking (standalone demo)
+    # Standalone tools (have own main, no gtest)
     if(TEST_NAME STREQUAL "agent_core_sync_test")
         target_link_libraries(${TEST_NAME} PRIVATE prosophor_core spdlog::spdlog nlohmann_json::nlohmann_json)
     else()
@@ -77,8 +77,17 @@ foreach(TEST_FILE ${TEST_SOURCES})
     endif()
 
     # Add to install list
-    list(APPEND TEST_TARGETS ${TEST_NAME})
+    install(TARGETS ${TEST_NAME} DESTINATION bin/unitests)
 endforeach()
 
-# Install all test executables
-install(TARGETS ${TEST_TARGETS} DESTINATION bin/tests)
+# ========================================
+# Benchmark Executables (standalone, no gtest)
+# ========================================
+file(GLOB BENCH_SOURCES "benchmark/*_test.cc")
+foreach(BENCH_FILE ${BENCH_SOURCES})
+    get_filename_component(BENCH_NAME ${BENCH_FILE} NAME_WE)
+    add_executable(${BENCH_NAME} ${BENCH_FILE})
+    target_include_directories(${BENCH_NAME} PRIVATE ${TEST_INCLUDE_DIRS})
+    target_link_libraries(${BENCH_NAME} PRIVATE prosophor_core spdlog::spdlog nlohmann_json::nlohmann_json)
+    install(TARGETS ${BENCH_NAME} DESTINATION bin/benchmark)
+endforeach()

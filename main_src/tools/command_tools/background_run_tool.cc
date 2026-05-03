@@ -83,7 +83,7 @@ std::string BackgroundRunTool::Get(const nlohmann::json& params) {
     }
 }
 
-std::string BackgroundRunTool::List(const nlohmann::json& params) {
+std::string BackgroundRunTool::List(const nlohmann::json& /*params*/) {
     auto& bg_mgr = BackgroundTaskManager::GetInstance();
 
     auto tasks = bg_mgr.ListTasks();
@@ -127,7 +127,7 @@ std::string BackgroundRunTool::Cancel(const nlohmann::json& params) {
     return result.dump(2);
 }
 
-std::string BackgroundRunTool::Drain(const nlohmann::json& params) {
+std::string BackgroundRunTool::Drain(const nlohmann::json& /*params*/) {
     auto& bg_mgr = BackgroundTaskManager::GetInstance();
 
     std::string notifications = bg_mgr.DrainNotifications();

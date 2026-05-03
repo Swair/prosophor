@@ -15,7 +15,7 @@ class AnthropicProvider : public LLMProvider {
     explicit AnthropicProvider() = default;
 
     ChatResponse ChatStream(const ChatRequest& request,
-        std::function<void(const ChatResponse&)> callback) override;
+        std::function<void(StreamEvent, std::string)> callback) override;
 
     std::string GetProviderName() const override { return "anthropic"; }
 

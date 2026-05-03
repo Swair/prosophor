@@ -13,7 +13,7 @@
             "temperature": 0.7,
             "max_tokens": 8192,
             "context_window": 128000,
-            "thinking": "off"
+            "thinking": false
           },
           "fast": {
             "model": "qwen-turbo",
@@ -33,14 +33,14 @@
             "temperature": 0.7,
             "max_tokens": 8192,
             "context_window": 128000,
-            "thinking": "high"
+            "thinking": false
           },
           "flash": {
             "model": "deepseek-v4-flash",
             "temperature": 0.1,
             "max_tokens": 1024,
             "context_window": 128000,
-            "thinking": "high"
+            "thinking": true
           }
         }
       }
@@ -55,34 +55,38 @@
             "model": "qwen3:8b",
             "temperature": 0.7,
             "max_tokens": 8192,
-            "context_window": 32768
+            "context_window": 32768,
+            "thinking": true
           },
           "gemma4": {
             "model": "gemma4:e4b",
             "temperature": 0.1,
             "max_tokens": 4096,
-            "context_window": 128000
+            "context_window": 128000,
+            "thinking": true
           }
         }
       }
     ],
     "openai": [
       {
-        "api_key": "",
-        "base_url": "https://api.openai.com/v1/chat/completions",
+        "api_key": "sk-be7c5ed396474c3fa6841214cfxxxx",
+        "base_url": "https://api.deepseek.com/chat/completions",
         "timeout": 60,
         "agents": {
           "default": {
-            "model": "gpt-4o",
+            "model": "deepseek-v4-pro",
             "temperature": 0.7,
             "max_tokens": 8192,
-            "context_window": 128000
+            "context_window": 128000,
+            "thinking": false
           },
           "fast": {
-            "model": "gpt-4o-mini",
+            "model": "deepseek-v4-flash",
             "temperature": 0.1,
             "max_tokens": 1024,
-            "context_window": 128000
+            "context_window": 128000,
+            "thinking": true
           }
         }
       }

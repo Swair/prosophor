@@ -4,8 +4,8 @@ name: 默认助手
 description: 默认全能型助手，自动加载所有技能和工具
 avatar: 🤖
 
-provider_prot: anthropic
-model: qwen3.5-plus
+provider_prot: ollama
+model: gemma4:e4b
 
 personality: balanced
 personality_prompt: 你是一个全能的助手，根据任务需求自动调整风格。需要编码时专业严谨，需要解释时耐心详细。

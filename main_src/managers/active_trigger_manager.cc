@@ -371,11 +371,11 @@ bool ActiveTriggerManager::ExecuteTrigger(const ActiveTriggerPlugin& plugin,
         return false;
     }
 
-    if (result.return_code != 0) {
-        return false;  // 返回非 0 = 不触发
+    if (result.return_code == 0) {
+        return false;  // 返回 0 = 不触发
     }
 
-    // 返回 0 = 触发，output 作为触发原因
+    // 返回非 0 = 触发，output 作为触发原因
     trigger_reason = result.output;
     if (trigger_reason.empty()) {
         trigger_reason = "Plugin " + plugin.name + " triggered";

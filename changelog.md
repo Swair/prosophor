@@ -1,6 +1,37 @@
 # Changelog
 
-## [Unreleased] - v0.4.0 重大重构
+## [2026-05-03] - 回调流程优化
+
+### 状态枚举重构
+- `AgentRuntimeState::THINKING` → `BEGINNING`
+- `AgentRuntimeState::TOOL_MSG` → `TOOL_USE`
+- 移除冗余的 `STREAM_MODE_START` 状态
+- 影响范围：`ui_types.h`、`agent_core.cc`、`agent_commander.cc`、`status_bar.cc`、`agent_state_visualizer.h`、`agent_state_observer.cc`、`anime_character.cc`、`character_state_observer.cc`、`sdl_app.cc`
+
+### Provider 流式解析重构
+- 新增 `providers/detail/anthropic_stream_handler.h` (131 行) — Anthropic SSE 流处理器
+- 新增 `providers/detail/ollama_stream_handler.h` (144 行) — Ollama SSE 流处理器
+- 新增 `providers/detail/openai_stream_handler.h` (169 行) — OpenAI SSE 流处理器
+- `anthropic_provider.cc` 减少 ~205 行，`openai_provider.cc` 减少 ~208 行，`ollama_provider.cc` 减少 ~142 行
+- 各 Provider 类职责更单一，流式解析逻辑与请求逻辑分离
+
+### 流式回调逻辑优化
+- `agent_core.cc` 中 thinking/content 阶段通过 `content_phase` 字段（"start"/"delta"/"end"）区分
+- 消息历史仅在关键状态节点写入（COMPLETE, TOOL_USE, ERROR），流式中间态不再写入
+- `agent_commander.cc` 终端输出流格式调整，thinking 标签包裹改进
+- `agent_session.h` provider 配置兜底逻辑修复
+
+### 测试清理
+- 移除 `tests/agent_core_test.cc`、`tests/compact_service_test.cc`、`tests/tool_registry_test.cc`、`tests/main.cc`
+- 移除 `tools/verify.sh`
+
+### 构建与配置
+- `CMakeLists.txt`、`Makefile` 适配新文件结构
+- `settings.json` 扩展，`.gitignore` 更新
+
+---
+
+## [2026-04-30] - v0.4.0 重大重构
 
 ### 新增功能
 - **OpenAI Provider**: 新增 OpenAI 兼容接口支持 (`providers/openai_provider.cc/h`)

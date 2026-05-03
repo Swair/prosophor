@@ -18,13 +18,21 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Suppress CMP0148 warning from third-party deps (FindPythonInterp removed)
+if(POLICY CMP0148)
+    cmake_policy(SET CMP0148 OLD)
+endif()
+
 # Set install prefix to "install" directory in build folder
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install" CACHE PATH "Install prefix" FORCE)
 endif()
 
 add_subdirectory(main_src)
-# add_subdirectory(tests)
+
+# if(NOT WIN32)
+#     add_subdirectory(tests)
+# endif()
 
 # Install configuration files, roles, skills, and workspace
 # Install to ~/.prosophor (home directory) on all platforms
@@ -36,9 +44,7 @@ else()
     file(TO_CMAKE_PATH "$ENV{HOME}/.prosophor" PROSOPHOR_INSTALL_DIR)
 endif()
 
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/config/.prosophor/ DESTINATION ${PROSOPHOR_INSTALL_DIR}
-    PATTERN "settings.json" EXCLUDE  # Don't overwrite user's settings
-)
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/config/.prosophor/ DESTINATION ${PROSOPHOR_INSTALL_DIR})
 
 # # Install assets directory to bin/assets (relative to executable)
 # install(DIRECTORY ${CMAKE_SOURCE_DIR}/assets/ DESTINATION bin/assets)

@@ -52,8 +52,19 @@ run:
 	$(INSTALL_DIR)/bin/prosophor;
 .PHONY: run
 
+tests:
+	@echo "Running all tests in $(BUILD_DIR)/unitests..."
+	@for test in $(INSTALL_DIR)/bin/unitests/*_test; do \
+		if [ -x "$$test" ] && [ ! -d "$$test" ]; then \
+			$$test --gtest_list_tests >/dev/null 2>&1 || continue; \
+			echo "=== $$(basename $$test) ==="; \
+			$$test || exit 1; \
+		fi \
+	done
+.PHONY: tests
+
 clean:
-	find ${BUILD_DIR} -mindepth 1 -not -path "*/_deps*" -delete
+	rm -rf ${BUILD_DIR}
 .PHONY: clean
 
 
@@ -95,7 +106,7 @@ run_win:
 .PHONY: run_win
 
 clean_win:
-	find ${BUILD_DIR_WIN} -mindepth 1 -not -path "*/_deps*" -delete
+	rm -rf ${BUILD_DIR_WIN}
 .PHONY: clean_win
 
 # 运行所有单元测试 (执行 bin/tests 目录下所有测试程序)

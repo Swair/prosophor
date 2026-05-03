@@ -28,7 +28,7 @@ class HeaderList {
 /// Configuration for HTTP requests (supports both blocking and streaming)
 struct HttpRequest {
     std::string url;
-    std::string post_data;
+    std::string body;
     void* headers = nullptr;
     long timeout_seconds = 30;
     long low_speed_limit = 0;  // bytes/sec, 0 = disabled
@@ -42,44 +42,55 @@ struct HttpRequest {
 
 /// Result of an HTTP request
 struct HttpResponse {
+    CURLcode curl_code = CURLE_OK;
     int status_code = 0;
     std::string body;
-    std::string error;
+    std::string error_msg;
     int retry_after_seconds = 0;
 
-    bool success() const { return status_code >= 200 && status_code < 300; }
-    bool failed() const { return !error.empty() || status_code >= 400; }
+    bool success() const { return curl_code == CURLE_OK && status_code >= 200 && status_code < 300; }
+    bool failed() const { return !success(); }
 };
 
-/// High-level HTTP client for blocking and streaming requests
+/// High-level HTTP client with RAII-managed curl global state
 class HttpClient {
    public:
-    // Perform a blocking HTTP GET request
-    static HttpResponse Get(const HttpRequest& request);
+    static HttpClient& Instance();
 
-    // Perform a blocking HTTP POST request
-    // If request.write_data is set, performs streaming request instead
-    static HttpResponse Post(const HttpRequest& request);
+    HttpResponse Get(const HttpRequest& request);
+    HttpResponse Post(const HttpRequest& request);
+    HttpResponse Post(const std::string& url,
+                     const std::string& body,
+                     void* headers,
+                     long timeout_seconds);
 
-    // Perform a blocking HTTP POST request with simple parameters
-    static HttpResponse Post(const std::string& url,
-                            const std::string& post_data,
-                            void* headers,
-                            long timeout_seconds);
+   private:
+    HttpClient();
+    ~HttpClient();
+    HttpClient(const HttpClient&) = delete;
+    HttpClient& operator=(const HttpClient&) = delete;
+};
+
+/// Stream output phase (for UI thinking/content/tool_calls state tracking)
+enum class StreamPhase {
+    kNone,
+    kThinking,
+    kContent,
+    kToolCalls,
 };
 
 /// Base class for handling streaming responses
 struct StreamHandler {
+    std::string error_msg;  // Non-empty means API returned an error
+    StreamPhase phase = StreamPhase::kNone;
+
     virtual ~StreamHandler() = default;
 
     /// Called when a complete line is received
     virtual void OnLine(const std::string& line) = 0;
 
     /// Called when an event is parsed (for SSE)
-    virtual void OnEvent(const std::string& event_type, const std::string& data);
-
-    /// Called when the stream ends
-    virtual void OnStreamEnd();
+    virtual void OnEvent(const std::string& event_type, const std::string& data) = 0;
 
     /// Get the buffer for processing
     virtual std::string& Buffer() = 0;
@@ -87,13 +98,20 @@ struct StreamHandler {
 
 /// SSE (Server-Sent Events) stream handler
 struct SseStreamHandler : public StreamHandler {
+    struct PendingToolCall {
+        std::string id;
+        std::string name;
+        std::string arguments;
+    };
+    std::vector<PendingToolCall> pending_tool_calls;
+
     void OnLine(const std::string& line) override;
     void OnEvent(const std::string& event_type, const std::string& data) override;
-    std::string& Buffer() { return buffer_; }
+    std::string& Buffer() { return buffer; }
 
-    std::string buffer_;
-    std::string current_event_;
-    std::string current_data_;
+    std::string buffer;
+    std::string current_event;
+    std::string current_data;
 };
 
 /// Write callback for simple body collection

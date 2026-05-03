@@ -163,7 +163,8 @@ void InputHandler::SaveHistory() {
         std::string dir = history_file_.substr(0, pos);
         // Simple mkdir -p equivalent
         std::string cmd = "mkdir -p \"" + dir + "\"";
-        (void)system(cmd.c_str());
+        int ret = system(cmd.c_str());
+        (void)ret;
     }
 
     std::ofstream file(history_file_);
@@ -341,21 +342,6 @@ static int GetDisplayWidth(const std::string& str) {
     return width;
 }
 
-// Helper function to get byte position for a given character index
-static size_t GetByteOffset(const std::string& str, size_t char_index) {
-    if (char_index == 0) return 0;
-
-    size_t byte_offset = 0;
-    size_t count = 0;
-
-    while (byte_offset < str.size() && count < char_index) {
-        int char_len = GetUtf8CharLen(static_cast<unsigned char>(str[byte_offset]));
-        byte_offset += char_len;
-        count++;
-    }
-
-    return byte_offset;
-}
 
 void InputHandler::RefreshLine(const std::string& prompt) {
     // Move cursor to beginning of line

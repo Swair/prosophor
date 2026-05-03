@@ -249,7 +249,7 @@ AgentConfig AgentConfig::FromJson(const nlohmann::json& json) {
     config.temperature = json.value("temperature", kDefaultTemperature);
     config.max_tokens = json.value("max_tokens", json.value("maxTokens", kDefaultMaxTokens));
     config.context_window = json.value("context_window", json.value("contextWindow", kDefaultContextWindow));
-    config.thinking = json.value("thinking", "off");
+    config.thinking = json.value("thinking", false);
     config.use_tools = json.value("use_tools", json.value("useTools", true));
     config.enable_streaming = json.value("enable_streaming", json.value("enableStreaming", true));
     config.auto_compact = json.value("auto_compact", json.value("autoCompact", true));
@@ -537,7 +537,7 @@ void ProsophorConfig::CreateDefaultConfig(const std::string& filepath) {
             "max_tokens": 8192,
             "context_window": 128000,
             "use_tools": true,
-            "thinking": "off",
+            "thinking": false,
             "enable_streaming": true
           }
         }

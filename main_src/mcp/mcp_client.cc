@@ -517,21 +517,21 @@ bool McpClient::LoadServersFromFile() {
         if (config.contains("servers") && config["servers"].is_array()) {
             std::vector<McpServerConfig> servers;
             for (const auto& server_json : config["servers"]) {
-                McpServerConfig config;
-                config.name = server_json.value("name", "");
-                config.type = server_json.value("type", "stdio");
-                config.command = server_json.value("command", "");
+                McpServerConfig cfg;
+                cfg.name = server_json.value("name", "");
+                cfg.type = server_json.value("type", "stdio");
+                cfg.command = server_json.value("command", "");
                 if (server_json.contains("args")) {
-                    config.args = server_json["args"].get<std::vector<std::string>>();
+                    cfg.args = server_json["args"].get<std::vector<std::string>>();
                 }
-                config.url = server_json.value("url", "");
+                cfg.url = server_json.value("url", "");
                 if (server_json.contains("env")) {
-                    config.env = server_json["env"];
+                    cfg.env = server_json["env"];
                 }
-                config.enabled = server_json.value("enabled", true);
+                cfg.enabled = server_json.value("enabled", true);
 
-                if (!config.name.empty()) {
-                    servers.push_back(config);
+                if (!cfg.name.empty()) {
+                    servers.push_back(cfg);
                 }
             }
 

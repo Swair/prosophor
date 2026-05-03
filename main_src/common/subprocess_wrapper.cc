@@ -107,7 +107,7 @@ SubprocessResult ExecuteScriptWithTimeout(const std::string& script_path, int ti
     int pipefd[2];
     if (pipe(pipefd) == -1) {
         result.return_code = -1;
-        result.stderr = "Failed to create pipe";
+        result.error_output = "Failed to create pipe";
         return result;
     }
 
@@ -116,7 +116,7 @@ SubprocessResult ExecuteScriptWithTimeout(const std::string& script_path, int ti
         close(pipefd[0]);
         close(pipefd[1]);
         result.return_code = -1;
-        result.stderr = "Failed to fork";
+        result.error_output = "Failed to fork";
         return result;
     }
 

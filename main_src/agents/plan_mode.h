@@ -83,14 +83,14 @@ struct Plan {
     /// Get progress percentage
     int GetProgressPercent() const {
         if (steps.empty()) return 0;
-        int completed = 0;
+        int done = 0;
         for (const auto& step : steps) {
             if (step.status == PlanStepStatus::Completed ||
                 step.status == PlanStepStatus::Skipped) {
-                completed++;
+                done++;
             }
         }
-        return (completed * 100) / static_cast<int>(steps.size());
+        return (done * 100) / static_cast<int>(steps.size());
     }
 };
 

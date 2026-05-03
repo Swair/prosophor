@@ -10,22 +10,20 @@
 #include "common/curl_client.h"
 #include "providers/llm_provider.h"
 #include "common/messages_schema.h"
+#include "providers/detail/openai_stream_handler.h"
 
 namespace prosophor {
 
 // Internal helper functions for OpenAI serialization
 
 // Maps thinking level to enable_thinking flag
-static bool ShouldEnableThinking(const std::string& level) {
-    return level != "off" && !level.empty();
+static bool ShouldEnableThinking(bool thinking) {
+    return thinking;
 }
 
 // Maps thinking level to budget tokens (OpenAI uses reasoning_effort style)
-static std::string ThinkingToReasoningEffort(const std::string& level) {
-    if (level == "low") return "low";
-    if (level == "medium") return "medium";
-    if (level == "high") return "high";
-    return "";
+static std::string ThinkingToReasoningEffort(bool /*thinking*/) {
+    return "medium";
 }
 
 OpenAIProvider::OpenAIProvider(bool enable_thinking)
@@ -76,7 +74,9 @@ std::string OpenAIProvider::Serialize(const ChatRequest& request) const {
         // Join system texts into a single string
         std::string system_text;
         for (size_t i = 0; i < request.system.size(); ++i) {
-            if (i > 0) system_text += "\n";
+            if (i > 0) {
+                system_text += "\n";
+            }
             system_text += request.system[i].text;
         }
         sys_msg["content"] = system_text;
@@ -105,6 +105,9 @@ std::string OpenAIProvider::Serialize(const ChatRequest& request) const {
         if (!effort.empty()) {
             payload_json["reasoning_effort"] = effort;
         }
+    }
+    else {
+        payload_json["enable_thinking"] = false;
     }
 
     // Serialize tools (OpenAI format: {type: "function", function: {...}})
@@ -154,7 +157,9 @@ nlohmann::json OpenAIProvider::SerializeMessageContent(
     std::string text;
     for (const auto& block : content) {
         if (block.type == "text" || block.type == "thinking") {
-            if (!text.empty()) text += "\n";
+            if (!text.empty()) {
+                text += "\n";
+            }
             text += block.text;
         }
     }
@@ -236,11 +241,25 @@ ChatResponse OpenAIProvider::Deserialize(const std::string& json_str) const {
                 } else if (msg["content"].is_array()) {
                     // Array format content
                     for (const auto& block : msg["content"]) {
-                        if (block.value("type", "") == "text") {
-                            if (!result.content_text.empty()) result.content_text += "\n";
+                        std::string btype = block.value("type", "");
+                        if (btype == "text") {
+                            if (!result.content_text.empty()) {
+                                result.content_text += "\n";
+                            }
                             result.content_text += block.value("text", "");
+                        } else if (btype == "thinking") {
+                            result.has_thinking = true;
                         }
                     }
+                }
+            }
+
+            // Parse reasoning_content (DeepSeek, Qwen, etc.)
+            if (msg.contains("reasoning_content") && !msg["reasoning_content"].is_null()) {
+                result.has_thinking = true;
+                std::string rc = msg["reasoning_content"].get<std::string>();
+                if (!rc.empty()) {
+                    result.AddThinking(rc);
                 }
             }
 
@@ -315,164 +334,21 @@ HeaderList OpenAIProvider::CreateHeaders(const ChatRequest& request) const {
 
 // --- SSE Streaming support ---
 
-// OpenAI-compatible SSE stream handler
-// Format (matching openai_demo.py):
-//   data: {"choices":[{"delta":{"reasoning_content":"...","content":"..."}}]}
-//   data: [DONE]
-struct OpenAIStreamHandler : public StreamHandler {
-    std::function<void(const ChatResponse&)> chat_response_callback;
-    std::string buffer;
-
-    struct PendingToolCall {
-        std::string id;
-        std::string name;
-        std::string arguments;
-    };
-    std::vector<PendingToolCall> pending_tool_calls;
-
-    // Accumulated response for return value
-    ChatResponse accumulated_response;
-
-    explicit OpenAIStreamHandler(std::function<void(const ChatResponse&)> cb)
-        : chat_response_callback(std::move(cb)) {}
-
-    std::string& Buffer() override { return buffer; }
-
-    void OnLine(const std::string& line) override {
-        if (line.empty()) return;
-
-        // Handle SSE "data:" prefix
-        std::string data = line;
-        if (data.rfind("data:", 0) == 0) {
-            data = data.substr(5);
-            // Trim whitespace
-            size_t start = data.find_first_not_of(" \t\r\n");
-            if (start != std::string::npos) {
-                data = data.substr(start);
-            } else {
-                return;
-            }
-        }
-
-        // Check for [DONE] signal
-        if (data == "[DONE]" || data.empty()) {
-            // Finalize any pending tool calls
-            if (!pending_tool_calls.empty()) {
-                for (const auto& ptc : pending_tool_calls) {
-                    auto args = nlohmann::json::parse(ptc.arguments, nullptr, false);
-                    if (args.is_discarded()) {
-                        args = nlohmann::json::object();
-                    }
-                    accumulated_response.AddToolCall(ptc.id, ptc.name, args);
-                }
-                pending_tool_calls.clear();
-            }
-
-            // Send end-of-stream notification
-            ChatResponse end_resp;
-            end_resp.is_stream_end = true;
-            end_resp.stop_reason = accumulated_response.stop_reason.empty()
-                ? "stop" : accumulated_response.stop_reason;
-            end_resp.usage = accumulated_response.usage;
-            chat_response_callback(end_resp);
-            return;
-        }
-
-        try {
-            auto chunk = nlohmann::json::parse(data, nullptr, false);
-            if (chunk.is_discarded()) return;
-
-            if (!chunk.contains("choices") || chunk["choices"].empty()) {
-                return;
-            }
-
-            const auto& delta = chunk["choices"][0].value("delta", nlohmann::json::object());
-            std::string finish = chunk["choices"][0].value("finish_reason", "");
-
-            // Parse reasoning_content (Qwen DeepThink style)
-            if (delta.contains("reasoning_content")
-                && !delta["reasoning_content"].is_null()) {
-                std::string rc = delta["reasoning_content"].get<std::string>();
-                if (!rc.empty()) {
-                    ChatResponse resp;
-                    resp.content_text = rc;
-                    // Mark as reasoning content via a special prefix
-                    accumulated_response.content_text += rc;
-                    chat_response_callback(resp);
-                }
-            }
-
-            // Parse regular content
-            if (delta.contains("content")
-                && !delta["content"].is_null()) {
-                std::string cc = delta["content"].get<std::string>();
-                if (!cc.empty()) {
-                    ChatResponse resp;
-                    resp.content_text = cc;
-                    accumulated_response.content_text += cc;
-                    chat_response_callback(resp);
-                }
-            }
-
-            // Parse tool calls in streaming
-            if (delta.contains("tool_calls") && delta["tool_calls"].is_array()) {
-                for (const auto& tc : delta["tool_calls"]) {
-                    if (tc.contains("function")) {
-                        const auto& func = tc["function"];
-
-                        // Initialize pending tool call if new
-                        if (tc.contains("id") && !tc["id"].get<std::string>().empty()) {
-                            PendingToolCall ptc;
-                            ptc.id = tc["id"].get<std::string>();
-                            if (func.contains("name")) {
-                                ptc.name = func["name"].get<std::string>();
-                            }
-                            pending_tool_calls.push_back(ptc);
-                        }
-
-                        // Append arguments
-                        if (!pending_tool_calls.empty()
-                            && func.contains("arguments")) {
-                            std::string args_str = func["arguments"].get<std::string>();
-                            if (!args_str.empty()) {
-                                pending_tool_calls.back().arguments += args_str;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Handle finish_reason
-            if (!finish.empty()) {
-                accumulated_response.stop_reason = finish;
-                if (finish == "stop") {
-                    accumulated_response.stop_reason = "stop";
-                } else if (finish == "length") {
-                    accumulated_response.stop_reason = "length";
-                } else if (finish == "tool_calls") {
-                    accumulated_response.stop_reason = "tool_calls";
-                }
-            }
-
-            // Parse usage from streaming chunk
-            if (chunk.contains("usage")) {
-                const auto& u = chunk["usage"];
-                accumulated_response.usage.prompt_tokens = u.value("prompt_tokens", 0);
-                accumulated_response.usage.completion_tokens = u.value("completion_tokens", 0);
-                accumulated_response.usage.total_tokens = u.value("total_tokens", 0);
-            }
-
-        } catch (const std::exception& e) {
-            LOG_ERROR("Failed to parse OpenAI stream chunk: {}", e.what());
-        }
-    }
-};
-
 ChatResponse OpenAIProvider::ChatStream(const ChatRequest& request,
-     std::function<void(const ChatResponse&)> callback) {
+     std::function<void(StreamEvent, std::string)> callback) {
     OpenAIStreamHandler stream_handler(std::move(callback));
     PrintRequestLog(request);
-    ExecuteStream(request, &stream_handler);
+    auto http_resp = ExecuteStream(request, &stream_handler);
+    if (!stream_handler.error_msg.empty()) {
+        stream_handler.accumulated_response.error_msg = stream_handler.error_msg;
+        stream_handler.stream_callback(StreamEvent::kError, stream_handler.error_msg);
+    } else if (http_resp.failed()) {
+        std::string err = "OpenAI API error (HTTP " +
+                          std::to_string(http_resp.status_code) + "): " + http_resp.error_msg;
+        LOG_ERROR("{}", err);
+        stream_handler.accumulated_response.error_msg = err;
+        stream_handler.stream_callback(StreamEvent::kError, std::move(err));
+    }
     return stream_handler.accumulated_response;
 }
 

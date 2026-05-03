@@ -209,7 +209,9 @@ ChatRequest AgentCore::BuildRequest(const AgentSession& session) {
                   session.session_id, session.role_id);
         throw std::runtime_error("session.base_url must not be empty");
     }
-    if (session.api_key.empty()) {
+    bool is_local = session.base_url.find("localhost") != std::string::npos
+        || session.base_url.find("127.0.0.1") != std::string::npos;
+    if (session.api_key.empty() && !is_local) {
         LOG_FATAL("session.api_key is empty for session {} (role: {}, provider: '{}')",
                   session.session_id, session.role_id,
                   session.role ? session.role->provider_prot : "N/A");
@@ -244,7 +246,7 @@ ChatRequest AgentCore::BuildRequest(const AgentSession& session) {
     LOG_DEBUG("BuildRequest: model='{}', base_url='{}', timeout={}s, api_key={}",
              req.model, req.base_url, req.timeout,
              req.api_key.size() > 8 ? req.api_key.substr(0, 8) + "..." : req.api_key);
-    LOG_DEBUG("BuildRequest: thinking='{}', temperature={}, max_tokens={}",
+    LOG_DEBUG("BuildRequest: thinking={}, temperature={}, max_tokens={}",
              req.thinking, req.temperature, req.max_tokens);
     return req;
 }
@@ -283,40 +285,64 @@ void AgentCore::Loop(const std::string& message, AgentSession& session) {
         ChatResponse response;
         if (streaming) {
             response = session.provider->ChatStream(
-                request, [&session](const ChatResponse& chunk) {
-                    if (!chunk.thinking_phase.empty()) {
-                        if (chunk.thinking_phase == "start") {
+                request, [&session](StreamEvent event, std::string content) {
+                    switch (event) {
+                        case StreamEvent::kThinkingStart:
                             SetSessionOutput(session, AgentRuntimeState::STREAM_THINKING_START, "", std::nullopt);
-                        } else if (chunk.thinking_phase == "delta") {
+                            break;
+                        case StreamEvent::kThinkingDelta: {
                             MessageSchema thinking_msg;
                             thinking_msg.role = "assistant";
-                            thinking_msg.AddThinkingContent(chunk.content_thinking);
+                            thinking_msg.AddThinkingContent(content);
                             SetSessionOutput(session, AgentRuntimeState::STREAM_THINKING, "", thinking_msg);
-                        } else if (chunk.thinking_phase == "end") {
-                            SetSessionOutput(session, AgentRuntimeState::STREAM_THINKING_END, "", std::nullopt);
+                            break;
                         }
-                    } else if (!chunk.content_phase.empty()) {
-                        if (chunk.content_phase == "start") {
+                        case StreamEvent::kThinkingEnd:
+                            SetSessionOutput(session, AgentRuntimeState::STREAM_THINKING_END, "", std::nullopt);
+                            break;
+                        case StreamEvent::kContentStart:
                             SetSessionOutput(session, AgentRuntimeState::STREAM_CONTENT_START, "", std::nullopt);
-                        } else if (chunk.content_phase == "delta") {
+                            break;
+                        case StreamEvent::kContentDelta: {
                             MessageSchema chunk_msg;
                             chunk_msg.role = "assistant";
-                            chunk_msg.AddTextContent(chunk.content_text);
+                            chunk_msg.AddTextContent(content);
                             SetSessionOutput(session, AgentRuntimeState::STREAM_CONTENT_TYPING, "", chunk_msg);
-                        } else if (chunk.content_phase == "end") {
-                            SetSessionOutput(session, AgentRuntimeState::STREAM_CONTENT_END, "", std::nullopt);
+                            break;
                         }
+                        case StreamEvent::kContentEnd:
+                            SetSessionOutput(session, AgentRuntimeState::STREAM_CONTENT_END, "", std::nullopt);
+                            break;
+                        default:
+                            break;
                     }
                 });
         } else {
             response = session.provider->Chat(request);
         }
 
+        // Record token usage for both streaming and non-streaming paths
+        if (response.usage.total_tokens > 0) {
+            RecordTokenUsage(request.model, response.usage);
+        }
+
+        // Check for API error
+        if (!response.error_msg.empty()) {
+            LOG_ERROR("API error: {}", response.error_msg);
+            MessageSchema error_msg;
+            error_msg.role = "assistant";
+            error_msg.AddTextContent("[API Error] " + response.error_msg);
+            SetSessionOutput(session, AgentRuntimeState::STATE_ERROR, response.error_msg, error_msg);
+            return;
+        }
+
         // Build assistant message with thinking (if any)
+        // In thinking mode, thinking blocks must be preserved even if empty
         MessageSchema assistant_msg;
         assistant_msg.role = "assistant";
-        if (!response.content_thinking.empty()) {
-            assistant_msg.AddThinkingContent(response.content_thinking);
+        if (response.has_thinking) {
+            assistant_msg.AddThinkingContent(response.content_thinking,
+                                             response.thinking_signature);
         }
 
         // Execute tool calls if present

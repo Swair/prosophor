@@ -654,10 +654,10 @@ std::string ToolRegistry::WebFetchTool(const nlohmann::json& params) {
     req.timeout_seconds = 30;
     req.user_agent = "Prosophor/1.0 (WebFetch Tool)";
 
-    HttpResponse resp = HttpClient::Post(req);
+    HttpResponse resp = HttpClient::Instance().Post(req);
 
     if (resp.failed()) {
-        return "Error fetching URL: " + resp.error + " (HTTP " + std::to_string(resp.status_code) + ")";
+        return "Error fetching URL: " + resp.error_msg + " (HTTP " + std::to_string(resp.status_code) + ")";
     }
 
     // Simple HTML to text conversion - strip tags
@@ -702,7 +702,7 @@ static std::string url_decode(const std::string& input) {
     std::ostringstream result;
     for (size_t i = 0; i < input.size(); ++i) {
         if (input[i] == '%' && i + 2 < input.size()) {
-            int hi = 0;
+            unsigned int hi = 0;
             if (std::sscanf(input.substr(i + 1, 2).c_str(), "%x", &hi) == 1) {
                 result << static_cast<char>(hi);
                 i += 2;
@@ -807,9 +807,9 @@ std::string ToolRegistry::WebSearchTool(const nlohmann::json& params) {
             headers.append(("X-Subscription-Token: " + std::string(brave_key)).c_str());
             req.headers = headers.get();
 
-            HttpResponse resp = HttpClient::Get(req);
+            HttpResponse resp = HttpClient::Instance().Get(req);
             if (resp.failed()) {
-                throw std::runtime_error("Brave Search: " + resp.error + " (HTTP " + std::to_string(resp.status_code) + ")");
+                throw std::runtime_error("Brave Search: " + resp.error_msg + " (HTTP " + std::to_string(resp.status_code) + ")");
             }
 
             auto j = nlohmann::json::parse(resp.body);
@@ -820,9 +820,9 @@ std::string ToolRegistry::WebSearchTool(const nlohmann::json& params) {
                 for (const auto& r : j["web"]["results"]) {
                     if (i >= count) break;
                     std::string title = r.value("title", "");
-                    std::string url = r.value("url", "");
+                    std::string result_url = r.value("url", "");
                     std::string desc = r.value("description", "");
-                    result << (i + 1) << ". " << title << "\n   " << url << "\n   " << desc << "\n\n";
+                    result << (i + 1) << ". " << title << "\n   " << result_url << "\n   " << desc << "\n\n";
                     i++;
                 }
                 if (i > 0) return result.str();
@@ -844,16 +844,16 @@ std::string ToolRegistry::WebSearchTool(const nlohmann::json& params) {
 
             HttpRequest req;
             req.url = "https://api.tavily.com/search";
-            req.post_data = body.dump();
+            req.body = body.dump();
             req.timeout_seconds = 15;
 
             prosophor::HeaderList headers;
             headers.append("Content-Type: application/json");
             req.headers = headers.get();
 
-            HttpResponse resp = HttpClient::Post(req);
+            HttpResponse resp = HttpClient::Instance().Post(req);
             if (resp.failed()) {
-                throw std::runtime_error("Tavily: " + resp.error + " (HTTP " + std::to_string(resp.status_code) + ")");
+                throw std::runtime_error("Tavily: " + resp.error_msg + " (HTTP " + std::to_string(resp.status_code) + ")");
             }
 
             auto j = nlohmann::json::parse(resp.body);
@@ -894,7 +894,7 @@ std::string ToolRegistry::WebSearchTool(const nlohmann::json& params) {
         headers.append("Accept: text/html");
         req.headers = headers.get();
 
-        HttpResponse resp = HttpClient::Get(req);
+        HttpResponse resp = HttpClient::Instance().Get(req);
         if (resp.success() && !resp.body.empty()) {
             result.str("");
             result << "Search results (DuckDuckGo): " << query << "\n\n";
@@ -919,7 +919,7 @@ std::string ToolRegistry::WebSearchTool(const nlohmann::json& params) {
                     pos++;
                     continue;
                 }
-                std::string url = resp.body.substr(href_start, href_end - href_start);
+                std::string link_url = resp.body.substr(href_start, href_end - href_start);
 
                 // Find title (between > and </a>)
                 size_t title_start = resp.body.find(">", href_end);
@@ -933,7 +933,7 @@ std::string ToolRegistry::WebSearchTool(const nlohmann::json& params) {
                     continue;
                 }
                 std::string title = html_to_text(resp.body.substr(title_start, title_end - title_start));
-                links.emplace_back(url, title);
+                links.emplace_back(link_url, title);
                 pos = title_end;
             }
 
@@ -957,14 +957,14 @@ std::string ToolRegistry::WebSearchTool(const nlohmann::json& params) {
             int n = std::min(count, (int)links.size());
             for (int i = 0; i < n; ++i) {
                 // URL decode for DuckDuckGo redirect URLs
-                std::string url = links[i].first;
-                if (url.find("uddg=") != std::string::npos) {
-                    size_t pos = url.find("uddg=") + 5;
-                    size_t amp = url.find('&', pos);
-                    std::string encoded = (amp != std::string::npos) ? url.substr(pos, amp - pos) : url.substr(pos);
-                    url = url_decode(encoded);
+                std::string decoded_url = links[i].first;
+                if (decoded_url.find("uddg=") != std::string::npos) {
+                    size_t uddg_pos = decoded_url.find("uddg=") + 5;
+                    size_t amp = decoded_url.find('&', uddg_pos);
+                    std::string encoded_url = (amp != std::string::npos) ? decoded_url.substr(uddg_pos, amp - uddg_pos) : decoded_url.substr(uddg_pos);
+                    decoded_url = url_decode(encoded_url);
                 }
-                result << (i + 1) << ". " << links[i].second << "\n   " << url;
+                result << (i + 1) << ". " << links[i].second << "\n   " << decoded_url;
                 if (i < (int)snippets.size()) {
                     result << "\n   " << snippets[i];
                 }

@@ -111,8 +111,8 @@ AgentRole AgentRoleLoader::ParseMarkdownFile(const std::filesystem::path& file) 
             std::string extracted_model = role.model.substr(colon_pos + 1);
             if (role.provider_prot.empty()) {
                 role.provider_prot = extracted_provider;
+                role.model = extracted_model;
             }
-            role.model = extracted_model;
         }
     }
 

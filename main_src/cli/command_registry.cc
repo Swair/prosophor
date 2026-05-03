@@ -2040,27 +2040,54 @@ CommandResult CommandRegistry::CmdModel(const CommandContext& ctx, const std::ve
             oss << "  Role: " << ctx.agent_session->role_id << "\n";
         }
 
-        // List available providers with their models
-        oss << "\nAvailable providers:\n";
+        // Build indexed list of all provider/model combinations
+        oss << "\nAvailable models:\n";
         const auto& config = ProsophorConfig::GetInstance();
+        size_t global_idx = 0;
+        struct ModelEntry { std::string provider; std::string model; };
+        std::vector<ModelEntry> model_entries;
         for (const auto& [prov_name, prov_config] : config.providers) {
-            std::vector<std::string> models;
             for (const auto& [agent_name, agent_config] : prov_config.agents) {
-                models.push_back(agent_config.model);
+                oss << "  [" << global_idx << "] " << std::left << std::setw(14) << prov_name
+                    << agent_config.model << "\n";
+                model_entries.push_back({prov_name, agent_config.model});
+                ++global_idx;
             }
-            std::string model_list;
-            for (size_t i = 0; i < models.size(); ++i) {
-                if (i > 0) model_list += ", ";
-                model_list += models[i];
-            }
-            oss << "  " << std::left << std::setw(14) << prov_name
-                << (model_list.empty() ? "" : " (" + model_list + ")") << "\n";
         }
         oss << "\nUsage:\n";
-        oss << "  /model <provider>              - Switch provider (keeps current model)\n";
-        oss << "  /model <provider> <model>      - Switch provider and model\n";
+        oss << "  /model <idx>                    - Switch to model by index\n";
+        oss << "  /model <provider>               - Switch provider (keeps current model)\n";
+        oss << "  /model <provider> <model>       - Switch provider and model\n";
 
         return CommandResult::Ok(oss.str());
+    }
+
+    // Check if first arg is a numeric index into the model list
+    bool is_index = !args[0].empty() && std::all_of(args[0].begin(), args[0].end(), ::isdigit);
+    if (is_index) {
+        size_t idx = std::stoul(args[0]);
+        const auto& config = ProsophorConfig::GetInstance();
+        auto found = [&]() -> std::pair<std::string, std::string> {
+            size_t i = 0;
+            for (const auto& [prov_name, prov_config] : config.providers) {
+                for (const auto& [agent_name, agent_config] : prov_config.agents) {
+                    if (i++ == idx) return {prov_name, agent_config.model};
+                }
+            }
+            return {};
+        }();
+        if (found.first.empty()) {
+            return CommandResult::Fail("Invalid model index: " + args[0] + ". Use /model to list available models.");
+        }
+        if (ctx.agent_session) {
+            ctx.agent_session->ApplyProviderOverride(found.first, found.second);
+            std::ostringstream oss;
+            oss << "Switched to [" << idx << "] " << found.first << " / " << found.second << "\n";
+            oss << "Note: This override applies to the current session only.\n";
+            oss << "New sessions will use the role's default provider configuration.";
+            return CommandResult::Ok(oss.str());
+        }
+        return CommandResult::Fail("No active session to switch provider for");
     }
 
     // Change provider/model

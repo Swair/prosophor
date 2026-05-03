@@ -53,7 +53,7 @@ struct AgentConfig {
     double temperature = 0.7;
     int max_tokens = 8192;
     int context_window = 128000;
-    std::string thinking = "off";
+    bool thinking = false;
     bool use_tools = true;
     bool enable_streaming = true;  // Whether to use streaming for responses
 
