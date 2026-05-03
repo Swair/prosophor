@@ -2044,13 +2044,13 @@ CommandResult CommandRegistry::CmdModel(const CommandContext& ctx, const std::ve
         oss << "\nAvailable models:\n";
         const auto& config = ProsophorConfig::GetInstance();
         size_t global_idx = 0;
-        struct ModelEntry { std::string provider; std::string model; };
-        std::vector<ModelEntry> model_entries;
+        std::set<std::pair<std::string, std::string>> seen;
         for (const auto& [prov_name, prov_config] : config.providers) {
             for (const auto& [agent_name, agent_config] : prov_config.agents) {
+                auto key = std::make_pair(prov_name, agent_config.model);
+                if (!seen.insert(key).second) continue;
                 oss << "  [" << global_idx << "] " << std::left << std::setw(14) << prov_name
                     << agent_config.model << "\n";
-                model_entries.push_back({prov_name, agent_config.model});
                 ++global_idx;
             }
         }
@@ -2066,19 +2066,24 @@ CommandResult CommandRegistry::CmdModel(const CommandContext& ctx, const std::ve
     bool is_index = !args[0].empty() && std::all_of(args[0].begin(), args[0].end(), ::isdigit);
     if (is_index) {
         size_t idx = std::stoul(args[0]);
-        const auto& config = ProsophorConfig::GetInstance();
-        auto found = [&]() -> std::pair<std::string, std::string> {
-            size_t i = 0;
+        // Rebuild the deduped index (same logic as listing)
+        std::vector<std::pair<std::string, std::string>> deduped;
+        {
+            std::set<std::pair<std::string, std::string>> seen_dedup;
+            const auto& config = ProsophorConfig::GetInstance();
             for (const auto& [prov_name, prov_config] : config.providers) {
                 for (const auto& [agent_name, agent_config] : prov_config.agents) {
-                    if (i++ == idx) return {prov_name, agent_config.model};
+                    auto key = std::make_pair(prov_name, agent_config.model);
+                    if (seen_dedup.insert(key).second) {
+                        deduped.emplace_back(prov_name, agent_config.model);
+                    }
                 }
             }
-            return {};
-        }();
-        if (found.first.empty()) {
+        }
+        if (idx >= deduped.size()) {
             return CommandResult::Fail("Invalid model index: " + args[0] + ". Use /model to list available models.");
         }
+        auto& found = deduped[idx];
         if (ctx.agent_session) {
             ctx.agent_session->ApplyProviderOverride(found.first, found.second);
             std::ostringstream oss;
