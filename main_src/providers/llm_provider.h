@@ -160,7 +160,7 @@ class LLMProvider {
     /// Execute streaming HTTP POST request
     /// default_timeout: used when request.timeout <= 0 (Ollama: 180, others: 60)
     HttpResponse ExecuteStream(const ChatRequest& request,
-        void* stream_handler,
+        StreamHandler* stream_handler,
         int default_timeout = 60) const;
 
     virtual HeaderList CreateHeaders(const ChatRequest& request) const = 0;

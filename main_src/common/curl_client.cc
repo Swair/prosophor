@@ -27,7 +27,62 @@ HttpClient::HttpClient() {
 }
 
 HttpClient::~HttpClient() {
+    for (auto& [key, entries] : handle_pool_) {
+        for (auto& entry : entries) {
+            curl_easy_cleanup(entry.handle);
+        }
+    }
+    handle_pool_.clear();
     curl_global_cleanup();
+}
+
+// ============================================================================
+// Connection pool
+// ============================================================================
+
+static std::string ExtractHostKey(const std::string& url) {
+    auto pos = url.find("://");
+    if (pos == std::string::npos) return url;
+    auto start = pos + 3;
+    auto end = url.find('/', start);
+    return url.substr(0, end);
+}
+
+CURL* HttpClient::AcquireHandle(const std::string& url) {
+    std::lock_guard<std::mutex> lock(pool_mutex_);
+    auto key = ExtractHostKey(url);
+    auto it = handle_pool_.find(key);
+    if (it != handle_pool_.end() && !it->second.empty()) {
+        auto& vec = it->second;
+        auto& entry = vec.back();
+        if (ElapsedSeconds(entry.last_used) < kPooledHandleMaxIdleSec) {
+            CURL* handle = entry.handle;
+            vec.pop_back();
+            if (vec.empty()) {
+                handle_pool_.erase(it);
+            }
+            curl_easy_reset(handle);
+            return handle;
+        }
+        // purging expired handles
+        for (auto& e : vec) {
+            curl_easy_cleanup(e.handle);
+        }
+        handle_pool_.erase(it);
+    }
+    return curl_easy_init();
+}
+
+void HttpClient::ReleaseHandle(const std::string& url, CURL* handle) {
+    if (!handle) return;
+    std::lock_guard<std::mutex> lock(pool_mutex_);
+    auto key = ExtractHostKey(url);
+    auto& vec = handle_pool_[key];
+    if (vec.size() < kPoolMaxHandlesPerHost) {
+        vec.push_back({handle, SteadyClock::Now()});
+    } else {
+        curl_easy_cleanup(handle);
+    }
 }
 
 // ============================================================================
@@ -73,17 +128,17 @@ HeaderList::HeaderList() : list_(nullptr) {}
 
 HeaderList::~HeaderList() {
     if (list_) {
-        curl_slist_free_all(static_cast<struct curl_slist*>(list_));
+        curl_slist_free_all(list_);
     }
 }
 
 void HeaderList::append(const char* str) {
-    list_ = curl_slist_append(static_cast<struct curl_slist*>(list_), str);
+    list_ = curl_slist_append(list_, str);
 }
 
 void HeaderList::clear() {
     if (list_) {
-        curl_slist_free_all(static_cast<struct curl_slist*>(list_));
+        curl_slist_free_all(list_);
         list_ = nullptr;
     }
 }
@@ -95,7 +150,7 @@ void HeaderList::clear() {
 HttpResponse HttpClient::Get(const HttpRequest& request) {
     HttpResponse response;
 
-    CURL* curl = curl_easy_init();
+    CURL* curl = AcquireHandle(request.url);
     if (!curl) {
         response.error_msg = "Failed to initialize CURL handle";
         return response;
@@ -103,14 +158,12 @@ HttpResponse HttpClient::Get(const HttpRequest& request) {
 
     std::string res_header;
     std::string res_body;
-    struct curl_slist* headers = static_cast<struct curl_slist*>(request.headers);
-    // 检测是否为流式：write_data 非空
     const bool is_streaming = request.write_data != nullptr;
 
     // Configure the request for GET
     curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, request.headers);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, request.timeout_seconds);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
 
@@ -148,7 +201,7 @@ HttpResponse HttpClient::Get(const HttpRequest& request) {
     long code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
 
-    curl_easy_cleanup(curl);
+    ReleaseHandle(request.url, curl);
 
     response.curl_code = res;
     response.status_code = static_cast<int>(code);
@@ -166,7 +219,7 @@ HttpResponse HttpClient::Get(const HttpRequest& request) {
 HttpResponse HttpClient::Post(const HttpRequest& request) {
     HttpResponse response;
 
-    CURL* curl = curl_easy_init();
+    CURL* curl = AcquireHandle(request.url);
     if (!curl) {
         response.error_msg = "Failed to initialize CURL handle";
         return response;
@@ -174,13 +227,12 @@ HttpResponse HttpClient::Post(const HttpRequest& request) {
 
     std::string res_header;
     std::string res_body;
-    struct curl_slist* headers = static_cast<struct curl_slist*>(request.headers);
     const bool is_streaming = request.write_data != nullptr;
 
     // Configure the request
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, request.headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request.body.c_str());
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, request.timeout_seconds);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
@@ -222,13 +274,13 @@ HttpResponse HttpClient::Post(const HttpRequest& request) {
     long code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
 
-    curl_easy_cleanup(curl);
+    ReleaseHandle(request.url, curl);
 
     response.curl_code = res;
     response.status_code = static_cast<int>(code);
 
     if (res != CURLE_OK) {
-        response.error_msg = "CURL request failed: " + std::string(curl_easy_strerror(res));             
+        response.error_msg = "CURL request failed: " + std::string(curl_easy_strerror(res));
         LOG_ERROR("{}", response.error_msg);
         return response;
     }
@@ -241,7 +293,7 @@ HttpResponse HttpClient::Post(const HttpRequest& request) {
 
 HttpResponse HttpClient::Post(const std::string& url,
                               const std::string& body,
-                              void* headers,
+                              struct curl_slist* headers,
                               long timeout_seconds) {
     HttpRequest request;
     request.url = url;

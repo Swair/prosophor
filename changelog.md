@@ -1,5 +1,41 @@
 # Changelog
 
+## [2026-05-04] - Provider 接口统一与状态回调优化
+
+### HttpClient 单例化与接口规范化
+- HttpClient 从静态方法改为单例模式 (`HttpClient::Instance()`)
+- `HttpRequest::post_data` → `body`，语义更清晰
+- `HttpResponse::error` → `error_msg`，新增 `curl_code` 字段精确区分错误来源
+- `success()`/`failed()` 判断逻辑增强（同时检查 `curl_code` 与 `status_code`）
+- 新增 `StreamPhase` 枚举，用于流式输出的 thinking/content/tool_calls 阶段追踪
+- `StreamHandler::OnEvent()` 改为纯虚函数，`OnStreamEnd()` 移除，接口更简洁
+- `SseStreamHandler` 字段命名规范化（移除尾缀下划线），新增 `PendingToolCall` 结构
+
+### Provider Thinking 配置重构
+- OpenAI Provider: `thinking` 配置从字符串枚举 (`"off"/"low"/"medium"/"high"`) 改为布尔值
+- `ShouldEnableThinking()` 参数类型同步更新，移除冗余的映射逻辑
+- `ThinkingToReasoningEffort()` 简化，固定返回 `"medium"`
+- 响应反序列化新增 `thinking` 类型 content block 识别
+- 修复 OpenAI Provider 在 thinking 关闭时未正确设置 `enable_thinking=false` 的问题
+
+### 状态回调分发优化
+- `agent_commander.cc` 状态输出从 if-else 链重构为 `switch` 语句，可读性与性能提升
+- SDL 模式 UI 回调同样迁移为 `switch` 结构
+- 终端 thinking 标签格式调整：前后增加空格（`<thinking> ` / ` </thinking>`）
+- 移除工作区初始化时自动创建 `AGENTS.md` 的逻辑
+
+### 构建与配置
+- `settings.json` 中所有 provider 的 `thinking` 字段统一为布尔值 (`true`/`false`)
+- 修复重复 model list 问题
+
+### 文件统计
+- 变更文件：51 个
+- 新增：+1,044 行
+- 删除：-1,562 行
+- 净变化：-518 行（持续精简）
+
+---
+
 ## [2026-05-03] - 回调流程优化
 
 ### 状态枚举重构

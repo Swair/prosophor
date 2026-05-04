@@ -14,7 +14,7 @@ void RecordTokenUsage(const std::string& model, const TokenUsageSchema& usage) {
 }
 
 HttpResponse LLMProvider::ExecuteStream(const ChatRequest& request,
-    void* stream_handler,
+    StreamHandler* stream_handler,
     int default_timeout) const {
     HttpRequest stream_req;
     stream_req.url = request.base_url;

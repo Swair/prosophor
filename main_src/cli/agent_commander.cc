@@ -157,6 +157,9 @@ void AgentCommander::InitializeComponents() {
                 case AgentRuntimeState::STREAM_CONTENT_END:
                     std::cout << " " << std::flush;
                     break;
+                case AgentRuntimeState::EXECUTING_TOOL:
+                    std::cout << "<executing tool> " << state_msg << std::endl;
+                    break;
                 case AgentRuntimeState::STREAM_MODE_COMPLETE:
                     std::cout << "\n> " << std::flush;
                     break;
@@ -168,9 +171,6 @@ void AgentCommander::InitializeComponents() {
                     if (reply) {
                         LOG_ERROR("Details: {}", reply->text());
                     }
-                    break;
-                case AgentRuntimeState::EXECUTING_TOOL:
-                    LOG_DEBUG("Executing tool: {}", state_msg);
                     break;
                 default:
                     break;

@@ -67,6 +67,15 @@ clean:
 	rm -rf ${BUILD_DIR}
 .PHONY: clean
 
+# ==============================================================================
+# llamacpp server
+# ==============================================================================
+
+MODEL ?= $(PROJECT_DIR)/../llamacpp_model/google_gemma-4-E4B-it-Q4_K_M.gguf
+run_llamacpp_server:
+	llama-server -m $(MODEL) --host 0.0.0.0 --port 8080  
+.PHONY: run_llamacpp_server
+
 
 # ==============================================================================
 # Windows 构建配置 (MSYS2/MinGW)

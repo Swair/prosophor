@@ -89,6 +89,20 @@
             "thinking": true
           }
         }
+      },
+      {
+        "api_key": "",
+        "base_url": "http://localhost:8080/v1/chat/completions",
+        "timeout": 120,
+        "agents": {
+          "default": {
+            "model": "google_gemma-4-E4B-it-Q4_K_M",
+            "temperature": 0.7,
+            "max_tokens": 8192,
+            "context_window": 32768,
+            "thinking": false
+          }
+        }
       }
     ]
   },

@@ -23,6 +23,7 @@ public:
             std::cout << "> " << std::flush;
             while (running_) {
                 std::string line = input_handler_->ReadLine("");
+                std::cout << "> " << std::flush;
 
                 if (line.empty()) {
                     // 空行（回车）跳过，继续输入

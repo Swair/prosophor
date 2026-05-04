@@ -316,12 +316,12 @@ ChatResponse OpenAIProvider::Deserialize(const std::string& json_str) const {
 }
 
 void OpenAIProvider::PrintRequestLog(const ChatRequest& request) const {
-    LOG_INFO("=== Sending request to OpenAI-compatible API ===");
-    LOG_INFO("URL: {}", request.base_url);
-    LOG_INFO("Model: {}", request.model);
-    LOG_INFO("Headers:");
-    LOG_INFO("  Content-Type: application/json");
-    LOG_INFO("  Authorization: Bearer {}", request.api_key.substr(0, 8) + "...");
+    LOG_DEBUG("=== Sending request to OpenAI-compatible API ===");
+    LOG_DEBUG("URL: {}", request.base_url);
+    LOG_DEBUG("Model: {}", request.model);
+    LOG_DEBUG("Headers:");
+    LOG_DEBUG("  Content-Type: application/json");
+    LOG_DEBUG("  Authorization: Bearer {}", request.api_key.substr(0, 8) + "...");
 }
 
 HeaderList OpenAIProvider::CreateHeaders(const ChatRequest& request) const {

@@ -2,13 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "common/time_wrapper.h"
 #include <cstddef>
 #include <curl/curl.h>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace prosophor {
+
+struct StreamHandler;
 
 /// RAII wrapper for HTTP header list
 class HeaderList {
@@ -16,20 +22,19 @@ class HeaderList {
     HeaderList();
     ~HeaderList();
 
-    void* get() const { return list_; }
-    struct curl_slist* raw() const { return static_cast<struct curl_slist*>(list_); }
+    struct curl_slist* get() const { return list_; }
     void append(const char* str);
     void clear();
 
    private:
-    void* list_;
+    struct curl_slist* list_;
 };
 
 /// Configuration for HTTP requests (supports both blocking and streaming)
 struct HttpRequest {
     std::string url;
     std::string body;
-    void* headers = nullptr;
+    struct curl_slist* headers = nullptr;
     long timeout_seconds = 30;
     long low_speed_limit = 0;  // bytes/sec, 0 = disabled
     long low_speed_time = 0;   // seconds
@@ -37,7 +42,7 @@ struct HttpRequest {
 
     // Streaming callback: called for each chunk of data received
     // If nullptr, the request is treated as blocking and body is collected
-    void* write_data = nullptr;
+    StreamHandler* write_data = nullptr;
 };
 
 /// Result of an HTTP request
@@ -52,7 +57,7 @@ struct HttpResponse {
     bool failed() const { return !success(); }
 };
 
-/// High-level HTTP client with RAII-managed curl global state
+/// High-level HTTP client with RAII-managed curl global state and connection reuse
 class HttpClient {
    public:
     static HttpClient& Instance();
@@ -61,7 +66,7 @@ class HttpClient {
     HttpResponse Post(const HttpRequest& request);
     HttpResponse Post(const std::string& url,
                      const std::string& body,
-                     void* headers,
+                     struct curl_slist* headers,
                      long timeout_seconds);
 
    private:
@@ -69,6 +74,20 @@ class HttpClient {
     ~HttpClient();
     HttpClient(const HttpClient&) = delete;
     HttpClient& operator=(const HttpClient&) = delete;
+
+    CURL* AcquireHandle(const std::string& url);
+    void ReleaseHandle(const std::string& url, CURL* handle);
+
+    static constexpr double kPooledHandleMaxIdleSec = 90.0;
+    static constexpr size_t kPoolMaxHandlesPerHost = 4;
+
+    struct PooledHandle {
+        CURL* handle;
+        SteadyClock::TimePoint last_used;
+    };
+
+    std::mutex pool_mutex_;
+    std::unordered_map<std::string, std::vector<PooledHandle>> handle_pool_;
 };
 
 /// Stream output phase (for UI thinking/content/tool_calls state tracking)
