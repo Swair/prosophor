@@ -3,10 +3,7 @@
 
 #include "common/log_wrapper.h"
 #include "common/config.h"
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
+#include "platform/platform.h"
 
 #ifdef PROSOPHOR_SDL_UI
 #include "scene/sdl_app.h"
@@ -18,11 +15,7 @@
 int main(int argc, char* argv[]) {
     (void)argc; (void)argv;  // 未使用参数
 
-#ifdef _WIN32
-    // 设置 Windows 控制台代码页为 UTF-8，解决中文乱码问题
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
-#endif
+    prosophor::platform::SetConsoleUtf8();
 
     const auto& config = prosophor::ProsophorConfig::GetInstance();
     prosophor::InitLog(config.log_level);

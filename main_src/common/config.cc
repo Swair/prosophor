@@ -311,6 +311,30 @@ ProviderConfig ProviderConfig::FromJson(const nlohmann::json& json) {
     return config;
 }
 
+LocalModelConfig LocalModelConfig::FromJson(const nlohmann::json& json) {
+    LocalModelConfig config;
+    config.model_path = json.value("model_path", "");
+    config.port = json.value("port", 8080);
+    config.n_gpu_layers = json.value("n_gpu_layers", json.value("nGpuLayers", -1));
+    config.n_threads = json.value("n_threads", json.value("nThreads", 0));
+    config.auto_start = json.value("auto_start", json.value("autoStart", true));
+    config.start_timeout_ms = json.value("start_timeout_ms", json.value("startTimeoutMs", 60000));
+    config.server_path = json.value("server_path", json.value("serverPath", ""));
+    return config;
+}
+
+nlohmann::json LocalModelConfig::ToJson() const {
+    nlohmann::json j;
+    j["model_path"] = model_path;
+    j["port"] = port;
+    j["n_gpu_layers"] = n_gpu_layers;
+    j["n_threads"] = n_threads;
+    j["auto_start"] = auto_start;
+    if (start_timeout_ms != 60000) j["start_timeout_ms"] = start_timeout_ms;
+    if (!server_path.empty()) j["server_path"] = server_path;
+    return j;
+}
+
 ToolConfig ToolConfig::FromJson(const nlohmann::json& json) {
     ToolConfig config;
     config.enabled = json.value("enabled", true);
@@ -410,6 +434,11 @@ ProsophorConfig ProsophorConfig::FromJson(const nlohmann::json& json) {
     if (json.contains("skills") && json["skills"].is_object()) {
         config.skills = SkillsConfig::FromJson(json["skills"]);
     }
+    if (json.contains("local_models") && json["local_models"].is_array()) {
+        for (const auto& m : json["local_models"]) {
+            config.local_models.push_back(LocalModelConfig::FromJson(m));
+        }
+    }
     return config;
 }
 
@@ -438,12 +467,9 @@ ProsophorConfig ProsophorConfig::LoadFromFile(const std::string& filepath) {
 std::string ProsophorConfig::ExpandHome(const std::string& path) {
     std::string expanded = path;
     if (expanded.size() >= 2 && expanded.substr(0, 2) == "~/") {
-        const char* home = std::getenv("HOME");
-#ifdef _WIN32
-        if (!home) home = std::getenv("USERPROFILE");
-#endif
-        if (home) {
-            expanded = std::string(home) + expanded.substr(1);
+        std::string home = GetHomeDir();
+        if (!home.empty()) {
+            expanded = home + expanded.substr(1);
         }
     }
     return expanded;
@@ -641,6 +667,15 @@ nlohmann::json ProsophorConfig::ToJson() const {
     if (!tools.allowed_cmds.empty()) tools_json["allowed_cmds"] = tools.allowed_cmds;
     if (!tools.denied_cmds.empty()) tools_json["denied_cmds"] = tools.denied_cmds;
     json["tools"] = tools_json;
+
+    // Serialize local models
+    if (!local_models.empty()) {
+        nlohmann::json models_json = nlohmann::json::array();
+        for (const auto& m : local_models) {
+            models_json.push_back(m.ToJson());
+        }
+        json["local_models"] = models_json;
+    }
 
     return json;
 }

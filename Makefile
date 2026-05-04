@@ -38,6 +38,7 @@ CMAKE_ARGS ?= \
 	-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 	-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 	-DCMAKE_PROJECT_VERSION=$(PACKAGE_VERSION) \
+	-DPROSOPHOR_BUILD_LLAMA=OFF \
 	$(CMAKE_EXTRA_ARGS)
 
 build:
@@ -49,7 +50,7 @@ build:
 .PHONY: build
 
 run:
-	$(INSTALL_DIR)/bin/prosophor;
+	$(INSTALL_DIR)/bin/prosophor
 .PHONY: run
 
 tests:
@@ -73,7 +74,7 @@ clean:
 
 MODEL ?= $(PROJECT_DIR)/../llamacpp_model/google_gemma-4-E4B-it-Q4_K_M.gguf
 run_llamacpp_server:
-	llama-server -m $(MODEL) --host 0.0.0.0 --port 8080  
+	$(INSTALL_DIR)/bin/llama-server -m $(MODEL) --host 0.0.0.0 --port 8080
 .PHONY: run_llamacpp_server
 
 

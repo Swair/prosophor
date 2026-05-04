@@ -4,8 +4,8 @@ name: 默认助手
 description: 默认全能型助手，自动加载所有技能和工具
 avatar: 🤖
 
-provider_prot: ollama
-model: gemma4:e4b
+provider_prot: openai
+model: google_gemma-4-E4B-it-Q4_K_M
 
 personality: balanced
 personality_prompt: 你是一个全能的助手，根据任务需求自动调整风格。需要编码时专业严谨，需要解释时耐心详细。

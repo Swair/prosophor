@@ -8,6 +8,7 @@
 #include <system_error>
 
 #include "common/log_wrapper.h"
+#include "platform/platform.h"
 
 namespace prosophor {
 
@@ -27,13 +28,7 @@ std::string ExpandHome(const std::string& path) {
 }
 
 std::string GetHomeDir() {
-    const char* home = std::getenv("HOME");
-#ifdef _WIN32
-    if (!home) {
-        home = std::getenv("USERPROFILE");
-    }
-#endif
-    return home ? std::string(home) : "";
+    return platform::HomeDir();
 }
 
 bool EnsureDirectory(const std::string& path) {

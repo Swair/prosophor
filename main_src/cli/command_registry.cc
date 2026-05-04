@@ -25,6 +25,9 @@
 #include "services/cron_scheduler.h"
 #include "services/lsp_manager.h"
 #include "mcp/mcp_client.h"
+#include "managers/local_model_manager.h"
+#include "common/local_model_utils.h"
+#include "common/file_utils.h"
 
 namespace prosophor {
 
@@ -455,6 +458,42 @@ void CommandRegistry::Initialize() {
         cmd.aliases = {};
         cmd.handler = [this](const CommandContext& ctx, const std::vector<std::string>& args) {
             return CmdBye(ctx, args);
+        };
+        RegisterCommand(cmd);
+    }
+
+    // /server - Manage local model server (llama-server)
+    {
+        Command cmd;
+        cmd.name = "server";
+        cmd.description = "Manage local model server (start/stop/status)";
+        cmd.usage = "/server [start|stop|status|restart]";
+        cmd.aliases = {"local"};
+        cmd.handler = [this](const CommandContext& ctx, const std::vector<std::string>& args) {
+            return CmdServer(ctx, args);
+        };
+        cmd.completer = [](const std::string& partial) {
+            std::vector<std::string> subcommands = {"start", "stop", "status", "restart"};
+            std::vector<std::string> completions;
+            for (const auto& subcmd : subcommands) {
+                if (subcmd.find(partial) == 0) {
+                    completions.push_back(subcmd);
+                }
+            }
+            return completions;
+        };
+        RegisterCommand(cmd);
+    }
+
+    // /setup - One-click setup for local model
+    {
+        Command cmd;
+        cmd.name = "setup";
+        cmd.description = "Auto-detect hardware and configure local model";
+        cmd.usage = "/setup";
+        cmd.aliases = {"init"};
+        cmd.handler = [this](const CommandContext& ctx, const std::vector<std::string>& args) {
+            return CmdSetup(ctx, args);
         };
         RegisterCommand(cmd);
     }
@@ -2230,6 +2269,222 @@ CommandResult CommandRegistry::CmdBye([[maybe_unused]] const CommandContext& ctx
     // The actual exit is handled by AgentCommander::HandleCommand
     // This command just provides a friendly message
     return CommandResult::Ok("Goodbye!");
+}
+
+CommandResult CommandRegistry::CmdServer(const CommandContext&, const std::vector<std::string>& args) {
+    auto& mgr = LocalModelManager::GetInstance();
+    const auto& config = ProsophorConfig::GetInstance();
+
+    std::string subcmd = args.empty() ? "status" : args[0];
+
+    if (subcmd == "status") {
+        if (mgr.IsRunning()) {
+            std::ostringstream oss;
+            oss << "Local model server is running (PID: " << mgr.GetPid()
+                << ", port: " << mgr.GetPort() << ")\n";
+            return CommandResult::Ok(oss.str());
+        }
+
+        // Check if any local model is configured
+        if (config.local_models.empty()) {
+            return CommandResult::Ok("No local model configured. Use /setup to auto-configure.");
+        }
+
+        return CommandResult::Ok("Local model server is not running. Use /server start to start it.");
+    }
+
+    if (subcmd == "start") {
+        if (mgr.IsRunning()) {
+            return CommandResult::Ok("Local model server is already running.");
+        }
+        if (config.local_models.empty()) {
+            return CommandResult::Fail("No local model configured. Use /setup to auto-configure.");
+        }
+        // Start the first configured model
+        const auto& lm = config.local_models[0];
+        if (!mgr.Start(lm)) {
+            return CommandResult::Fail("Failed to start local model server. Check settings and model path.");
+        }
+        std::ostringstream oss;
+        oss << "Local model server started (PID: " << mgr.GetPid()
+            << ", port: " << lm.port << ")\n";
+        oss << "Model: " << lm.model_path << "\n";
+        oss << "Use /model openai <model_name> to switch to this model.\n";
+        return CommandResult::Ok(oss.str());
+    }
+
+    if (subcmd == "stop") {
+        if (!mgr.IsRunning()) {
+            return CommandResult::Ok("Local model server is not running.");
+        }
+        mgr.Stop();
+        return CommandResult::Ok("Local model server stopped.");
+    }
+
+    if (subcmd == "restart") {
+        mgr.Stop();
+        if (config.local_models.empty()) {
+            return CommandResult::Fail("No local model configured. Use /setup to auto-configure.");
+        }
+        const auto& lm = config.local_models[0];
+        if (!mgr.Start(lm)) {
+            return CommandResult::Fail("Failed to restart local model server.");
+        }
+        return CommandResult::Ok("Local model server restarted.");
+    }
+
+    return CommandResult::Fail("Unknown subcommand: " + subcmd + "\nUsage: /server [start|stop|status|restart]");
+}
+
+CommandResult CommandRegistry::CmdSetup(const CommandContext&, const std::vector<std::string>&) {
+    std::ostringstream oss;
+
+    // 1. Auto-detect llama-server binary
+    oss << "=== Local Model Setup ===\n\n";
+
+    std::string server = FindServerBinary();
+    if (server.empty()) {
+        oss << "[!] llama-server binary not found.\n";
+        oss << "    Build it first:\n";
+        oss << "      cd ../llama.cpp && mkdir build && cd build\n";
+        oss << "      cmake .. -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_EXAMPLES=ON\n";
+        oss << "      make -j$(nproc) llama-server\n";
+        oss << "    Or install via package manager.\n\n";
+        return CommandResult::Fail(oss.str());
+    }
+    oss << "[+] llama-server found at: " << server << "\n";
+
+    // 2. Scan for .gguf model files
+    std::vector<std::string> found_models;
+    std::vector<std::string> scan_dirs = {
+        ".",
+        std::string(std::getenv("HOME") ? std::getenv("HOME") : "") + "/.prosophor/models",
+        "../llamacpp_model",
+        "../models"
+    };
+
+    for (const auto& dir : scan_dirs) {
+        if (dir.empty()) continue;
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+            if (entry.path().extension() == ".gguf") {
+                found_models.push_back(entry.path().string());
+            }
+        }
+    }
+
+    // Also search recursively in common locations
+    for (const auto& dir : {".", "../llamacpp_model"}) {
+        std::error_code ec;
+        if (!std::filesystem::exists(dir, ec)) continue;
+        for (auto it = std::filesystem::recursive_directory_iterator(dir, ec);
+             it != std::filesystem::recursive_directory_iterator(); ++it) {
+            if (it->path().extension() == ".gguf") {
+                found_models.push_back(it->path().string());
+            }
+        }
+    }
+
+    // Deduplicate
+    std::sort(found_models.begin(), found_models.end());
+    found_models.erase(std::unique(found_models.begin(), found_models.end()), found_models.end());
+
+    if (found_models.empty()) {
+        oss << "[!] No .gguf model files found.\n";
+        oss << "    Download a model:\n";
+        oss << "      wget https://huggingface.co/bartowski/<model>-GGUF/resolve/main/<model>.gguf\n";
+        oss << "    Or copy to ~/.prosophor/models/\n\n";
+        oss << "After placing a model, re-run /setup\n";
+        return CommandResult::Fail(oss.str());
+    }
+
+    oss << "[+] Found " << found_models.size() << " model(s):\n";
+    for (size_t i = 0; i < found_models.size(); ++i) {
+        auto model_size = std::filesystem::file_size(found_models[i]) / (1024LL * 1024LL * 1024LL);
+        oss << "    " << (i + 1) << ". " << found_models[i]
+            << " (" << model_size << " GB)\n";
+    }
+    oss << "\n";
+
+    // 3. Auto-select (use first or largest)
+    std::string selected_model = found_models[0];
+    // Prefer the largest model (better quantization = better quality)
+    uintmax_t max_size = std::filesystem::file_size(found_models[0]);
+    for (const auto& m : found_models) {
+        uintmax_t sz = std::filesystem::file_size(m);
+        if (sz > max_size) {
+            max_size = sz;
+            selected_model = m;
+        }
+    }
+    oss << "[+] Selected model: " << selected_model << "\n\n";
+
+    // 4. Hardware detection
+    int gpu_layers = 0, threads = 0;
+    DetectHardware(gpu_layers, threads);
+    oss << "[+] Hardware detection:\n";
+    oss << "    GPU layers: " << (gpu_layers == -1 ? "all" : std::to_string(gpu_layers)) << "\n";
+    oss << "    Threads: " << (threads == 0 ? "auto" : std::to_string(threads)) << "\n\n";
+
+    // 5. Write config
+    LocalModelConfig lm;
+    lm.model_path = selected_model;
+    lm.server_path = server;
+    lm.port = 8080;
+    lm.n_gpu_layers = gpu_layers;
+    lm.n_threads = threads;
+    lm.auto_start = true;
+
+    // Save to settings.json
+    std::string config_path = ProsophorConfig::DefaultConfigPath();
+    auto json = prosophor::ReadJson(config_path).value_or(nlohmann::json::object());
+    json["local_models"] = nlohmann::json::array({lm.ToJson()});
+
+    // Also ensure there's an openai provider pointing to localhost:8080
+    if (!json.contains("providers")) json["providers"] = nlohmann::json::object();
+    if (!json["providers"].contains("openai")) json["providers"]["openai"] = nlohmann::json::array();
+
+    // Check if localhost:8080 entry already exists
+    bool has_local_entry = false;
+    for (const auto& entry : json["providers"]["openai"]) {
+        std::string url = entry.value("base_url", "");
+        if (url.find("localhost:8080") != std::string::npos || url.find("127.0.0.1:8080") != std::string::npos) {
+            has_local_entry = true;
+            break;
+        }
+    }
+
+    if (!has_local_entry) {
+        nlohmann::json local_entry;
+        local_entry["api_key"] = "";
+        local_entry["base_url"] = "http://localhost:8080/v1/chat/completions";
+        local_entry["timeout"] = 120;
+        local_entry["agents"]["default"]["model"] = std::filesystem::path(selected_model).stem().string();
+        local_entry["agents"]["default"]["temperature"] = 0.7;
+        local_entry["agents"]["default"]["max_tokens"] = 8192;
+        local_entry["agents"]["default"]["context_window"] = 32768;
+
+        // Check if model name looks like quantized (contains Q4, Q8, etc.)
+        std::string model_name = local_entry["agents"]["default"]["model"].get<std::string>();
+        // Extract a cleaner model name if possible
+        auto stem = std::filesystem::path(selected_model).stem().string();
+
+        json["providers"]["openai"].push_back(local_entry);
+        oss << "[+] Added OpenAI provider entry for localhost:8080\n";
+    }
+
+    prosophor::WriteJson(config_path, json, 2);
+    oss << "[+] Configuration saved to " << config_path << "\n\n";
+
+    // Auto-start
+    if (LocalModelManager::GetInstance().Start(lm)) {
+        oss << "[+] Local model server started successfully on port " << lm.port << "\n";
+        oss << "    Use /model openai <model_name> to switch to this model and start chatting.\n";
+    } else {
+        oss << "[!] Failed to start local model server. Use /server start to retry.\n";
+    }
+
+    return CommandResult::Ok(oss.str());
 }
 
 }  // namespace prosophor

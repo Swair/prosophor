@@ -285,13 +285,9 @@ ChatResponse AnthropicProvider::Deserialize(const std::string& json_str) const {
     nlohmann::json response_json;
 
     try {
-	#ifdef _WIN32
         // Convert to UTF-8 if necessary
         std::string utf8_json = ConvertToUtf8(json_str);
         response_json = nlohmann::json::parse(utf8_json);
-	#else
-        response_json = nlohmann::json::parse(json_str);	
-	#endif
 	
         LOG_DEBUG(" response body: {}", response_json.dump(4));
     } catch (...) {

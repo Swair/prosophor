@@ -55,6 +55,7 @@ file(GLOB_RECURSE CC_FILES_LIST
     ${CMAKE_CURRENT_LIST_DIR}/core/*.cc
     ${CMAKE_CURRENT_LIST_DIR}/managers/*.cc
     ${CMAKE_CURRENT_LIST_DIR}/mcp/*.cc
+    ${CMAKE_CURRENT_LIST_DIR}/platform/*.cc
     ${CMAKE_CURRENT_LIST_DIR}/providers/*.cc
     ${CMAKE_CURRENT_LIST_DIR}/services/*.cc
     ${CMAKE_CURRENT_LIST_DIR}/tools/*.cc
@@ -72,9 +73,9 @@ if(PROSOPHOR_SDL_UI)
 endif()
 
 # Exclude platform-specific implementation files
-list(FILTER CC_FILES_LIST EXCLUDE REGEX ".*/cli/input_handler\\.cc$")
-list(FILTER CC_FILES_LIST EXCLUDE REGEX ".*/cli/input_handler_posix\\.cc$")
-list(FILTER CC_FILES_LIST EXCLUDE REGEX ".*/cli/input_handler_win32\\.cc$")
+list(FILTER CC_FILES_LIST EXCLUDE REGEX ".*/platform/input_handler\\.cc$")
+list(FILTER CC_FILES_LIST EXCLUDE REGEX ".*/platform/input_handler_posix\\.cc$")
+list(FILTER CC_FILES_LIST EXCLUDE REGEX ".*/platform/input_handler_win32\\.cc$")
 
 # Add new input abstraction layer files
 list(APPEND CC_FILES_LIST
@@ -86,11 +87,11 @@ list(APPEND CC_FILES_LIST
 # Add platform-specific input_handler based on the target platform
 if(WIN32)
     list(APPEND CC_FILES_LIST
-        ${CMAKE_CURRENT_LIST_DIR}/cli/input_handler_win32.cc
+        ${CMAKE_CURRENT_LIST_DIR}/platform/input_handler_win32.cc
     )
 else()
     list(APPEND CC_FILES_LIST
-        ${CMAKE_CURRENT_LIST_DIR}/cli/input_handler_posix.cc
+        ${CMAKE_CURRENT_LIST_DIR}/platform/input_handler_posix.cc
     )
 endif()
 

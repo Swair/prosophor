@@ -58,7 +58,7 @@ ChatResponse LLMProvider::Chat(const ChatRequest& request) {
 
     if (response.usage.total_tokens > 0) {
         RecordTokenUsage(request.model, response.usage);
-        LOG_INFO("Token usage: {} prompt, {} completion, {} total",
+        LOG_DEBUG("Token usage: {} prompt, {} completion, {} total",
                  response.usage.prompt_tokens, response.usage.completion_tokens,
                  response.usage.total_tokens);
     }

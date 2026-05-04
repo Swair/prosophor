@@ -9,10 +9,6 @@
 #include <sstream>
 #include <thread>
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
 #include "common/log_wrapper.h"
 #include "common/banner.h"
 #include "common/input_queue.h"
@@ -32,6 +28,7 @@
 #include "services/lsp_manager.h"
 #include "managers/active_interaction_manager.h"
 #include "managers/active_trigger_manager.h"
+#include "managers/local_model_manager.h"
 
 namespace prosophor {
 
@@ -55,6 +52,10 @@ AgentCommander::AgentCommander()
 AgentCommander::~AgentCommander() {
     if (memory_manager_) {
         memory_manager_->StopFileWatcher();
+    }
+    // Stop local model server
+    if (LocalModelManager::GetInstance().IsRunning()) {
+        LocalModelManager::GetInstance().Stop();
     }
     // Don't delete input_manager_ - it's owned by the mode-specific code
 }
@@ -95,21 +96,7 @@ void AgentCommander::InitializeComponents() {
             std::cout << "  Reason: " << reason;
             std::cout << "\n  Allow this action? [Y/N or y/n]: " << std::flush;
 
-            std::string response;
-#ifdef _WIN32
-            // Thread-safe console input - uses Windows API, doesn't affect stdin
-            HANDLE hConsole = GetStdHandle(STD_INPUT_HANDLE);
-            char buf[256] = {};
-            DWORD charsRead = 0;
-            ReadConsoleA(hConsole, buf, sizeof(buf) - 1, &charsRead, nullptr);
-            // Remove trailing \r\n
-            while (charsRead > 0 && (buf[charsRead-1] == '\r' || buf[charsRead-1] == '\n')) {
-                charsRead--;
-            }
-            response = std::string(buf, charsRead);
-#else
-            std::getline(std::cin, response);
-#endif
+            std::string response = platform::ReadConsoleLine();
             return response == "y" || response == "Y";
         });
 
@@ -230,6 +217,17 @@ void AgentCommander::InitializeComponents() {
 
     // ActiveInteractionManager and ActiveTriggerManager are already initialized
     // in AgentSessionManager::Initialize() - no need to initialize again here.
+
+    // Auto-start local model server if configured
+    if (!config_.local_models.empty() && config_.local_models[0].auto_start) {
+        LOG_DEBUG("Auto-starting local model server...");
+        auto& lm = config_.local_models[0];
+        if (!LocalModelManager::GetInstance().Start(lm)) {
+            LOG_WARN("Failed to auto-start local model server. Use /server start to retry.");
+        } else {
+            LOG_INFO("Local model server started on port {}", lm.port);
+        }
+    }
 }
 
 void AgentCommander::SwitchRole(const std::string& role_id) {
@@ -392,11 +390,10 @@ void AgentCommander::ProcessUserMessage(const std::string& line) {
         // 更新用户交互时间（用于空闲检测）
         last_interaction_time_ = std::time(nullptr);
 
-#ifdef _WIN32
-        // Windows: Raw mode 不回显，需要手动输出
-        std::cout << "> " << line << std::endl;
-#endif
-        // Linux: Raw mode 已通过 RefreshLine 回显，不需要再次输出
+        if (platform::kIsWindows) {
+            // Windows: Raw mode 不回显，需要手动输出
+            std::cout << "> " << line << std::endl;
+        }
 
         // Reset interrupted_ flag before processing new message
         interrupted_ = false;

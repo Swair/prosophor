@@ -1,5 +1,54 @@
 # Changelog
 
+## [2026-05-04] - 本地模型支持与平台抽象层
+
+### 本地模型支持 (llama.cpp 集成)
+- **LocalModelManager**：llama-server 完整生命周期管理（start/stop/restart/status）
+- 新增 `/server` 命令（别名 `/local`），支持 `start|stop|status|restart` 子命令
+- 新增 `/setup` 一键配置：自动检测硬件（NVIDIA GPU / Apple Silicon / CPU 线程数）+ 扫描 .gguf 模型 + 生成配置
+- 配置新增 `local_models` 数组，支持 model_path、port、auto_start、n_gpu_layers、n_threads、start_timeout_ms 等参数
+- CMake 通过 `FetchContent` 可选编译 llama.cpp（`-DPROSOPHOR_BUILD_LLAMA=ON/OFF`）
+- `auto_start: true` 时启动自动拉起本地模型服务
+- 新增 `local_model_utils`：硬件检测、llama-server 二进制查找、模型路径解析
+
+### 平台抽象层 (platform/)
+- 新增 `platform/platform.h` 和 `platform/platform.cc`，统一跨平台 API：编码转换、终端 I/O、进程管理、Shell 执行
+- 编译期平台常量：`kIsWindows`、`kIsLinux`、`kIsMacOS`
+- `input_handler` 系列从 `cli/` 迁移至 `platform/`（`terminal_input.cc` 同步更新 include 路径）
+- 消除 `#ifdef _WIN32` / `#ifdef` 条件编译，统一改为 platform API 调用，涉及：
+  - `agent_commander.cc` — `ReadConsoleLine()`、`kIsWindows`
+  - `subprocess_wrapper.cc` — 进程启动/管理
+  - `tts_speaker.cc` — 音频播放
+  - `main.cc` — `SetConsoleUtf8()`
+  - `config.cc` — `GetHomeDir()`
+  - `file_utils.cc` — `GetHomeDir()`
+  - `input_event.h` — NOMINMAX/WIN32_LEAN_AND_MEAN（改为 include platform.h）
+  - `time_wrapper.h` — `LocalTime()`
+  - `skill_loader.cc` — `IsBinaryAvailable()`、`GetCurrentOs()`
+  - `lsp_manager.cc` — `StartServerForFile()`、`InitializeServer()`、`ShutdownAll()`，移除 Windows `io.h` 兼容宏
+  - `anthropic_provider.cc`、`ollama_provider.cc` — `ConvertToUtf8` 不再条件编译
+
+### README 重构
+- README.md / README_cn.md 大幅精简，移除冗长功能罗列和配置参考表格
+- 新增 llama.cpp 本地模型文档
+- 更新架构图、工具列表、模块布局、构建说明
+
+### 其他
+- `tool_registry.cc` 精简（-259 行）
+- `command_registry.cc` 新增 `/server`、`/setup` 命令处理（+255 行）
+- `string_utils.cc` 重构（80 行变更）
+- `config.cc/h` 新增 `LocalModelConfig` 结构体及 JSON 序列化
+- `Makefile`：默认 `-DPROSOPHOR_BUILD_LLAMA=OFF`，`run_llamacpp_server` 使用 build 输出的 llama-server
+- `llm_provider.cc`：Token 用量日志级别 INFO → DEBUG
+
+### 文件统计
+- 变更文件：35 个
+- 新增：+1,719 行
+- 删除：-1,604 行
+- 净变化：+115 行
+
+---
+
 ## [2026-05-04] - Provider 接口统一与状态回调优化
 
 ### HttpClient 单例化与接口规范化

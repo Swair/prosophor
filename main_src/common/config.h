@@ -140,6 +140,22 @@ struct SkillsConfig {
     static SkillsConfig FromJson(const nlohmann::json& json);
 };
 
+/// Configuration for local model server (llama-server)
+struct LocalModelConfig {
+    std::string model_path;    // Path to GGUF model file
+    int port = 8080;           // Server port
+    int n_gpu_layers = -1;     // GPU layers (-1 = all, 0 = CPU only)
+    int n_threads = 0;         // Threads (0 = auto)
+    bool auto_start = true;    // Auto-start with prosophor
+    int start_timeout_ms = 60000; // Timeout for server startup (ms)
+    std::string server_path;   // Path to llama-server binary (auto-detected if empty)
+
+    bool IsValid() const { return !model_path.empty(); }
+
+    static LocalModelConfig FromJson(const nlohmann::json& json);
+    nlohmann::json ToJson() const;
+};
+
 /// Security configuration settings
 struct SecurityConfig {
     std::string permission_level = "auto";
@@ -162,6 +178,7 @@ struct ProsophorConfig {
     std::unordered_map<std::string, ProviderConfig> providers;
     ToolConfig tools;
     SkillsConfig skills;
+    std::vector<LocalModelConfig> local_models;
 
     /// Get singleton instance
     static ProsophorConfig& GetInstance();

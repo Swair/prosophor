@@ -12,6 +12,7 @@
 #include <unordered_set>
 
 #include "common/log_wrapper.h"
+#include "platform/platform.h"
 
 namespace prosophor {
 
@@ -431,13 +432,10 @@ SkillMetadata SkillLoader::ParseSkillFile(
 }
 
 bool SkillLoader::IsBinaryAvailable(const std::string& binary_name) const {
-#ifdef _WIN32
-    std::string command = "where " + binary_name + " > nul 2>&1";
-#else
-    std::string command = "which " + binary_name + " > /dev/null 2>&1";
-#endif
-    int result = std::system(command.c_str());
-    return result == 0;
+    std::string cmd = platform::kIsWindows
+        ? "where " + binary_name + " > nul 2>&1"
+        : "which " + binary_name + " > /dev/null 2>&1";
+    return std::system(cmd.c_str()) == 0;
 }
 
 bool SkillLoader::IsEnvVarAvailable(const std::string& env_var) const {
@@ -457,15 +455,10 @@ bool SkillLoader::CheckOsRestriction(
 }
 
 std::string SkillLoader::GetCurrentOs() const {
-#ifdef __linux__
-    return "linux";
-#elif defined(__APPLE__)
-    return "darwin";
-#elif defined(_WIN32)
-    return "win32";
-#else
+    if (platform::kIsLinux) return "linux";
+    if (platform::kIsMacOS) return "darwin";
+    if (platform::kIsWindows) return "win32";
     return "unknown";
-#endif
 }
 
 nlohmann::json SkillLoader::ParseYamlFrontmatter(

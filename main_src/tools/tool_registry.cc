@@ -1,15 +1,6 @@
 // Copyright 2026 Prosophor Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <psapi.h>
-#include <io.h>
-#include <codecvt>
-#include <locale>
-#endif
-
 #include "tools/tool_registry.h"
 
 #include <cstdlib>
@@ -20,55 +11,16 @@
 #include <filesystem>
 #include <algorithm>
 
-#ifndef _WIN32
-#include <sys/wait.h>
-#include <sys/select.h>
-#include <signal.h>
-#include <unistd.h>
-#endif
-
 #include "common/log_wrapper.h"
 #include "common/time_wrapper.h"
 #include "common/curl_client.h"
+#include "platform/platform.h"
 #include "managers/token_tracker.h"
 #include "managers/permission_manager.h"
 #include "mcp/mcp_client.h"
 #include "tools/command_tools/background_run_tool.h"
 
 namespace prosophor {
-
-#ifdef _WIN32
-/// Convert system locale output to UTF-8 on Windows
-/// Skip conversion for MSYS2/Git Bash (already UTF-8)
-static std::string ConvertToUTF8(const std::string& mbcs_str) {
-    // Git Bash/MSYS2 already outputs UTF-8
-    if (std::getenv("MSYSTEM")) {
-        return mbcs_str;
-    }
-
-    int wide_len = MultiByteToWideChar(CP_ACP, 0, mbcs_str.c_str(), -1, nullptr, 0);
-    if (wide_len <= 1) return mbcs_str;
-
-    std::wstring wide(wide_len - 1, L'\0');
-    MultiByteToWideChar(CP_ACP, 0, mbcs_str.c_str(), -1, &wide[0], wide_len);
-
-    int utf8_len = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (utf8_len <= 1) return mbcs_str;
-
-    std::string result(utf8_len - 1, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, &result[0], utf8_len, nullptr, nullptr);
-    return result;
-}
-
-/// Convert UTF-8 string to wide string (UTF-16)
-static std::wstring UTF8ToWide(const std::string& utf8_str) {
-    int wide_len = MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(), -1, nullptr, 0);
-    if (wide_len <= 1) return L"";
-    std::wstring wide(wide_len - 1, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(), -1, &wide[0], wide_len);
-    return wide;
-}
-#endif
 
 /// Format command result with exit code (DRY helper)
 /// @param result Command output
@@ -84,216 +36,11 @@ static std::string FormatCommandResult(const std::string& result, int status,
 }
 
 /// Execute a shell command and capture output (cross-platform, thread-safe)
-/// @param command Command to execute
-/// @param timeout_seconds Timeout in seconds (0 = no timeout)
-/// @param workdir Working directory (empty = current)
-/// @return pair<output, exit_code>
 static std::pair<std::string, int> ExecuteCommand(const std::string& command,
                                                    int timeout_seconds = 0,
                                                    const std::string& workdir = "") {
-#ifdef _WIN32
-    SECURITY_ATTRIBUTES sa = {};
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
-
-    HANDLE read_pipe = nullptr, write_pipe = nullptr;
-    if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
-        return {"Failed to create pipe", -1};
-    }
-    SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
-
-    // Create input pipe for stdin (close write end to signal EOF immediately)
-    HANDLE input_read = nullptr, input_write = nullptr;
-    if (!CreatePipe(&input_read, &input_write, &sa, 0)) {
-        CloseHandle(read_pipe);
-        CloseHandle(write_pipe);
-        return {"Failed to create input pipe", -1};
-    }
-    SetHandleInformation(input_read, HANDLE_FLAG_INHERIT, 0);
-    CloseHandle(input_write);  // Close write end - child gets EOF immediately
-
-    // Directly execute command without shell (cmd /c or sh -c)
-    // This lets Windows find the executable from PATH
-    std::wstring wcmd_line = UTF8ToWide(command);
-
-    STARTUPINFOW si = {};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdOutput = write_pipe;
-    si.hStdError = write_pipe;
-    si.hStdInput = input_read;  // Use input pipe (will get EOF)
-    si.wShowWindow = SW_HIDE;
-
-    PROCESS_INFORMATION pi = {};
-
-    // lpCurrentDirectory needs a mutable string
-    std::wstring wworkdir = workdir.empty() ? L"" : UTF8ToWide(workdir);
-
-    BOOL ok = CreateProcessW(nullptr, wcmd_line.data(), nullptr, nullptr,
-                             TRUE, CREATE_NO_WINDOW,
-                             nullptr,
-                             wworkdir.empty() ? nullptr : wworkdir.c_str(),
-                             &si, &pi);
-
-    CloseHandle(write_pipe);
-
-    if (!ok) {
-        CloseHandle(input_read);
-        CloseHandle(read_pipe);
-        return {"Failed to create process", -1};
-    }
-
-    std::string result;
-    char buffer[1024];
-    auto start = prosophor::Now();
-
-    for (;;) {
-        DWORD wait_ms = 100;
-        if (timeout_seconds > 0) {
-            int64_t elapsed_ms = prosophor::ElapsedMillis(start);
-            int64_t timeout_ms = timeout_seconds * 1000;
-            if (elapsed_ms >= timeout_ms) {
-                TerminateProcess(pi.hProcess, 1);
-                CloseHandle(input_read);
-                CloseHandle(read_pipe);
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
-                return {"Command timeout", -2};
-            }
-            wait_ms = std::min(wait_ms, static_cast<DWORD>(timeout_ms - elapsed_ms));
-        }
-
-        DWORD avail = 0;
-        if (!PeekNamedPipe(read_pipe, nullptr, 0, nullptr, &avail, nullptr)) {
-            if (WaitForSingleObject(pi.hProcess, wait_ms) == WAIT_OBJECT_0) break;
-            continue;
-        }
-        if (avail == 0) {
-            if (WaitForSingleObject(pi.hProcess, wait_ms) == WAIT_OBJECT_0) break;
-            continue;
-        }
-
-        DWORD bytes_read = 0;
-        if (ReadFile(read_pipe, buffer, sizeof(buffer) - 1, &bytes_read, nullptr) && bytes_read > 0) {
-            buffer[bytes_read] = '\0';
-            result += ConvertToUTF8(std::string(buffer, bytes_read));
-        }
-    }
-
-    // Drain remaining
-    DWORD bytes_read = 0;
-    while (ReadFile(read_pipe, buffer, sizeof(buffer) - 1, &bytes_read, nullptr) && bytes_read > 0) {
-        buffer[bytes_read] = '\0';
-        result += ConvertToUTF8(std::string(buffer, bytes_read));
-    }
-
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD exit_code = 0;
-    GetExitCodeProcess(pi.hProcess, &exit_code);
-
-    CloseHandle(input_read);
-    CloseHandle(read_pipe);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
-    return {result, static_cast<int>(exit_code)};
-
-#else
-    // POSIX implementation using pipe + fork
-    int pipefd[2];
-    if (pipe(pipefd) != 0) {
-        return {"Failed to create pipe", -1};
-    }
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return {"Failed to fork", -1};
-    }
-
-    if (pid == 0) {
-        // Child process
-        close(pipefd[0]);  // Close read end
-        dup2(pipefd[1], STDOUT_FILENO);
-        dup2(pipefd[1], STDERR_FILENO);
-        close(pipefd[1]);
-
-        // Change working directory if specified
-        if (!workdir.empty()) {
-            if (chdir(workdir.c_str()) != 0) {
-                _exit(127);
-            }
-        }
-
-        // Execute command
-        execl("/bin/sh", "/bin/sh", "-c", command.c_str(), (char*)nullptr);
-        _exit(127);  // If exec fails
-    }
-
-    // Parent process
-    close(pipefd[1]);  // Close write end
-
-    std::string result;
-    char buffer[4096];
-    auto start = prosophor::Now();
-
-    // Set non-blocking read with timeout
-    struct timeval tv;
-    tv.tv_sec = 0;
-    tv.tv_usec = 100000;  // 100ms
-
-    for (;;) {
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(pipefd[0], &readfds);
-
-        int select_result = select(pipefd[0] + 1, &readfds, nullptr, nullptr, &tv);
-
-        if (select_result > 0 && FD_ISSET(pipefd[0], &readfds)) {
-            ssize_t bytes_read = read(pipefd[0], buffer, sizeof(buffer) - 1);
-            if (bytes_read > 0) {
-                buffer[bytes_read] = '\0';
-                result += std::string(buffer, bytes_read);
-            } else if (bytes_read == 0) {
-                break;  // EOF
-            }
-        }
-
-        // Check timeout
-        if (timeout_seconds > 0) {
-            int64_t elapsed_ms = prosophor::ElapsedMillis(start);
-            if (elapsed_ms >= timeout_seconds * 1000) {
-                kill(pid, SIGKILL);
-                close(pipefd[0]);
-                waitpid(pid, nullptr, 0);
-                return {"Command timeout", -2};
-            }
-        }
-
-        // Check if child exited
-        int stat;
-        int wait_result = waitpid(pid, &stat, WNOHANG);
-        if (wait_result > 0) {
-            // Child exited, drain remaining output
-            while (read(pipefd[0], buffer, sizeof(buffer) - 1) > 0) {}
-            close(pipefd[0]);
-            return {result, WIFEXITED(stat) ? WEXITSTATUS(stat) : -1};
-        } else if (wait_result < 0) {
-            // Error
-            close(pipefd[0]);
-            return {result, -1};
-        }
-    }
-
-    close(pipefd[0]);
-
-    // Wait for child to complete
-    int stat;
-    waitpid(pid, &stat, 0);
-
-    return {result, WIFEXITED(stat) ? WEXITSTATUS(stat) : -1};
-#endif
+    auto r = platform::RunCommandWithOutput(command, timeout_seconds, workdir);
+    return {r.output, r.exit_code};
 }
 
 ToolRegistry& ToolRegistry::GetInstance() {

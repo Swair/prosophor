@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cli/input_manager.h"
-#include "cli/input_handler.h"
+#include "platform/input_handler.h"
 #include "common/log_wrapper.h"
 #include <thread>
 #include <sstream>

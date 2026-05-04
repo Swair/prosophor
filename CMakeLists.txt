@@ -28,6 +28,37 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install" CACHE PATH "Install prefix" FORCE)
 endif()
 
+include(FetchContent)
+
+############################################# llama.cpp (optional) #####################################
+option(PROSOPHOR_BUILD_LLAMA "Build llama.cpp for local model inference (llama-server)" ON)
+
+if(PROSOPHOR_BUILD_LLAMA)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/thirdparty_src/llamacpp-src")
+        message(STATUS "Found llama.cpp in thirdparty_src, using existing download")
+        FetchContent_Declare(llamacpp SOURCE_DIR "${CMAKE_SOURCE_DIR}/thirdparty_src/llamacpp-src")
+    else()
+        message(STATUS "llama.cpp not found, fetching from GitHub...")
+        FetchContent_Declare(
+            llamacpp
+            GIT_REPOSITORY https://github.com/ggml-org/llama.cpp.git
+            GIT_TAG master
+            GIT_SHALLOW TRUE
+            GIT_SUBMODULES ""
+            SOURCE_DIR ${CMAKE_SOURCE_DIR}/thirdparty_src/llamacpp-src
+        )
+    endif()
+
+    set(LLAMA_BUILD_COMMON  ON  CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_TOOLS   ON  CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_SERVER  ON  CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+
+    FetchContent_MakeAvailable(llamacpp)
+endif()
+
 add_subdirectory(main_src)
 
 # if(NOT WIN32)

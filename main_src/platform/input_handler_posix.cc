@@ -3,7 +3,7 @@
 
 #ifndef _WIN32
 
-#include "cli/input_handler.h"
+#include "platform/input_handler.h"
 
 #include <iostream>
 #include <fstream>
