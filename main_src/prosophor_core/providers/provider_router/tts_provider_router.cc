@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "providers/provider_router/tts_provider_router.h"
+#ifndef PROSOPHOR_NO_EDGE_TTS
 #include "providers/tts/edge_tts_provider.h"
+#endif
 #include "common/log_wrapper.h"
 
 namespace prosophor {
@@ -81,12 +83,20 @@ std::shared_ptr<TtsProvider> TtsProviderRouter::CreateProvider(
     const std::string& backend,
     const TtsConfig& /*config*/) {
 
+#ifdef PROSOPHOR_NO_EDGE_TTS
+    (void)backend;
+    // 系统 libcurl 无 websocket 实验 API(curl_ws_*) -> edge-tts 不可用；
+    // TTS 后端未启用，调用方判空处理（升级 libcurl 后移除）
+    LOG_WARN("edge-tts 不可用(需 libcurl>=7.86 websocket)，TTS 后端未启用");
+    return nullptr;
+#else
     if (backend == "edge-tts") {
         return std::make_shared<EdgeTtsProvider>();
     }
 
     LOG_WARN("Unknown TTS backend '{}', falling back to edge-tts", backend);
     return std::make_shared<EdgeTtsProvider>();
+#endif
 }
 
 }  // namespace prosophor

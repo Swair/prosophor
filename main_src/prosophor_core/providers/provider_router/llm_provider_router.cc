@@ -3,9 +3,10 @@
 
 #include "providers/provider_router/llm_provider_router.h"
 
-#include <shared_mutex>
 #include <filesystem>
+#include <shared_mutex>
 
+#include "common/file_utils.h"
 #include "common/log_wrapper.h"
 #include "managers/agent_role_loader.h"
 
@@ -79,9 +80,25 @@ void LlmProviderRouter::Initialize(const ProsophorConfig& config) {
 #endif
 }
 
-std::shared_ptr<LLMProvider> LlmProviderRouter::GetProvider(const std::string& /*role_id*/) {
-    // For now, use default provider
-    // TODO: Support role-specific provider mapping
+std::shared_ptr<LLMProvider> LlmProviderRouter::GetProvider(const std::string& role_id) {
+    // 按角色路由：读取 config/.prosophor/roles/<role_id>.json 的 protocal
+    if (!role_id.empty()) {
+        const std::string role_path = "config/.prosophor/roles/" + role_id + ".json";
+        if (FileExists(role_path)) {
+            try {
+                AgentRole role = AgentRoleLoader::GetInstance().LoadRole(role_path);
+                if (!role.provider_prot.empty()) {
+                    std::shared_lock<std::shared_mutex> lock(mutex_);
+                    auto it = providers_.find(role.provider_prot);
+                    if (it != providers_.end()) {
+                        return it->second;
+                    }
+                }
+            } catch (const std::exception& e) {
+                LOG_WARN("GetProvider role '{}' load failed, fallback default: {}", role_id, e.what());
+            }
+        }
+    }
     return GetDefaultProvider();
 }
 
@@ -127,6 +144,13 @@ std::shared_ptr<LLMProvider> LlmProviderRouter::CreateProvider(
 #ifdef PROSOPHOR_HAS_LOCAL_MODEL
     if (type == "llamacpp") {
         return std::make_shared<LlamacppProvider>(config.llamacpp_cfg);
+    }
+#endif
+
+#ifdef PROSOPHOR_NUTRIBOT
+    if (type == "aidgen") {   // 构造即异步加载模型（与 llamacpp auto-start 同构）
+        return std::make_shared<AidGenProvider>(
+            AidGenModelConfig{ExpandHome(config.aidgen_config), AidGenBackend::Auto});
     }
 #endif
 

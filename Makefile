@@ -381,3 +381,43 @@ tests:
 	  echo "Running $$(basename $$test)..."; \
 	  $$test || exit 1; \
 	done
+
+# ==============================================================================
+# nutribot 形态（仿 tui/sdl：同一主树，编译开关切换形态，无独立模块构建）
+#   LLM(aidgen) 已并入 prosophor_core/providers/llm；
+#   入口统一为 main_src/main.cc（PROSOPHOR_NUTRIBOT 宏分支）。
+#   QNN 平台形态默认：无 llamacpp、无 SDL。
+# ==============================================================================
+
+BUILD_DIR_NUTRIBOT ?= $(PROJECT_DIR)/build_nutribot
+INSTALL_DIR_NUTRIBOT ?= $(BUILD_DIR_NUTRIBOT)/install
+CMAKE_ARGS_NUTRIBOT ?= \
+	-DCMAKE_INSTALL_PREFIX=$(INSTALL_DIR_NUTRIBOT) \
+	-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
+	-DPACKAGE_VERSION=$(PACKAGE_VERSION) \
+	-DPROSOPHOR_NUTRIBOT=ON \
+	-DPROSOPHOR_BUILD_LLAMA=OFF \
+	$(CMAKE_EXTRA_ARGS)
+
+build_nutribot:
+	mkdir -p $(BUILD_DIR_NUTRIBOT) && \
+	cd $(BUILD_DIR_NUTRIBOT) && \
+	$(CMAKE) $(CMAKE_ARGS_NUTRIBOT) .. && \
+	$(MAKE) -j$(NUM_JOB)
+.PHONY: build_nutribot
+
+run_nutribot:
+	$(BUILD_DIR_NUTRIBOT)/main_src/prosophor
+.PHONY: run_nutribot
+
+# nutribot 单测（独立于主树构建，同源收集；33 用例）
+test_nutribot:
+	mkdir -p $(BUILD_DIR_NUTRIBOT)/tests && \
+	cd $(BUILD_DIR_NUTRIBOT)/tests && \
+	$(CMAKE) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) $(PROJECT_DIR)/tests/nutribot && \
+	$(MAKE) -j$(NUM_JOB) && ./nr_tests
+.PHONY: test_nutribot
+
+clean_nutribot:
+	rm -rf $(BUILD_DIR_NUTRIBOT)
+.PHONY: clean_nutribot

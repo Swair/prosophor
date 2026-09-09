@@ -1,10 +1,8 @@
-build
-build_win
-build_sdl
+build*
 .claude
 tool
 tests
-
+CLAUDE.md
 thirdparty_src/
 dist/releases/
 .vscode
@@ -17,4 +15,3 @@ web/dist/
 # Editor / IDE
 .vscode/
 .clangd
-

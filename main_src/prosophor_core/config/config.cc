@@ -296,6 +296,7 @@ ProviderConfig ProviderConfig::FromJson(const nlohmann::json& json) {
     config.api_key = json.value("api_key", json.value("apiKey", ""));
     config.base_url = json.value("base_url", json.value("baseUrl", ""));
     config.timeout = json.value("timeout", kDefaultProviderTimeoutSec);
+    config.aidgen_config = json.value("aidgen_config", "");
 
     // Parse models — supports array (preferred) and object (legacy) formats
     const auto& models_json_key = json.contains("models") ? "models" : "model";

@@ -844,7 +844,9 @@ bool Platform::IsAlreadyRunning() {
 
     // Write PID for diagnostic purposes
     std::string pid_str = std::to_string(getpid()) + "\n";
-    write(lock_fd, pid_str.c_str(), pid_str.size());
+    // 诊断用 PID 写入;忽略短写失败(-Werror=unused-result)
+    const ssize_t _ignored = write(lock_fd, pid_str.c_str(), pid_str.size());
+    (void)_ignored;
 
     return false;
 #endif

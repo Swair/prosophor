@@ -1,7 +1,6 @@
 {
   "default_role": [
-    "default",
-    "ayaka"
+    "nutribot"
   ],
   "log_level": "info",
   "enable_summary": false,
@@ -130,7 +129,12 @@
           }
         ]
       }
-    ]
+    ],
+    "aidgen": {
+      "api_key": "local",
+      "base_url": "local",
+      "aidgen_config": "~/aidmlm/qwen2.5-0.5b-instruct/aidgen_config.json"
+    }
   },
   "tts": {
     "enabled": true,

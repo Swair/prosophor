@@ -14,6 +14,9 @@
 #ifdef PROSOPHOR_HAS_LOCAL_MODEL
 #include "providers/llm/llamacpp_provider.h"
 #endif
+#ifdef PROSOPHOR_NUTRIBOT
+#include "providers/llm/aidgen_provider.h"
+#endif
 #include "config/config.h"
 
 namespace prosophor {

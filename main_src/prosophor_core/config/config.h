@@ -141,6 +141,9 @@ struct ProviderConfig {
     // when this ProviderConfig is for the "llamacpp" provider type.
     LlamacppModelConfig llamacpp_cfg;
 
+    // aidgen(NPU) 专用：本地模型配置 JSON 路径 — only valid when provider type is "aidgen"
+    std::string aidgen_config;
+
     // All entries from the config array (each keeps its own api_key/base_url)
     std::vector<ProviderEntryConfig> entries;
 

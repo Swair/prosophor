@@ -7,7 +7,10 @@ if(WIN32)
 endif()
 
 if(NOT DEFINED PACKAGE_VERSION)
-    message(FATAL_ERROR "PACKAGE_VERSION is not defined. Pass -DPACKAGE_VERSION=... to cmake")
+    # 深度整合：nutrition_robot/aidgen 形态以普通变体构建即可，
+    # 不强制每个构建入口都传版本号（仍可用 -DPACKAGE_VERSION 覆盖）
+    set(PACKAGE_VERSION 0.8.1)
+    message(STATUS "PACKAGE_VERSION 未指定，使用默认 ${PACKAGE_VERSION}")
 endif()
 
 # Remove 'v' prefix if present (e.g., v0.2.0 -> 0.2.0)
@@ -56,9 +59,17 @@ else()
     set(_PROSOPHOR_DEFAULT_LLAMA_CUDA ON)
     set(_PROSOPHOR_DEFAULT_LLAMA_VULKAN OFF)
 endif()
-option(PROSOPHOR_BUILD_LLAMA "Build llama.cpp for local model inference (in-process)" ON)
+# 平台形态默认（QNN 板级分支，如 Rhino Pi-X1 / QCS8550）：
+#   LLM 走本地 NPU（aidgen-sdk）-> llamacpp 默认 OFF，需要桌面 llama 时显式 ON
+#   UI 走终端形态 -> SDL 桌面精灵默认 OFF，需要时显式 ON
+option(PROSOPHOR_BUILD_LLAMA "Build llama.cpp for local model inference (in-process)" OFF)
 option(PROSOPHOR_BUILD_LLAMA_CUDA "Build llama.cpp with CUDA GPU support" ${_PROSOPHOR_DEFAULT_LLAMA_CUDA})
 option(PROSOPHOR_BUILD_LLAMA_VULKAN "Build llama.cpp with Vulkan GPU support" ${_PROSOPHOR_DEFAULT_LLAMA_VULKAN})
+option(PROSOPHOR_SDL_UI "Build SDL desktop sprite UI application" OFF)
+option(PROSOPHOR_NUTRIBOT "Build NutriBot (QNN local-NPU nutrition agent) application" OFF)
+option(PROSOPHOR_AICODING "Build ai_coding terminal application (default form)" OFF)
+# web 为独立服务端形态：可与任一主 UI 形态共存，需要时显式开启
+option(PROSOPHOR_WEB "Build web server application (prosophor_web)" OFF)
 
 if(PROSOPHOR_BUILD_LLAMA_CUDA AND PROSOPHOR_BUILD_LLAMA_VULKAN)
     if(WIN32)
@@ -126,36 +137,49 @@ if(PROSOPHOR_BUILD_LLAMA)
 endif()
 
 ############################################# spdlog #####################################
-if(EXISTS "${CMAKE_SOURCE_DIR}/thirdparty_src/spdlog-src")
-    message(STATUS "Found spdlog in thirdparty_src, using existing download")
-    FetchContent_Declare(spdlog SOURCE_DIR "${CMAKE_SOURCE_DIR}/thirdparty_src/spdlog-src")
+# 优先使用系统 dev 包（含 CMake config，如 libspdlog-dev / spdlogConfig.cmake），
+# 缺失时才走 thirdparty_src / GitHub FetchContent 兜底 —— 板级离线构建友好。
+find_package(spdlog CONFIG QUIET)
+if(NOT spdlog_FOUND)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/thirdparty_src/spdlog-src")
+        message(STATUS "Found spdlog in thirdparty_src, using existing download")
+        FetchContent_Declare(spdlog SOURCE_DIR "${CMAKE_SOURCE_DIR}/thirdparty_src/spdlog-src")
+    else()
+        message(STATUS "spdlog not found, fetching from GitHub...")
+        FetchContent_Declare(
+            spdlog
+            GIT_REPOSITORY https://github.com/gabime/spdlog.git
+            GIT_TAG v1.15.0
+            GIT_SHALLOW TRUE
+            SOURCE_DIR ${CMAKE_SOURCE_DIR}/thirdparty_src/spdlog-src
+        )
+    endif()
+    FetchContent_MakeAvailable(spdlog)
 else()
-    message(STATUS "spdlog not found, fetching from GitHub...")
-    FetchContent_Declare(
-        spdlog
-        GIT_REPOSITORY https://github.com/gabime/spdlog.git
-        GIT_TAG v1.15.0
-        GIT_SHALLOW TRUE
-        SOURCE_DIR ${CMAKE_SOURCE_DIR}/thirdparty_src/spdlog-src
-    )
+    message(STATUS "使用系统 spdlog (${spdlog_VERSION})")
 endif()
-FetchContent_MakeAvailable(spdlog)
 
 ############################################# nlohmann_json #####################################
-if(EXISTS "${CMAKE_SOURCE_DIR}/thirdparty_src/nlohmann_json-src")
-    message(STATUS "Found nlohmann_json in thirdparty_src, using existing download")
-    FetchContent_Declare(nlohmann_json SOURCE_DIR "${CMAKE_SOURCE_DIR}/thirdparty_src/nlohmann_json-src")
+# 优先使用系统 dev 包（nlohmann-json3-dev / nlohmann_jsonConfig.cmake）
+find_package(nlohmann_json CONFIG QUIET)
+if(NOT nlohmann_json_FOUND)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/thirdparty_src/nlohmann_json-src")
+        message(STATUS "Found nlohmann_json in thirdparty_src, using existing download")
+        FetchContent_Declare(nlohmann_json SOURCE_DIR "${CMAKE_SOURCE_DIR}/thirdparty_src/nlohmann_json-src")
+    else()
+        message(STATUS "nlohmann_json not found, fetching from GitHub...")
+        FetchContent_Declare(
+            nlohmann_json
+            GIT_REPOSITORY https://github.com/nlohmann/json.git
+            GIT_TAG v3.11.3
+            GIT_SHALLOW TRUE
+            SOURCE_DIR ${CMAKE_SOURCE_DIR}/thirdparty_src/nlohmann_json-src
+        )
+    endif()
+    FetchContent_MakeAvailable(nlohmann_json)
 else()
-    message(STATUS "nlohmann_json not found, fetching from GitHub...")
-    FetchContent_Declare(
-        nlohmann_json
-        GIT_REPOSITORY https://github.com/nlohmann/json.git
-        GIT_TAG v3.11.3
-        GIT_SHALLOW TRUE
-        SOURCE_DIR ${CMAKE_SOURCE_DIR}/thirdparty_src/nlohmann_json-src
-    )
+    message(STATUS "使用系统 nlohmann_json (${nlohmann_json_VERSION})")
 endif()
-FetchContent_MakeAvailable(nlohmann_json)
 
 find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)

@@ -1,6 +1,36 @@
 cmake_minimum_required(VERSION 3.20)
 project(prosophor_core VERSION ${PACKAGE_VERSION_CLEAN} LANGUAGES CXX C)
 
+# ---- 通用依赖查找（各形态/各 target 共享；CURL/OpenSSL/OpenMP 已在根 CMakeLists）----
+find_package(Threads REQUIRED)
+
+# ============================================================================
+# 应用形态选择（每个应用一个正向开关；一次构建仅一个形态）
+#   PROSOPHOR_NUTRIBOT / PROSOPHOR_SDL_UI / PROSOPHOR_AICODING
+#   三者全关 -> 默认 ai_coding（与 prosophor 历史默认一致）
+# ============================================================================
+set(_FORM_COUNT 0)
+foreach(_form PROSOPHOR_NUTRIBOT PROSOPHOR_SDL_UI PROSOPHOR_AICODING)
+    if(${_form})
+        math(EXPR _FORM_COUNT "${_FORM_COUNT} + 1")
+    endif()
+endforeach()
+if(_FORM_COUNT GREATER 1)
+    message(FATAL_ERROR
+        "应用形态互斥：PROSOPHOR_NUTRIBOT / PROSOPHOR_SDL_UI / PROSOPHOR_AICODING "
+        "一次只能开启一个")
+endif()
+if(_FORM_COUNT EQUAL 0)
+    set(PROSOPHOR_AICODING ON CACHE BOOL "Build ai_coding terminal application (default form)" FORCE)
+    message(STATUS "未指定应用形态 -> 默认 ai_coding")
+endif()
+unset(_FORM_COUNT)
+
+# 形态宏提前定义：prosophor_core（provider_router 等）编译期即可见
+if(PROSOPHOR_NUTRIBOT)
+    add_compile_definitions(PROSOPHOR_NUTRIBOT)
+endif()
+
 # ============================================================================
 # prosophor_core: common + platform + core logic (single static library)
 # Used by both TUI and SDL builds
@@ -32,6 +62,30 @@ list(APPEND CORE_SOURCES_ALL ${PLATFORM_SOURCES})
 
 if(NOT PROSOPHOR_BUILD_LLAMA)
     list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "llamacpp_provider\\.cc$")
+endif()
+
+# rtc/media 栈只为桌面 SDL(音频会话)服务，且其 typedefs.h 不支持 arm64；
+# websocket_client 依赖 libcurl >= 7.86 实验性 websocket API —— 本地终端形态裁剪
+if(PROSOPHOR_NUTRIBOT OR PROSOPHOR_AICODING)
+    list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "rtc_wrapper")
+    list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "websocket_client\\.cc$")
+endif()
+
+# edge-tts provider 依赖 libcurl >= 7.86 实验性 websocket API（curl_ws_*）。
+# 按平台能力探测：libcurl 达标（Windows/新版系统）则保留，低版本剔除并禁注册
+if(DEFINED CURL_VERSION_STRING AND NOT CURL_VERSION_STRING VERSION_LESS "7.86")
+    message(STATUS "libcurl ${CURL_VERSION_STRING}: edge-tts provider 可用")
+else()
+    message(STATUS "libcurl ${CURL_VERSION_STRING}: 无 websocket 实验 API -> edge-tts 剔除")
+    list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "edge_tts_provider\\.cc$")
+    add_compile_definitions(PROSOPHOR_NO_EDGE_TTS)
+endif()
+
+
+# aidgen LLM provider 源在 core GLOB 内；仅 nutribot 形态使用。
+# 过滤须在 add_library(prosophor_core) 前执行（链接段见下方 nutribot 形态段）
+if(NOT PROSOPHOR_NUTRIBOT)
+    list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "aidgen_provider\\.cc$")
 endif()
 
 add_library(prosophor_core STATIC ${CORE_SOURCES_ALL})
@@ -75,79 +129,89 @@ if(PROSOPHOR_BUILD_LLAMA)
 endif()
 
 # ============================================================================
-# web_server: HTTP + WebSocket 多用户服务端(prosophor_web 可执行文件)。
-# 含 IM 渠道层(原 im_gateway,唯一渠道 web):channel.h(ImChannel 抽象)+
-# web_gateway(会话编排)+ web_channel + web_protocol(帧协议)。
-# 依赖 prosophor_core;不链接 SDL/media_engine/components 等 UI 层
-# (CLAUDE.md layering)。httplib 单头文件走 SYSTEM include 规避 -Werror。
+# web_server 应用（正向开关 PROSOPHOR_WEB=ON；默认 OFF，需要时显式开启）
+# HTTP + WebSocket 多用户服务端(prosophor_web)。含 IM 渠道层(原 im_gateway):
+# channel.h(ImChannel 抽象)+ web_gateway(会话编排)+ web_channel + web_protocol。
+# 依赖 prosophor_core;不链接 SDL/media_engine/components 等 UI 层。
+# httplib 单头文件走 SYSTEM include（需先 vendor 到 thirdparty_src/cpp-httplib）。
 # ============================================================================
-file(GLOB_RECURSE WEB_SERVER_SOURCES
-    ${CMAKE_CURRENT_LIST_DIR}/web_server/*.cc
-)
-list(FILTER WEB_SERVER_SOURCES EXCLUDE REGEX "main_web\\.cc$")
-
-add_library(prosophor_web_server STATIC ${WEB_SERVER_SOURCES})
-
-target_include_directories(prosophor_web_server
-    SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/thirdparty_src/cpp-httplib
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/web_server>
-)
-
-target_link_libraries(prosophor_web_server
-    PUBLIC prosophor_core
-)
-
-if(WIN32)
-    target_link_libraries(prosophor_web_server PUBLIC ws2_32)
-endif()
-
-add_executable(prosophor_web
-    ${CMAKE_CURRENT_LIST_DIR}/web_server/main_web.cc
-    ${CMAKE_CURRENT_LIST_DIR}/resources/app.rc
-)
-
-# include 路径经 prosophor_web_server 的 PUBLIC BUILD_INTERFACE 传递
-target_link_libraries(prosophor_web PRIVATE prosophor_web_server)
-
-# llama-common 自带 vendor cpp-httplib(v0.45,编译为静态库),与本项目 v0.53
-# header-only 符号冲突;取第一个定义(本项目 v0.53,API 向后兼容)。
-target_link_options(prosophor_web PRIVATE "-Wl,--allow-multiple-definition")
-
-# 前端产物(可选:PROSOPHOR_BUILD_WEB_FRONTEND=ON 时 npm 构建,默认 OFF 不阻塞无 Node 环境)
-option(PROSOPHOR_BUILD_WEB_FRONTEND "Build web frontend via npm" OFF)
-if(PROSOPHOR_BUILD_WEB_FRONTEND)
-    find_program(NPM_EXECUTABLE npm)
-    if(NPM_EXECUTABLE)
-        add_custom_target(prosophor_web_frontend
-            COMMAND ${NPM_EXECUTABLE} ci
-            COMMAND ${NPM_EXECUTABLE} run build
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/web
-            BYPRODUCTS ${CMAKE_SOURCE_DIR}/web/dist
-            COMMENT "Building web frontend (npm ci && npm run build)"
-        )
-        add_dependencies(prosophor_web prosophor_web_frontend)
-    else()
-        message(WARNING "PROSOPHOR_BUILD_WEB_FRONTEND=ON but npm not found; frontend skipped")
+if(PROSOPHOR_WEB)
+    if(NOT EXISTS ${CMAKE_SOURCE_DIR}/thirdparty_src/cpp-httplib/httplib.h)
+        message(FATAL_ERROR
+            "PROSOPHOR_WEB=ON 需要 cpp-httplib 头文件，请先 vendor：\n"
+            "  git clone --depth 1 https://github.com/yhirose/cpp-httplib "
+            "${CMAKE_SOURCE_DIR}/thirdparty_src/cpp-httplib")
     endif()
+
+    file(GLOB_RECURSE WEB_SERVER_SOURCES
+        ${CMAKE_CURRENT_LIST_DIR}/web_server/*.cc
+    )
+    list(FILTER WEB_SERVER_SOURCES EXCLUDE REGEX "main_web\\.cc$")
+
+    add_library(prosophor_web_server STATIC ${WEB_SERVER_SOURCES})
+
+    target_include_directories(prosophor_web_server
+        SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/thirdparty_src/cpp-httplib
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/web_server>
+    )
+
+    target_link_libraries(prosophor_web_server
+        PUBLIC prosophor_core
+    )
+
+    if(WIN32)
+        target_link_libraries(prosophor_web_server PUBLIC ws2_32)
+    endif()
+
+    add_executable(prosophor_web
+        ${CMAKE_CURRENT_LIST_DIR}/web_server/main_web.cc
+        ${CMAKE_CURRENT_LIST_DIR}/resources/app.rc
+    )
+
+    # include 路径经 prosophor_web_server 的 PUBLIC BUILD_INTERFACE 传递
+    target_link_libraries(prosophor_web PRIVATE prosophor_web_server)
+
+    # llama-common 自带 vendor cpp-httplib(v0.45,编译为静态库),与本项目 v0.53
+    # header-only 符号冲突;取第一个定义(本项目 v0.53,API 向后兼容)。
+    target_link_options(prosophor_web PRIVATE "-Wl,--allow-multiple-definition")
+
+    # 前端产物(可选:PROSOPHOR_BUILD_WEB_FRONTEND=ON 时 npm 构建,默认 OFF)
+    option(PROSOPHOR_BUILD_WEB_FRONTEND "Build web frontend via npm" OFF)
+    if(PROSOPHOR_BUILD_WEB_FRONTEND)
+        find_program(NPM_EXECUTABLE npm)
+        if(NPM_EXECUTABLE)
+            add_custom_target(prosophor_web_frontend
+                COMMAND ${NPM_EXECUTABLE} ci
+                COMMAND ${NPM_EXECUTABLE} run build
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/web
+                BYPRODUCTS ${CMAKE_SOURCE_DIR}/web/dist
+                COMMENT "Building web frontend (npm ci && npm run build)"
+            )
+            add_dependencies(prosophor_web prosophor_web_frontend)
+        else()
+            message(WARNING "PROSOPHOR_BUILD_WEB_FRONTEND=ON but npm not found; frontend skipped")
+        endif()
+    endif()
+
+    # 安装（随 web 段）
+    install(TARGETS prosophor_web DESTINATION bin)
+    # 尾部斜杠:把 dist 内容直接装进 bin/web-dist(运行时静态根),而不是 web-dist/dist
+    install(DIRECTORY ${CMAKE_SOURCE_DIR}/web/dist/ DESTINATION bin/web-dist OPTIONAL)
 endif()
 
 # ============================================================================
-# TUI build: prosophor_core + ai_coding, no SDL/media/scene
+# ai_coding 应用（正向开关 PROSOPHOR_AICODING；形态互斥见文件顶部）
 # ============================================================================
-if(NOT PROSOPHOR_SDL_UI)
+if(PROSOPHOR_AICODING)
+    add_compile_definitions(PROSOPHOR_AICODING)
     file(GLOB_RECURSE TUI_SOURCES
         ${CMAKE_CURRENT_LIST_DIR}/ai_coding/*.cc
     )
 
-    add_executable(prosophor ${TUI_SOURCES} main.cc
-        ${CMAKE_CURRENT_LIST_DIR}/resources/app.rc
-    )
-
-    set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/resources/app.rc
-        PROPERTIES SOURCE_FILE_DEPENDENCIES ${CMAKE_CURRENT_LIST_DIR}/resources/app.ico
-    )
+    # 终端运行：无 GUI 资源文件
+    add_executable(prosophor ${TUI_SOURCES} main.cc)
 
     target_include_directories(prosophor PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -199,30 +263,60 @@ if(PROSOPHOR_SDL_UI)
     )
 endif()
 
+
 # ============================================================================
-# Compiler flags
+# nutribot 形态（PROSOPHOR_NUTRIBOT=ON）：QNN 本地 NPU 营养管家
+#   无模块级 CMakeLists（同 ai_coding/web_server：源由本文件 GLOB 收编）；
+#   单测源码位于仓库顶级 tests/nutribot/（零依赖微框架）。
+#   统一入口 main_src/main.cc 按宏 PROSOPHOR_NUTRIBOT 分支（已预埋）。
 # ============================================================================
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(prosophor_core PRIVATE -Wall -Wextra -Wpedantic -Wshadow -Werror -O2)
-    target_compile_options(prosophor        PRIVATE -Wall -Wextra -Wpedantic -Wshadow -Werror -O2)
-    target_compile_options(prosophor_web_server PRIVATE -Wall -Wextra -Wpedantic -Wshadow -Werror -O2)
-    target_compile_options(prosophor_web    PRIVATE -Wall -Wextra -Wpedantic -Wshadow -Werror -O2)
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        target_compile_options(prosophor_core PRIVATE /W4 /WX /Od /RTC1 /EHsc)
-        target_compile_options(prosophor        PRIVATE /W4 /WX /Od /RTC1 /EHsc)
-        target_compile_options(prosophor_web_server PRIVATE /W4 /WX /Od /RTC1 /EHsc)
-        target_compile_options(prosophor_web    PRIVATE /W4 /WX /Od /RTC1 /EHsc)
-    else()
-        target_compile_options(prosophor_core PRIVATE /W4 /WX /O2 /EHsc)
-        target_compile_options(prosophor        PRIVATE /W4 /WX /O2 /EHsc)
-        target_compile_options(prosophor_web_server PRIVATE /W4 /WX /O2 /EHsc)
-        target_compile_options(prosophor_web    PRIVATE /W4 /WX /O2 /EHsc)
-    endif()
+if(PROSOPHOR_NUTRIBOT)
+    file(GLOB_RECURSE NUTRIBOT_SOURCES
+        ${CMAKE_CURRENT_LIST_DIR}/nutribot/*.cc
+    )
+    add_executable(prosophor
+        main.cc
+        ${NUTRIBOT_SOURCES}
+    )
+    target_include_directories(prosophor PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/nutribot
+        ${CMAKE_CURRENT_SOURCE_DIR}/prosophor_core
+        ${CMAKE_CURRENT_SOURCE_DIR}/base
+    )
+    # aidgen LLM provider：随 prosophor_core 链接（nutribot 形态硬依赖，NPU 本地推理；
+    # 缺 SDK 直接配置失败；源过滤见 core 收集段）
+    find_library(NR_AIDGEN_LIB NAMES aidgen PATHS /usr/local/lib REQUIRED)
+    target_include_directories(prosophor_core PRIVATE /usr/local/include)
+    target_link_libraries(prosophor_core PRIVATE ${NR_AIDGEN_LIB})
+    target_link_options(prosophor_core PRIVATE "-Wl,-rpath,/usr/local/lib")
+    message(STATUS "aidgen-sdk：已并入 prosophor_core（nutribot 硬依赖，NPU 本地推理）")
+
+    target_link_libraries(prosophor PRIVATE prosophor_core)
 endif()
 
+# ---- 主形态 prosophor 安装（置于文件尾：nutribot 形态的 prosophor 在此才定义；
+#       prosophor_web 的安装在其 web 段内，见上）----
 install(TARGETS prosophor DESTINATION bin)
-install(TARGETS prosophor_web DESTINATION bin)
-# 尾部斜杠:把 dist 内容直接装进 bin/web-dist(运行时静态根),而不是 web-dist/dist
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/web/dist/ DESTINATION bin/web-dist OPTIONAL)
 
+# ============================================================================
+# Compiler flags（置于文件尾：此时全部 target 已定义完毕 ——
+#   nutribot 段新增的 nr_core/prosophor 等一并覆盖，无需逐段打补丁；
+#   新增 target 加入列表即可；TARGET 守卫容忍条件形态未开启的情况）
+# ============================================================================
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set(PROSOPHOR_COMPILE_OPTIONS -Wall -Wextra -Wpedantic -Wshadow -Werror -O2)
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(PROSOPHOR_COMPILE_OPTIONS /W4 /WX /Od /RTC1 /EHsc)
+    else()
+        set(PROSOPHOR_COMPILE_OPTIONS /W4 /WX /O2 /EHsc)
+    endif()
+endif()
+foreach(_tgt prosophor_core prosophor prosophor_web_server prosophor_web
+             nr_core)
+    if(PROSOPHOR_COMPILE_OPTIONS AND TARGET ${_tgt})
+        target_compile_options(${_tgt} PRIVATE ${PROSOPHOR_COMPILE_OPTIONS})
+    endif()
+endforeach()
+unset(_tgt)

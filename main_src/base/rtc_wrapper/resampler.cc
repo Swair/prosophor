@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "resampler.h"
+#include <cstddef>
 
 namespace prosophor {
 
