@@ -7,7 +7,7 @@
 
   "llm": {
     "protocal": "aidgen",
-    "model": "Qwen3-1.7B",
+    "model": "Qwen2.5-0.5B",
     "skills_white_list": [],
     "tools_white_list": [],
     "enable_streaming": true,

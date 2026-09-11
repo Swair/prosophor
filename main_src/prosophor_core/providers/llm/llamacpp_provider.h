@@ -19,8 +19,6 @@
 #include "common/chat.h"
 #pragma GCC diagnostic pop
 
-struct common_chat_tool;
-
 namespace prosophor {
 
 class LlamacppProvider : public LLMProvider {
@@ -75,12 +73,6 @@ private:
     HeaderList CreateHeaders(const ChatRequest& request) const override;
     void PrintRequestLog(const ChatRequest& request) const override;
     common_chat_params BuildChatParams(const ChatRequest& request) const;
-    void BuildSystemPrompt(std::vector<common_chat_msg>& out,
-                           const std::vector<SystemSchema>& system) const;
-    void BuildMessagePrompt(std::vector<common_chat_msg>& out,
-                            const std::vector<MessageSchema>& messages) const;
-    void BuildToolsPrompt(std::vector<common_chat_tool>& out,
-                          const std::vector<ToolsSchema>& tools) const;
     std::string BuildFallbackPrompt(
         const std::vector<common_chat_msg>& messages) const;
     bool TokenizePrompt(const std::string& prompt, int max_tokens,

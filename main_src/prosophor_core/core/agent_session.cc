@@ -282,12 +282,23 @@ void AgentSession::SetCurrentSender(const std::string& sender_id,
     current_sender_name_ = sender_name;
 }
 
+void AgentSession::SetNextImages(std::vector<std::string> image_paths) {
+    std::lock_guard<std::mutex> lock(render_mutex_);
+    next_image_paths_ = std::move(image_paths);
+}
+
 void AgentSession::AddUserMessage(const std::string& text) {
     std::lock_guard<std::mutex> lock(render_mutex_);
     // 消费式读取瞬时 sender:右值构造取走并清空,不会泄漏到下一条消息
-    messages_.push_back(MessageSchema("user", text,
-                                      std::move(current_sender_id_),
-                                      std::move(current_sender_name_)));
+    MessageSchema message("user", text,
+                          std::move(current_sender_id_),
+                          std::move(current_sender_name_));
+    // 同理消费随附图片:按内容块顺序追加在文本之后, 逐张挂上 image 块
+    for (auto& path : std::move(next_image_paths_)) {
+        message.AddImageContent(std::move(path));
+    }
+    next_image_paths_.clear();
+    messages_.push_back(std::move(message));
 }
 
 void AgentSession::CleanupInterruptedLoop() {

@@ -191,7 +191,7 @@ int AgentCore::GetMaxIterations(const AgentSession& session) {
     return session.GetRole() ? session.GetRole()->max_iterations : 15;
 }
 
-void AgentCore::Loop(const std::string& message, AgentSession& session) {
+std::string AgentCore::Loop(const std::string& message, AgentSession& session) {
     // Determine streaming mode from role configuration
     bool streaming = session.GetRole() && session.GetRole()->enable_streaming;
     LOG_DEBUG("Processing message (streaming={})", streaming);
@@ -216,7 +216,7 @@ void AgentCore::Loop(const std::string& message, AgentSession& session) {
             if (iterations == 0) {
                 session.CleanupInterruptedLoop();  // 尚未产生任何 assistant 回复，移除孤立的 user 消息
             }
-            return;
+            return {};   // 被打断：本轮没有回复可返回
         }
 
         // 每轮压缩检查：确保 messages 不超出 context_window
@@ -280,7 +280,7 @@ void AgentCore::Loop(const std::string& message, AgentSession& session) {
             session.CleanupInterruptedLoop();  // 移除孤立的 user 消息
             LOG_ERROR("LLM API error: {}", response.error_msg);
             session.SetOutput(AgentRuntimeState::STATE_ERROR, response.error_msg);
-            return;
+            return {};   // 出错：返回空，避免调用方误取上一轮的回复
         }
 
         // Build assistant message with thinking (if any)
@@ -311,16 +311,17 @@ void AgentCore::Loop(const std::string& message, AgentSession& session) {
             }
 
             ConsolidateMemoryIfNeeded(session);
-            return;
+            return response.content_text;   // 唯一成功出口：本轮回复即此文本
         }
 
         session.SetOutput(AgentRuntimeState::STATE_ERROR, "Unexpected LLM response format, no content_text and no tool_calls");
         LOG_ERROR("AgentCore::Loop: res error: {}", response.content_text);
-        return;
+        return {};
     }
 
     // Max iterations (unexpected — LLM didn't complete in time)
     session.SetOutput(AgentRuntimeState::STATE_ERROR, "[Max iterations reached]");
+    return {};
 }
 
 void AgentCore::ConsolidateMemoryIfNeeded(AgentSession& session) {

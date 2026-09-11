@@ -296,7 +296,7 @@ ProviderConfig ProviderConfig::FromJson(const nlohmann::json& json) {
     config.api_key = json.value("api_key", json.value("apiKey", ""));
     config.base_url = json.value("base_url", json.value("baseUrl", ""));
     config.timeout = json.value("timeout", kDefaultProviderTimeoutSec);
-    config.aidgen_config = json.value("aidgen_config", "");
+    config.aidgen_cfg = AidGenModelConfig::FromJson(json);
 
     // Parse models — supports array (preferred) and object (legacy) formats
     const auto& models_json_key = json.contains("models") ? "models" : "model";
@@ -327,6 +327,43 @@ ProviderConfig ProviderConfig::FromJson(const nlohmann::json& json) {
         }
     }
     return config;
+}
+
+AidGenModelConfig AidGenModelConfig::FromJson(const nlohmann::json& json) {
+    AidGenModelConfig config;
+    // 兼容旧的散列键：aidgen_config / aidgen_vl_config / aidgen_vit_backend
+    config.config_file = Platform::NormalizePath(
+        json.value("config_file", json.value("aidgen_config", "")));
+    config.vl_config_file = Platform::NormalizePath(
+        json.value("vl_config_file", json.value("aidgen_vl_config", "")));
+    config.backend = json.value("backend", json.value("aidgen_backend", "auto"));
+    config.vit_backend = json.value("vit_backend",
+                                    json.value("aidgen_vit_backend", "auto"));
+    config.auto_start = json.value("auto_start", true);
+
+    // 提示词标记：模型定制时在此覆盖，缺省为 ChatML + Qwen-VL 视觉界标
+    if (json.contains("chat_markers") && json["chat_markers"].is_object()) {
+        const auto& markers = json["chat_markers"];
+        config.im_start     = markers.value("im_start",     config.im_start);
+        config.im_end       = markers.value("im_end",       config.im_end);
+        config.vision_start = markers.value("vision_start", config.vision_start);
+        config.vision_end   = markers.value("vision_end",   config.vision_end);
+    }
+    return config;
+}
+
+nlohmann::ordered_json AidGenModelConfig::ToJson() const {
+    nlohmann::ordered_json j;
+    j["config_file"] = config_file;
+    j["backend"] = backend;
+    j["auto_start"] = auto_start;
+    j["vl_config_file"] = vl_config_file;
+    j["vit_backend"] = vit_backend;
+    j["chat_markers"] = {
+        {"im_start", im_start}, {"im_end", im_end},
+        {"vision_start", vision_start}, {"vision_end", vision_end},
+    };
+    return j;
 }
 
 LlamacppModelConfig LlamacppModelConfig::FromJson(const nlohmann::json& json) {

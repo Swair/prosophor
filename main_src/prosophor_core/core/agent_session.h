@@ -130,6 +130,10 @@ public:
     /// 由 StartChain 在持会话锁、Loop 之前调用;AddUserMessage 读取后自动清空
     void SetCurrentSender(const std::string& sender_id,
                           const std::string& sender_name = "");
+    /// 设置本条用户消息随附的图片(消费式瞬时状态, 语义同 SetCurrentSender)
+    /// 由调用方在 Loop 之前调用;AddUserMessage 读取后自动清空 —— 用户随时给图,
+    /// 图只属于它跟的那一条消息, 不会泄漏到后续轮次
+    void SetNextImages(std::vector<std::string> image_paths);
     void AddUserMessage(const std::string& text);
     /// 准备开始新 Loop：如果上一个 Loop 被打断留下孤立的 user 消息，清理掉
     /// 在持 session_mutex 后、ClearStopRequested + Loop 之前调用
@@ -191,6 +195,9 @@ private:
     // ── 本条消息发送者(瞬时输入,AddUserMessage 消费后清空)──
     std::string current_sender_id_;
     std::string current_sender_name_;
+
+    // ── 本条消息随附图片(瞬时输入,AddUserMessage 消费后清空)──
+    std::vector<std::string> next_image_paths_;
 
     // ── 会话锁 ────────────────────────────────────────────
     std::mutex session_mutex_;

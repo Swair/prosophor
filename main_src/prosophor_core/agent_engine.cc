@@ -133,7 +133,40 @@ void AgentEngine::AddOutputCallback(OutputCallback cb) {
     session_manager_->AddOutputCallback(std::move(cb));
 }
 
-void AgentEngine::SendUserMessage(const std::string& session_id, const std::string& text,
+std::string AgentEngine::SendUserMessage(const std::string& session_id, const std::string& text,
+                                         const std::string& sender_id,
+                                         const std::string& sender_name) {
+    if (!text.empty() && text[0] == '/') {
+        // 命令是系统级操作,不携带 sender; 其结果不是一条助手回复
+        HandleCommand(text, session_id);
+        return {};
+    }
+    try {
+        return session_manager_->SendToSession(session_id, text, sender_id, sender_name);
+    } catch (const std::exception& e) {
+        LOG_ERROR("SendUserMessage error (session={}): {}", session_id, e.what());
+        return {};
+    }
+}
+
+std::string AgentEngine::SendUserMessage(const std::string& session_id, const std::string& text,
+                                         const std::vector<std::string>& image_paths,
+                                         const std::string& sender_id,
+                                         const std::string& sender_name) {
+    if (!text.empty() && text[0] == '/') {
+        HandleCommand(text, session_id);
+        return {};
+    }
+    try {
+        return session_manager_->SendToSession(session_id, text, image_paths,
+                                               sender_id, sender_name);
+    } catch (const std::exception& e) {
+        LOG_ERROR("SendUserMessage error (session={}): {}", session_id, e.what());
+        return {};
+    }
+}
+
+void AgentEngine::SendUserMessageAsync(const std::string& session_id, const std::string& text,
                                   const std::string& sender_id,
                                   const std::string& sender_name) {
     if (!text.empty() && text[0] == '/') {
@@ -144,7 +177,7 @@ void AgentEngine::SendUserMessage(const std::string& session_id, const std::stri
     try {
         session_manager_->SendToSessionAsync(session_id, text, sender_id, sender_name);
     } catch (const std::exception& e) {
-        LOG_ERROR("SendUserMessage error (session={}): {}", session_id, e.what());
+        LOG_ERROR("SendToSessionAsync error (session={}): {}", session_id, e.what());
     }
 }
 

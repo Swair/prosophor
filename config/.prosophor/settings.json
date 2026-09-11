@@ -133,7 +133,9 @@
     "aidgen": {
       "api_key": "local",
       "base_url": "local",
-      "aidgen_config": "~/aidmlm/qwen2.5-0.5b-instruct/aidgen_config.json"
+      "config_file": "~/aidmlm/qnn236_qcs8550_cl2048/aidgen_config.json",
+      "backend": "auto",
+      "vit_backend": "qnn240"
     }
   },
   "tts": {

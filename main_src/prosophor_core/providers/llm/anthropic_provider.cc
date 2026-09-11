@@ -18,7 +18,7 @@ namespace prosophor {
 // Internal helper functions for Anthropic serialization (static to avoid linkage conflicts)
 
 // Applies thinking parameters to payload_json
-static void ApplyThinkingParams(nlohmann::json& payload_json,
+static void SerializeThinking(nlohmann::json& payload_json,
      const ChatRequest& request) {
     if (request.thinking) {
         int budget = request.thinking_budget_tokens;
@@ -238,7 +238,7 @@ std::string AnthropicProvider::Serialize(const ChatRequest& request) const {
         }
     }
 
-    ApplyThinkingParams(payload_json, request);
+    SerializeThinking(payload_json, request);
 
     // LOG_DEBUG("Request body:\n {}", payload_json.dump(4));
 

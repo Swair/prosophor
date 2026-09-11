@@ -60,9 +60,26 @@ class AgentEngine : public Noncopyable {
                               const std::string& owner_id = "",
                               SessionType session_type = SessionType::kDirect);
 
+    /// 同步发送用户消息：阻塞至整轮完成（含工具调用与流式回调），
+    /// 返回本轮助手回复全文。需要异步并发的调用方用 SendUserMessageAsync。
+    /// @param sender_id IM 发送者 ID(群聊必填),空表示本机用户
+    /// @return 助手回复文本；斜杠命令或出错时为空
+    std::string SendUserMessage(const std::string& session_id, const std::string& text,
+                                const std::string& sender_id = "",
+                                const std::string& sender_name = "");
+
+    /// 同步发送用户消息，并随附图片（用户随时给图：图只属于本条消息）。
+    /// 直接照抄上面那个重载即可 —— 纯文本路径行为逐字节不变。
+    /// @param image_paths 本条消息随附的图片路径；空则等同不带图的重载
+    /// @return 助手回复文本；斜杠命令或出错时为空
+    std::string SendUserMessage(const std::string& session_id, const std::string& text,
+                                const std::vector<std::string>& image_paths,
+                                const std::string& sender_id = "",
+                                const std::string& sender_name = "");
+
     /// Send a user message to a specific session (handles /slash commands internally).
     /// @param sender_id IM 发送者 ID(群聊必填),空表示本机用户
-    void SendUserMessage(const std::string& session_id, const std::string& text,
+    void SendUserMessageAsync(const std::string& session_id, const std::string& text,
                          const std::string& sender_id = "",
                          const std::string& sender_name = "");
 

@@ -19,7 +19,11 @@ class AgentCore {
     /// Process a message - streaming mode is determined by session.role->enable_streaming
     /// @param message User message
     /// @param session Agent session (read/write) - contains tool_executor, stop_requested, role
-    static void Loop(const std::string& message, AgentSession& session);
+    /// @return 本轮最终助手回复全文；未产出回复（被打断、API 错误、工具轮耗尽
+    ///         max_iterations）时为空 —— 调用方据此区分"没答"与"答了空白"。
+    ///         刻意不由消息列表末条反推：失败路径下 CleanupInterruptedLoop 会 pop
+    ///         掉孤立的 user 消息，末条会退回上一轮的回复，造成静默串答。
+    static std::string Loop(const std::string& message, AgentSession& session);
 
  private:
     /// Validate session state before building request (role, base_url, api_key)

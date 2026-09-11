@@ -148,9 +148,14 @@ std::shared_ptr<LLMProvider> LlmProviderRouter::CreateProvider(
 #endif
 
 #ifdef PROSOPHOR_NUTRIBOT
-    if (type == "aidgen") {   // 构造即异步加载模型（与 llamacpp auto-start 同构）
-        return std::make_shared<AidGenProvider>(
-            AidGenModelConfig{ExpandHome(config.aidgen_config), AidGenBackend::Auto});
+    // 纯文本与多模态同为 AidGenProvider，且只此一个 entry：选哪份模型由
+    // config_file 指向的模型配置决定——含 vlm_model 段即多模态，否则纯文本。
+    // 故不存在 "aidgen" 与 "aidgen-vl" 两个 provider 争抢进程唯一 Context 的问题。
+    if (type == "aidgen") {   // 构造即异步加载（同 llamacpp）
+        AidGenModelConfig cfg = config.aidgen_cfg;   // 同 llamacpp_cfg：整份传下去
+        cfg.config_file = ExpandHome(cfg.config_file);
+        cfg.vl_config_file = ExpandHome(cfg.vl_config_file);
+        return std::make_shared<AidGenProvider>(std::move(cfg));
     }
 #endif
 

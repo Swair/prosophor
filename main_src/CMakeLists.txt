@@ -83,6 +83,8 @@ endif()
 
 
 # aidgen LLM provider 源在 core GLOB 内；仅 nutribot 形态使用。
+# aidgen_provider.cc 是仓库内唯一包含 aidgen.hpp / aidlite.hpp / opencv 的文件
+# （SDK 接入点），必须过滤——否则非 nutribot 形态会在没有这些头文件的环境里编译它。
 # 过滤须在 add_library(prosophor_core) 前执行（链接段见下方 nutribot 形态段）
 if(NOT PROSOPHOR_NUTRIBOT)
     list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "aidgen_provider\\.cc$")
@@ -291,6 +293,17 @@ if(PROSOPHOR_NUTRIBOT)
     target_link_libraries(prosophor_core PRIVATE ${NR_AIDGEN_LIB})
     target_link_options(prosophor_core PRIVATE "-Wl,-rpath,/usr/local/lib")
     message(STATUS "aidgen-sdk：已并入 prosophor_core（nutribot 硬依赖，NPU 本地推理）")
+
+    # aidgen-vl 多模态：aidlite(视觉编码器) + opencv(图像解码/缩放) ——
+    # 官方 aidmlm 例程同配方；视觉链路内联在 aidgen_provider.cc
+    find_library(NR_AIDLITE_LIB NAMES aidlite PATHS /usr/local/lib REQUIRED)
+    find_library(NR_OPENCV_CORE NAMES opencv_core REQUIRED)
+    find_library(NR_OPENCV_IMGPROC NAMES opencv_imgproc REQUIRED)
+    find_library(NR_OPENCV_IMGCODECS NAMES opencv_imgcodecs REQUIRED)
+    target_include_directories(prosophor_core PRIVATE /usr/include/opencv4)
+    target_link_libraries(prosophor_core PRIVATE
+        ${NR_AIDLITE_LIB} ${NR_OPENCV_CORE} ${NR_OPENCV_IMGPROC} ${NR_OPENCV_IMGCODECS})
+    message(STATUS "aidlite + opencv：已并入 prosophor_core（aidgen-vl 视觉链路）")
 
     target_link_libraries(prosophor PRIVATE prosophor_core)
 endif()

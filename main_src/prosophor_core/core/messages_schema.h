@@ -10,10 +10,10 @@ namespace prosophor {
 
 /// Represents a content block in a message
 struct ContentSchema {
-    std::string type;        // "text" | "tool_use" | "tool_result" | "thinking"
+    std::string type;        // "text" | "tool_use" | "tool_result" | "thinking" | "image"
     std::string text;        // For text/thinking blocks
     std::string name;        // For tool_use blocks
-    nlohmann::json input;    // For tool_use blocks
+    nlohmann::json input;    // For tool_use blocks; image 块存 {"path": <文件路径>}
     std::string tool_use_id; // For tool_result blocks
     std::string content;     // For tool_result blocks
     std::string signature;   // For thinking blocks (required by API)
@@ -68,6 +68,14 @@ struct MessageSchema {
 
     void AddThinkingContent(std::string text, std::string sig = "") {
         content.push_back({"thinking", std::move(text), "", "", {}, "", std::move(sig), false});
+    }
+
+    /// 图像内容块（多模态模型专用）：path 为本地图像文件路径。
+    /// 纯文本 provider 的序列化路径不识别本块 —— 由调用方保证只发给多模态 provider。
+    void AddImageContent(std::string path) {
+        content.push_back({"image", "", "",
+                           nlohmann::json{{"path", std::move(path)}},
+                           "", "", "", false});
     }
 
     void AddToolUseContent(const std::string& id, const std::string& name, nlohmann::json input) {

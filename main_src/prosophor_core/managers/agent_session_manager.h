@@ -61,6 +61,15 @@ public:
                               const std::string& sender_id = "",
                               const std::string& sender_name = "");
 
+    /// 向指定会话发送消息（同步，随附图片）
+    /// image_paths 在本调用内、持会话锁设置给瞬时附件位 —— 与 Loop 取图同锁，
+    /// 不留给调用方先设后发的竞态窗口
+    std::string SendToSession(const std::string& session_id,
+                              const std::string& message,
+                              const std::vector<std::string>& image_paths,
+                              const std::string& sender_id = "",
+                              const std::string& sender_name = "");
+
     /// 向指定会话发送消息（异步，不阻塞）
     void SendToSessionAsync(const std::string& session_id,
                             const std::string& message,

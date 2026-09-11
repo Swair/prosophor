@@ -78,6 +78,27 @@ struct ProviderEntryConfig {
     std::unordered_map<std::string, ModelConfig> models;
 };
 
+/// Configuration for local NPU model (aidgen in-process, QCS8550 等)
+/// aidgen-vl 与纯文本同构：多一份 vlm_model 段与视觉后端，由配置内容分流。
+struct AidGenModelConfig {
+    static AidGenModelConfig FromJson(const nlohmann::json& json);
+    nlohmann::ordered_json ToJson() const;
+
+    std::string config_file;        // aidgen 模型配置 JSON 路径
+    std::string backend = "auto";   // aidgen 推理后端: "auto"|"qnn236"|"qnn240"|"qnn248"
+    bool auto_start = true;         // Load model on startup
+
+    // aidgen-vl 专用：VL 模型配置 JSON（含 vlm_model 段）；空则回落 config_file
+    std::string vl_config_file;
+    std::string vit_backend = "auto";   // 视觉编码器(aidlite)后端
+
+    // 提示词标记覆盖点：默认 ChatML + Qwen-VL 视觉界标
+    std::string im_start     = "<|im_start|>";
+    std::string im_end       = "<|im_end|>";
+    std::string vision_start = "<|vision_start|>";
+    std::string vision_end   = "<|vision_end|>";
+};
+
 /// Configuration for local model (llama.cpp in-process)
 struct LlamacppModelConfig {
     static LlamacppModelConfig FromJson(const nlohmann::json& json);
@@ -141,8 +162,8 @@ struct ProviderConfig {
     // when this ProviderConfig is for the "llamacpp" provider type.
     LlamacppModelConfig llamacpp_cfg;
 
-    // aidgen(NPU) 专用：本地模型配置 JSON 路径 — only valid when provider type is "aidgen"
-    std::string aidgen_config;
+    // aidgen(NPU) 专用配置 — only valid when provider type is "aidgen"/"aidgen-vl"
+    AidGenModelConfig aidgen_cfg;
 
     // All entries from the config array (each keeps its own api_key/base_url)
     std::vector<ProviderEntryConfig> entries;

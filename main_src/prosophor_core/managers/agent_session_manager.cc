@@ -275,25 +275,32 @@ std::string AgentSessionManager::SendToSession(const std::string& session_id,
                                                const std::string& message,
                                                const std::string& sender_id,
                                                const std::string& sender_name) {
+    return SendToSession(session_id, message, std::vector<std::string>{}, sender_id, sender_name);
+}
+
+std::string AgentSessionManager::SendToSession(const std::string& session_id,
+                                               const std::string& message,
+                                               const std::vector<std::string>& image_paths,
+                                               const std::string& sender_id,
+                                               const std::string& sender_name) {
     auto session = GetSessionShared(session_id);
     if (!session) {
         throw std::runtime_error("Session not found: " + session_id);
     }
 
     session->UpdateLastActive();
+    std::string reply;
     {
         auto lock = session->ScopedLock();
         session->SetCurrentSender(sender_id, sender_name);
-        AgentCore::Loop(message, *session);
+        // 与 Loop 同锁设置附件：分两次加锁会留下"设图"与"取图"之间的竞态窗口
+        session->SetNextImages(image_paths);
+        reply = AgentCore::Loop(message, *session);
     }
 
-    // 返回最后一条消息（assistant 回复）
-    const auto& msgs = session->GetMessages();
-    if (!msgs.empty()) {
-        return msgs.back().text();
-    }
-
-    return "";
+    // 回复由 Loop 直接交出：消息列表末条在失败路径下会退回上一轮的回复，
+    // 不能用来反推本轮结果
+    return reply;
 }
 
 void AgentSessionManager::SendToSessionAsync(const std::string& session_id,
