@@ -34,6 +34,7 @@ add_executable(nr_tests
     test_profile_quiz.cc
     test_member_repository.cc
     test_scene_judger.cc
+    test_vl_food_detector.cc
     test_register_flow.cc
 )
 find_package(spdlog CONFIG QUIET)

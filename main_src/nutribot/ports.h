@@ -17,9 +17,17 @@
 namespace prosophor::nr::app {
 
 // 帧句柄：感知实现（aidlite/camera）的输入载体。
-// 阶段 2 起由 infrastructure 定义具体帧视图（如 {data,width,height,step}），
-// 应用层只透传，不解引用 —— 与 Python 把 cv2 frame 当不透明对象同语义。
+// 具体帧视图由 infrastructure 定义（见 ImageFrame），应用层只透传、不解引用
+// —— 与 Python 把 cv2 frame 当不透明对象同语义。
 using FrameRef = const void*;
+
+// 帧视图（第一阶段）：一帧图像 = 磁盘上的一个图片文件。
+// AidGen VL 本就按路径取图（provider 内部 OpenCV 解码），故采集侧落盘一帧、
+// 感知侧按路径读；换采集源（摄像头/视频文件）不动端口。像素缓冲视图待真实
+// 摄像头接入时再扩展 —— 届时本结构加字段，端口签名不变。
+struct ImageFrame {
+    std::string image_path;
+};
 
 // 单张人脸的识别结果（应用层值对象；对应 Python FaceObservation）
 struct FaceObservation {

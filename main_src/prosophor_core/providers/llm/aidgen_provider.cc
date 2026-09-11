@@ -622,9 +622,12 @@ bool AidGenProvider::LoadVisionEncoder(std::string& error_msg) {
     };
 
     auto encoder = std::make_unique<AidGenVisionEncoder>();
-    // Qwen-VL 视觉参数在 vlm_model.<type> 子段（如 "qwen2.5"）
-    if (vlm.contains("qwen2.5")) {
-        const auto& shape = vlm["qwen2.5"];
+    // Qwen-VL 视觉参数在 vlm_model.<type> 子段（如 "qwen2.5"）。键名取自配置自述的
+    // type 而非写死：换家族（Qwen3-VL 等）子段名会变，写死会让新配置静默沿用默认
+    // 392x392，与模型实际输入形状对不上，报错还看不出原因。
+    const std::string vision_type = vlm.value("type", std::string("qwen2.5"));
+    if (vlm.contains(vision_type)) {
+        const auto& shape = vlm[vision_type];
         encoder->img_h = shape.value("img_h", encoder->img_h);
         encoder->img_w = shape.value("img_w", encoder->img_w);
         encoder->img_c = shape.value("img_c", encoder->img_c);
@@ -633,6 +636,9 @@ bool AidGenProvider::LoadVisionEncoder(std::string& error_msg) {
         encoder->temporal_patch_size =
             shape.value("temporal_patch_size", encoder->temporal_patch_size);
         encoder->merge_size = shape.value("merge_size", encoder->merge_size);
+    } else {
+        LOG_WARN("[aidgen] 配置无视觉参数子段 '{}'，按默认 {}x{} 装载 —— 与模型实际 "
+                 "输入形状不符时会编码失败", vision_type, encoder->img_w, encoder->img_h);
     }
 
     if (!encoder->Initialize(resolve("vision_model_path"),

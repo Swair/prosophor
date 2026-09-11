@@ -32,6 +32,7 @@
 #include "quiz_cli.h"
 #include "rule_engine.h"
 #include "scene.h"
+#include "vl_food_detector.h"
 
 #include "providers/llm/aidgen_provider.h"
 #include "providers/llm/llm_provider.h"
@@ -248,6 +249,16 @@ std::string JoinNames(const std::set<std::string>& names) {
     for (const auto& n : names) {
         if (!out.empty()) out += "、";
         out += n;
+    }
+    return out;
+}
+
+// 菜品名以中文顿号连接（保序，与识别输出一致）
+std::string JoinFoodNames(const std::vector<prosophor::nr::domain::FoodItem>& foods) {
+    std::string out;
+    for (const auto& f : foods) {
+        if (!out.empty()) out += "、";
+        out += f.name;
     }
     return out;
 }
@@ -545,6 +556,146 @@ void DemoMultiTurnVision() {
     }
 }
 
+// [6] 看菜自检（Phase 3）：VL 看帧 -> 菜品列表 -> MealMonitor -> 规则引擎。
+// 直连 provider（同 [5b]）—— 感知调用不是对话：问的是"图里有什么菜"、答的是机器
+// 要解析的 JSON，角色人格 prompt 在此只会帮倒忙，也不该进对话会话历史。
+void DemoFoodRecognition(prosophor::nr::infra::JsonMemberRepository& repo) {
+    // 菜图随仓库不带（拍图命令见下方跳过提示）；无图时本段跳过，链路仍由单测端到端覆盖
+    const std::string image = "tests/nutribot/assets/vl_food_table.jpg";
+    if (!prosophor::FileExists(image)) {
+        LOG_INFO("  （跳过: 缺少菜图 {} —— 可拍一张:\n   ffmpeg -f v4l2 -i /dev/video0 -frames:v 1 -y {}）",
+                 image.c_str(), image.c_str());
+        return;
+    }
+    auto provider = prosophor::LlmProviderRouter::GetInstance()
+                        .GetProviderByName("aidgen");
+    auto* vl = dynamic_cast<prosophor::AidGenProvider*>(provider.get());
+    if (vl == nullptr || !vl->IsLoaded()) {
+        LOG_INFO("  （跳过: aidgen provider 未装配/未装载）");
+        return;
+    }
+    if (!vl->HasVisionConfig()) {
+        LOG_INFO("  （跳过: 当前装配为纯文本模型，菜品识别需要含 vlm_model 段的 VL 配置）");
+        return;
+    }
+
+    // 后端：图片 + 提问 -> 回复文本（装配同 [5b] 的 ChatRequest 图文请求）。
+    // 计数供节流/缓存自证：模型调用次数必须与 detect_domain 次数解耦。
+    // last_reply 供解析失败时回看模型原话 —— 检测器只交出解析结果，证据留在装配层。
+    int model_calls = 0;
+    std::string last_reply;
+    prosophor::nr::app::VisionQueryBackend backend =
+        [vl, &model_calls, &last_reply](const std::string& image_path,
+                                        const std::string& question)
+        -> std::optional<std::string> {
+        prosophor::ChatRequest req;
+        prosophor::MessageSchema user("user", question);
+        user.AddImageContent(image_path);
+        req.messages.push_back(std::move(user));
+        ++model_calls;
+        const auto resp = vl->Chat(req);
+        if (!resp.error_msg.empty()) {
+            LOG_INFO("  [后端错误] {}", resp.error_msg.c_str());
+            return std::nullopt;
+        }
+        last_reply = resp.content_text;
+        return resp.content_text;
+    };
+
+    // min_interval=0：本节要验的是"同帧缓存"，不是节流窗口（真实帧流用默认 3s）
+    prosophor::nr::app::VlFoodDetector detector(backend, /*min_interval_seconds=*/0.0);
+    prosophor::nr::app::ImageFrame frame{image};
+
+    LOG_INFO("  -- 识别（真调模型）--");
+    // 诊断：同一张图先问开放式问题 —— 模型若答得出内容，说明图进了模型，问题在提问；
+    // 若答"看不到图"，则是视觉链路没接上
+    if (const auto probe = backend(image, "请用中文一句话说明这张图片里有什么")) {
+        LOG_INFO("  [描述探针] {}", probe->c_str());
+    }
+    const auto foods = detector.detect_domain(&frame);
+    LOG_INFO("  [菜品] {}",
+             foods.empty() ? "（模型未看到菜）" : JoinFoodNames(foods).c_str());
+    if (foods.empty() && !last_reply.empty()) {
+        LOG_INFO("  [模型原话] {}", last_reply.c_str());   // 解析失败时回看原话
+    }
+
+    LOG_INFO("  -- 同帧连调 3 次（帧未变，不应再调模型）--");
+    for (int i = 0; i < 3; ++i) detector.detect_domain(&frame);
+    LOG_INFO("  模型调用累计 {} 次 / detect_domain 调用 4 次",
+             detector.query_count());
+
+    // 走完整管道：人脸由脚本注入（身份识别不是本节题目），菜品来自 VL 真实识别
+    std::vector<ScriptFrame> frames(1);
+    frames[0].faces = {"小明"};
+    SessionScript script{frames};
+    ScriptedVisionPort vision(repo, script);
+    prosophor::nr::app::MealMonitor monitor(&vision, &repo, nullptr, nullptr,
+                                            &detector);
+
+    LOG_INFO("  -- 走 MealMonitor（人脸脚本注入\"小明\"，菜品来自 VL）--");
+    const auto pkg = monitor.Tick(&frame);
+    LOG_INFO("  [场景包] 菜品: {}",
+             pkg.foods.empty() ? "（无）" : JoinFoodNames(pkg.foods).c_str());
+    if (pkg.events.empty()) {
+        LOG_INFO("  [提醒] 无（桌上菜品未命中在座成员禁忌）");
+    }
+    for (const auto& e : pkg.events) {
+        LOG_INFO("  [提醒] {}", e.message.c_str());
+    }
+    LOG_INFO("  模型调用累计 {} 次（管道内同样命中同帧缓存）", detector.query_count());
+
+    // 多菜样本：单菜只证明"能认"，多菜才证明"能认全" —— 真实餐桌必然多菜。
+    // 素材：食堂餐盘公开数据集 img_100，Pascal VOC 真值 5 类（炸鸡/空心菜/豆芽/
+    // 香肠/白菜），另有真值未收录的豆腐。真值供人工核对召回，不参与程序判定。
+    const std::string multi_image = "tests/nutribot/assets/vl_food_table.jpg";
+    if (prosophor::FileExists(multi_image)) {
+        LOG_INFO("  -- 多菜样本（真值 5 菜 + 豆腐）--");
+        const prosophor::nr::app::ImageFrame multi_frame{multi_image};
+        const auto multi_foods = detector.detect_domain(&multi_frame);
+        LOG_INFO("  [菜品] {}（共 {} 道）",
+                 multi_foods.empty() ? "（无）" : JoinFoodNames(multi_foods).c_str(),
+                 multi_foods.size());
+    }
+
+    // 逐菜基准：dish 目录是切好的单菜图 + 人工标注（labels.tsv）。
+    // 每张图独立走一次 detect_domain，答案进日志，由 scripts 侧比对标注算准确率。
+    // 换 provider 配置（换模型/换分辨率）后重跑本段即可得到新数字。
+    {
+        const std::string dir = "tests/nutribot/assets/dishes";
+        std::set<std::string> files;
+        for (const auto& f : prosophor::ListDir(dir, ".jpg")) {
+            if (f.find("copy_of") != std::string::npos) continue;   // 调试残留
+            files.insert(f);
+        }
+        if (!files.empty()) {
+            LOG_INFO("  -- 逐菜批量识别（{} 张，单菜图）--", files.size());
+            int blank = 0;
+            for (const auto& f : files) {
+                const prosophor::nr::app::ImageFrame dish_frame{
+                    prosophor::JoinPath(dir, f)};
+                const auto dish_foods = detector.detect_domain(&dish_frame);
+                if (dish_foods.empty()) ++blank;
+                LOG_INFO("  {}  {}", f.c_str(),
+                         dish_foods.empty() ? "（无）" : JoinFoodNames(dish_foods).c_str());
+            }
+            LOG_INFO("  未识别出菜品 {} / {} 张", blank, files.size());
+        }
+    }
+
+    // 负样本：非餐桌图应识别不出菜品（防模型对着什么都报菜名）。
+    // 放最后：换图会刷新帧缓存，不影响上面的缓存自证。
+    const std::string negative_image = "tests/nutribot/assets/vl_demo.jpg";
+    if (prosophor::FileExists(negative_image)) {
+        LOG_INFO("  -- 负样本 {}（非餐桌图，应输出空数组）--", negative_image.c_str());
+        const prosophor::nr::app::ImageFrame negative_frame{negative_image};
+        const auto negative_foods = detector.detect_domain(&negative_frame);
+        LOG_INFO("  [菜品] {}（模型调用累计 {} 次）",
+                 negative_foods.empty() ? "（无 —— 未误报）"
+                                        : JoinFoodNames(negative_foods).c_str(),
+                 detector.query_count());
+    }
+}
+
 }  // namespace
 
 int NutriBotApp::Run() {
@@ -568,6 +719,8 @@ int NutriBotApp::Run() {
     DemoVlImageCheck();
     LOG_INFO("[5c] 多轮随时给图自检（agent engine，图随消息走，含中途换图）:");
     DemoMultiTurnVision();
+    LOG_INFO("[6] 看菜自检（VL 看帧 -> 菜品 -> MealMonitor -> 规则引擎）:");
+    DemoFoodRecognition(members);
     return 0;
 }
 
