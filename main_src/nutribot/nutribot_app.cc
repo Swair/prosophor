@@ -677,6 +677,12 @@ void DemoFoodRecognition(prosophor::nr::infra::JsonMemberRepository& repo) {
                 if (dish_foods.empty()) ++blank;
                 LOG_INFO("  {}  {}", f.c_str(),
                          dish_foods.empty() ? "（无）" : JoinFoodNames(dish_foods).c_str());
+                // 解析为空时回看模型原话：区分"模型没输出"与"输出被解析器过滤"
+                // （回吐守卫会丢弃 prompt 里出现过的字面，若模型答"餐桌上菜品"这类改述，
+                //   结果为空但并非模型沉默 —— 少了这行会把它误记成识别失败）
+                if (dish_foods.empty()) {
+                    LOG_INFO("      raw={}", last_reply.empty() ? "(空)" : last_reply.c_str());
+                }
             }
             LOG_INFO("  未识别出菜品 {} / {} 张", blank, files.size());
         }
