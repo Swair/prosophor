@@ -204,8 +204,14 @@ struct AidGenVisionEncoder {
     size_t grid_step = 0;
 
     size_t embedding_size = 0;
+    // 目标输出张量：按名挑出后记下序号（SDK 只推荐用序号取张量，按名取已弃用）。
+    // 不能固定取 0 号：Qwen3-VL 除 image_features 外还输出 deepstack_* 辅助张量
+    std::string feature_name;
+    size_t feature_index = 0;
 
     bool available = false;
+    // Qwen2.5-VL 的输出要做均值中心化；Qwen3-VL 的视觉塔输出即最终 embedding
+    bool postprocess_enabled = true;
     std::unique_ptr<Aidlux::Aidlite::Interpreter> interpreter;
 
     // 预分配缓冲，避免每帧重新分配
@@ -221,6 +227,9 @@ struct AidGenVisionEncoder {
                     Aidlux::Aidlite::FrameworkType framework);
     bool Encode(const cv::Mat& image, std::vector<uint8_t>& out_embedding);
 
+    // 按模型家族设置归一化常数与后处理开关（两族的差异集中在这里）
+    void ConfigureForFamily(const std::string& vision_type);
+
 private:
     bool CheckModel(const Aidlux::Aidlite::TensorInfo& tensor) const;
     bool Preprocess(const cv::Mat& image);
@@ -229,10 +238,17 @@ private:
     void StackFrames();
     void SpatioTemporalPatch();
 
-    // Qwen-VL 图像归一化常数
-    static constexpr double normal_scale[3] = {255.0, 255.0, 255.0};
-    static constexpr double mean[3] = {0.48145466, 0.4578275, 0.40821073};
-    static constexpr double std_dev[3] = {0.26862954, 0.26130258, 0.27577711};
+    // 图像归一化常数（按家族设置，见 ConfigureForFamily）。
+    // 同一公式 ((x/scale) - mean)/std 覆盖两族：
+    //   Qwen2.5-VL: scale=255, CLIP 均值方差
+    //   Qwen3-VL:   scale=127.5, mean=1, std=1 → x/127.5 - 1
+    double normal_scale[3] = {255.0, 255.0, 255.0};
+    double mean[3] = {0.48145466, 0.4578275, 0.40821073};
+    double std_dev[3] = {0.26862954, 0.26130258, 0.27577711};
+
+    // 位置编码/注意力掩码等附加输入的数据。必须比 Initialize 活得久 ——
+    // aidlite 走共享缓冲，set_input_tensor 拿的是裸指针（官方例程同样持有到对象生命周期）
+    std::unordered_map<std::string, std::vector<float>> extra_input_data;
 };
 
 bool AidGenVisionEncoder::Initialize(const std::string& model_path,
@@ -292,29 +308,63 @@ bool AidGenVisionEncoder::Initialize(const std::string& model_path,
 
     std::vector<std::vector<Aidlux::Aidlite::TensorInfo>> out_tensors;
     if (interpreter->get_output_tensor_info(out_tensors) < 0 ||
-        out_tensors.empty() || out_tensors[0].empty() ||
-        out_tensors[0][0].shape.size() < 2) {
+        out_tensors.empty() || out_tensors[0].empty()) {
         LOG_ERROR("[aidgen] 视觉编码器未返回有效输出张量（aidlite 后端版本不匹配?）");
         interpreter.reset();
         return false;
     }
-    embedding_size = out_tensors[0][0].shape[1];
-
-    std::vector<float> pos_cos, pos_sin, window_mask, full_mask;
-    if (!LoadRawFloats(pos_cos_path, pos_cos) ||
-        !LoadRawFloats(pos_sin_path, pos_sin) ||
-        !LoadRawFloats(window_mask_path, window_mask) ||
-        !LoadRawFloats(full_mask_path, full_mask)) {
+    // 按名挑目标输出（跳过 Qwen3-VL 的 deepstack_* 辅助输出），只记序号 ——
+    // SDK 已弃用按名取张量，Encode 里用序号
+    size_t target_index = out_tensors[0].size();
+    for (size_t i = 0; i < out_tensors[0].size(); ++i) {
+        if (out_tensors[0][i].name.find("deepstack_") == std::string::npos) {
+            target_index = i;
+            break;
+        }
+    }
+    if (target_index >= out_tensors[0].size() ||
+        out_tensors[0][target_index].shape.size() < 2) {
+        LOG_ERROR("[aidgen] 视觉编码器输出张量形状不符");
         interpreter.reset();
         return false;
     }
-    SetAidliteInput(interpreter.get(), "position_ids_cos", pos_cos.data());
-    SetAidliteInput(interpreter.get(), "position_ids_sin", pos_sin.data());
-    SetAidliteInput(interpreter.get(), "window_attention_mask", window_mask.data());
-    SetAidliteInput(interpreter.get(), "full_attention_mask", full_mask.data());
+    feature_index = target_index;
+    feature_name = out_tensors[0][target_index].name;
+    embedding_size = out_tensors[0][target_index].shape[1];
+
+    // 附加输入按模型**实际声明**的张量加载：Qwen2.5-VL 声明 cos/sin + 两个注意力掩码，
+    // Qwen3-VL 只声明 cos/sin —— 无条件按四个路径读文件会在 Qwen3 上拿空路径去读
+    // （实测报 "LoadRawFloats: short read: <模型目录>/"）
+    const std::unordered_map<std::string, std::string> extra_input_paths = {
+        {"position_ids_cos", pos_cos_path},
+        {"position_ids_sin", pos_sin_path},
+        {"window_attention_mask", window_mask_path},
+        {"full_attention_mask", full_mask_path},
+    };
+    for (const auto& tensor : in_tensors[0]) {
+        const auto path = extra_input_paths.find(tensor.name);
+        if (path == extra_input_paths.end() || path->second.empty()) continue;
+        std::vector<float>& data = extra_input_data[tensor.name];
+        if (!LoadRawFloats(path->second, data)) {
+            LOG_ERROR("[aidgen] 附加输入加载失败: {}", tensor.name.c_str());
+            interpreter.reset();
+            return false;
+        }
+        SetAidliteInput(interpreter.get(), tensor.name.c_str(), data.data());
+    }
 
     available = true;
     return true;
+}
+
+// 两族的视觉塔差异只有两处，集中在此：归一化常数 + 是否需要输出后处理。
+// （preprocess / stack_frames / spatio_temporal_patch 三个核心函数两族逐行一致）
+void AidGenVisionEncoder::ConfigureForFamily(const std::string& vision_type) {
+    if (vision_type != "qwen3") return;   // 不设即 Qwen2.5-VL 配方
+    for (double& scale : normal_scale) scale = 127.5;
+    for (double& value : mean) value = 1.0;
+    for (double& value : std_dev) value = 1.0;
+    postprocess_enabled = false;
 }
 
 // 张量形状与配置的 patch 参数必须自洽 —— 不符说明配置取错了模型
@@ -358,13 +408,17 @@ bool AidGenVisionEncoder::Encode(const cv::Mat& image, std::vector<uint8_t>& out
 
     float* buffer = nullptr;
     uint32_t length = 0;
-    interpreter->get_output_tensor(0u, reinterpret_cast<void**>(&buffer),
+    interpreter->get_output_tensor(static_cast<uint32_t>(feature_index),
+                                   reinterpret_cast<void**>(&buffer),
                                    /*is_native=*/false, &length);
     if (buffer == nullptr || length == 0) {
         LOG_ERROR("[aidgen] 视觉编码输出为空（aidlite 后端版本不匹配?）");
         return false;
     }
-    if (!Postprocess(buffer, length, static_cast<int>(embedding_size))) return false;
+    if (postprocess_enabled &&
+        !Postprocess(buffer, length, static_cast<int>(embedding_size))) {
+        return false;
+    }
 
     out_embedding.resize(length);
     std::memcpy(out_embedding.data(), buffer, length);
@@ -640,6 +694,8 @@ bool AidGenProvider::LoadVisionEncoder(std::string& error_msg) {
         LOG_WARN("[aidgen] 配置无视觉参数子段 '{}'，按默认 {}x{} 装载 —— 与模型实际 "
                  "输入形状不符时会编码失败", vision_type, encoder->img_w, encoder->img_h);
     }
+
+    encoder->ConfigureForFamily(vision_type);
 
     if (!encoder->Initialize(resolve("vision_model_path"),
                              resolve("pos_embed_cos_path"),
