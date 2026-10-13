@@ -13,13 +13,17 @@
 namespace prosophor {
 
 /// AsrProviderRouter: singleton facade for speech-to-text
-/// Routes to HTTP ASR server backend
+/// Routes to HTTP ASR server backend（或 nutribot 形态的本地 aidvoice 后端）
 class AsrProviderRouter : public Noncopyable {
  public:
     static AsrProviderRouter& GetInstance();
 
-    /// Initialize — creates the ASR HTTP client
+    /// Initialize — 按配置预创建 provider（aidvoice 形态下即预热装载）
     void Initialize();
+
+    /// 销毁 provider（释放 SDK 实例与内部工作线程）。
+    /// main 的 std::_Exit 会跳过静态析构，退出前必须显式调用（nutribot 形态）。
+    void DestroyProvider();
 
     /// Set server URL (call before Initialize)
     void SetServerUrl(const std::string& url) { server_url_ = url; }

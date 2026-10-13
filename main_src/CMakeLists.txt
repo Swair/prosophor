@@ -85,9 +85,12 @@ endif()
 # aidgen LLM provider 源在 core GLOB 内；仅 nutribot 形态使用。
 # aidgen_provider.cc 是仓库内唯一包含 aidgen.hpp / aidlite.hpp / opencv 的文件
 # （SDK 接入点），必须过滤——否则非 nutribot 形态会在没有这些头文件的环境里编译它。
+# aidvoice（本地 ASR/TTS）同理：aidvoice_asr_provider.cc / aidvoice_tts_provider.cc
+# 是 aidvoice.hpp 的唯一接入点；两处文件命名保持 aidvoice_ 前缀以利单条正则。
 # 过滤须在 add_library(prosophor_core) 前执行（链接段见下方 nutribot 形态段）
 if(NOT PROSOPHOR_NUTRIBOT)
     list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "aidgen_provider\\.cc$")
+    list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "aidvoice_(asr|tts)_provider\\.cc$")
 endif()
 
 add_library(prosophor_core STATIC ${CORE_SOURCES_ALL})
@@ -273,6 +276,10 @@ endif()
 #   统一入口 main_src/main.cc 按宏 PROSOPHOR_NUTRIBOT 分支（已预埋）。
 # ============================================================================
 if(PROSOPHOR_NUTRIBOT)
+    # opencv 头路径（本段内多处共用；静态库 PRIVATE 的 include 不传导给 exe，
+    # 故 prosophor_core 与 prosophor 各自要写一次 —— 见下方 opencv 链接段）
+    set(NR_OPENCV_INCLUDE /usr/include/opencv4)
+
     file(GLOB_RECURSE NUTRIBOT_SOURCES
         ${CMAKE_CURRENT_LIST_DIR}/nutribot/*.cc
     )
@@ -285,6 +292,8 @@ if(PROSOPHOR_NUTRIBOT)
         ${CMAKE_CURRENT_SOURCE_DIR}/nutribot
         ${CMAKE_CURRENT_SOURCE_DIR}/prosophor_core
         ${CMAKE_CURRENT_SOURCE_DIR}/base
+        # scene_monitor.cc（帧差运动）编译期需要 opencv 头（见下方 opencv 段）
+        ${NR_OPENCV_INCLUDE}
     )
     # aidgen LLM provider：随 prosophor_core 链接（nutribot 形态硬依赖，NPU 本地推理；
     # 缺 SDK 直接配置失败；源过滤见 core 收集段）
@@ -294,18 +303,26 @@ if(PROSOPHOR_NUTRIBOT)
     target_link_options(prosophor_core PRIVATE "-Wl,-rpath,/usr/local/lib")
     message(STATUS "aidgen-sdk：已并入 prosophor_core（nutribot 硬依赖，NPU 本地推理）")
 
+    # aidvoice 语音（本地 ASR/TTS）：SenseVoiceSmall + MeloTTS，NPU 离线推理；
+    # 头/库路径与 rpath 同上（/usr/local/include + /usr/local/lib 已就位）
+    find_library(NR_AIDVOICE_LIB NAMES aidvoice PATHS /usr/local/lib REQUIRED)
+    target_link_libraries(prosophor_core PRIVATE ${NR_AIDVOICE_LIB})
+    message(STATUS "aidvoice-sdk：已并入 prosophor_core（ASR/TTS 本地 NPU）")
+
     # aidgen-vl 多模态：aidlite(视觉编码器) + opencv(图像解码/缩放) ——
     # 官方 aidmlm 例程同配方；视觉链路内联在 aidgen_provider.cc
+    # （open include 变量 NR_OPENCV_INCLUDE 在本段开头定义）
     find_library(NR_AIDLITE_LIB NAMES aidlite PATHS /usr/local/lib REQUIRED)
     find_library(NR_OPENCV_CORE NAMES opencv_core REQUIRED)
     find_library(NR_OPENCV_IMGPROC NAMES opencv_imgproc REQUIRED)
     find_library(NR_OPENCV_IMGCODECS NAMES opencv_imgcodecs REQUIRED)
-    target_include_directories(prosophor_core PRIVATE /usr/include/opencv4)
+    target_include_directories(prosophor_core PRIVATE ${NR_OPENCV_INCLUDE})
     target_link_libraries(prosophor_core PRIVATE
         ${NR_AIDLITE_LIB} ${NR_OPENCV_CORE} ${NR_OPENCV_IMGPROC} ${NR_OPENCV_IMGCODECS})
     message(STATUS "aidlite + opencv：已并入 prosophor_core（aidgen-vl 视觉链路）")
 
-    target_link_libraries(prosophor PRIVATE prosophor_core)
+    # 音频 I/O：ALSA 直连（nutribot/audio_io.cc；/usr/include 默认即系统包含路径）
+    target_link_libraries(prosophor PRIVATE prosophor_core asound)
 endif()
 
 # ---- 主形态 prosophor 安装（置于文件尾：nutribot 形态的 prosophor 在此才定义；

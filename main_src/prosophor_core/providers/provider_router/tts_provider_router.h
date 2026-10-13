@@ -36,6 +36,10 @@ public:
     /// Get the active backend name.
     std::string GetBackendName() const;
 
+    /// 释放全部已创建的 provider（含 SDK 实例的内部线程）。
+    /// main 的 std::_Exit 会跳过静态析构，退出前必须显式调用（nutribot 形态）。
+    void ReleaseProviders();
+
 private:
     TtsProviderRouter() = default;
 

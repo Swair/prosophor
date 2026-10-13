@@ -471,6 +471,9 @@ TtsConfig TtsConfig::FromJson(const nlohmann::json& json) {
     config.sherpa_model_dir  = json.value("sherpa_model_dir",  "");
     config.sherpa_speaker_id = json.value("sherpa_speaker_id", 0);
     config.sherpa_speed      = json.value("sherpa_speed",       1.0f);
+    // aidvoice (MeloTTS) 本地 NPU 后端
+    config.aidvoice_model_dir = json.value("aidvoice_model_dir", std::string(""));
+    config.aidvoice_speed     = json.value("aidvoice_speed", 1.0);
     return config;
 }
 
@@ -478,7 +481,66 @@ AsrConfig AsrConfig::FromJson(const nlohmann::json& json) {
     AsrConfig config;
     config.enabled        = json.value("enabled",        false);
     config.push_to_talk   = json.value("push_to_talk",   true);
+    config.backend        = json.value("backend",        std::string("http"));
     config.server_url     = json.value("server_url",     std::string("http://127.0.0.1:9100"));
+    // aidvoice 本地后端（settings.json 的历史键名 model_path 一并兼容）
+    config.model_dir      = json.value("model_dir", json.value("model_path", std::string("")));
+    config.echo_ms        = json.value("echo_ms", 15000);
+    config.timeout_ms     = json.value("timeout_ms", 20000);
+    config.reuse_instance = json.value("reuse_instance", true);
+    return config;
+}
+
+VoiceConfig VoiceConfig::FromJson(const nlohmann::json& json) {
+    VoiceConfig config;
+    config.capture_device  = json.value("capture_device", config.capture_device);
+    config.playback_device = json.value("playback_device", config.playback_device);
+    config.vad_rms_dbfs    = json.value("vad_rms_dbfs", config.vad_rms_dbfs);
+    config.start_confirm_frames = json.value("start_confirm_frames", config.start_confirm_frames);
+    config.end_silence_ms  = json.value("end_silence_ms", config.end_silence_ms);
+    config.max_utterance_ms = json.value("max_utterance_ms", config.max_utterance_ms);
+    config.pre_roll_frames = json.value("pre_roll_frames", config.pre_roll_frames);
+    config.warmup_discard_frames = json.value("warmup_discard_frames", config.warmup_discard_frames);
+    config.speak_max_chars = json.value("speak_max_chars", config.speak_max_chars);
+    config.speak_min_gap_ms = json.value("speak_min_gap_ms", config.speak_min_gap_ms);
+    return config;
+}
+
+CameraConfig CameraConfig::FromJson(const nlohmann::json& json) {
+    CameraConfig config;
+    config.device      = json.value("device", config.device);
+    config.output_dir  = json.value("output_dir", config.output_dir);
+    config.interval_ms = json.value("interval_ms", config.interval_ms);
+    config.idle_interval_ms = json.value("idle_interval_ms", config.idle_interval_ms);
+    config.timeout_ms  = json.value("timeout_ms", config.timeout_ms);
+    config.keep_frames = json.value("keep_frames", config.keep_frames);
+    config.motion_pixel_threshold =
+        json.value("motion_pixel_threshold", config.motion_pixel_threshold);
+    return config;
+}
+
+MealConfig MealConfig::FromJson(const nlohmann::json& json) {
+    MealConfig config;
+    config.announce = json.value("announce", config.announce);
+    if (json.contains("windows") && json["windows"].is_array()) {
+        config.windows.clear();   // 配置给出的窗口整体替换默认三餐
+        for (const auto& w : json["windows"]) {
+            if (!w.is_object()) continue;
+            MealWindowConfig window;
+            window.name  = w.value("name", std::string(""));
+            window.start = w.value("start", std::string(""));
+            window.end   = w.value("end", std::string(""));
+            config.windows.push_back(std::move(window));
+        }
+    }
+    return config;
+}
+
+NutribotConfig NutribotConfig::FromJson(const nlohmann::json& json) {
+    NutribotConfig config;
+    config.member_store_dir = json.value("member_store_dir", config.member_store_dir);
+    config.stub_member_name = json.value("stub_member_name", config.stub_member_name);
+    config.nutrition_file   = json.value("nutrition_file", config.nutrition_file);
     return config;
 }
 
@@ -624,6 +686,18 @@ ProsophorConfig ProsophorConfig::FromJson(const nlohmann::json& json) {
     }
     if (expanded.contains("asr") && expanded["asr"].is_object()) {
         config.asr = AsrConfig::FromJson(expanded["asr"]);
+    }
+    if (expanded.contains("voice") && expanded["voice"].is_object()) {
+        config.voice = VoiceConfig::FromJson(expanded["voice"]);
+    }
+    if (expanded.contains("camera") && expanded["camera"].is_object()) {
+        config.camera = CameraConfig::FromJson(expanded["camera"]);
+    }
+    if (expanded.contains("meal") && expanded["meal"].is_object()) {
+        config.meal = MealConfig::FromJson(expanded["meal"]);
+    }
+    if (expanded.contains("nutribot") && expanded["nutribot"].is_object()) {
+        config.nutribot = NutribotConfig::FromJson(expanded["nutribot"]);
     }
     if (expanded.contains("web") && expanded["web"].is_object()) {
         config.web = WebConfig::FromJson(expanded["web"]);

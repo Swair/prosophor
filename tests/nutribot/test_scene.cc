@@ -196,3 +196,148 @@ TEST(voter, window_requires_at_least_two) {
     }
     EXPECT_TRUE(threw);
 }
+
+// ---- has_foods 附加式扩展（默认 true = 旧语义；新增止餐信号）----
+
+TEST(fsm_foods, default_has_foods_is_true) {
+    const SceneObservation two_field = {0.1, true};   // 旧式两字段聚合
+    EXPECT_TRUE(two_field.has_foods);
+}
+
+TEST(fsm_foods, idle_ignores_foods) {
+    // 桌上摆着剩菜但无人动：不构成起餐（起餐只认动静）
+    SceneStateMachine sm;
+    const SceneObservation obs{0.10, false, /*has_foods=*/true};
+    EXPECT_EQ(drive(sm, obs, SceneStateMachine::HOLD_MOTION - 1), SceneState::IDLE);
+}
+
+TEST(fsm_foods, preparing_needs_food_to_enter_dining) {
+    SceneHoldThresholds small;
+    small.hold_motion = 2;
+    small.hold_faces = 5;
+    SceneStateMachine fast(small);
+    drive(fast, {0.10, false, false}, 2);            // 动静 -> PREPARING
+    EXPECT_EQ(fast.state(), SceneState::PREPARING);
+    // 有人脸但空桌且安静：虚惊一场回落 IDLE（空桌开不了饭）
+    EXPECT_EQ(drive(fast, {0.0, true, /*has_foods=*/false}, 2),
+              SceneState::IDLE);
+
+    // 重新起备餐；菜在桌上且有人脸：静止也照常累积进 DINING
+    drive(fast, {0.10, false, true}, 2);             // -> PREPARING
+    EXPECT_EQ(fast.state(), SceneState::PREPARING);
+    EXPECT_EQ(drive(fast, {0.0, true, /*has_foods=*/true}, 4),
+              SceneState::PREPARING);                // 还差 1 帧
+    EXPECT_EQ(drive(fast, {0.0, true, /*has_foods=*/true}, 1),
+              SceneState::DINING);
+}
+
+TEST(fsm_foods, preparing_holds_when_food_on_table_nobody_moving) {
+    // 有人有菜但静止：累积满 hold_faces 直接开饭（不被虚惊分支打断）
+    SceneHoldThresholds small;
+    small.hold_motion = 2;
+    small.hold_faces = 3;
+    SceneStateMachine sm(small);
+    drive(sm, {0.10, true, true}, 2);                // 动静 -> PREPARING
+    EXPECT_EQ(drive(sm, {0.0, true, true}, 3), SceneState::DINING);
+}
+
+TEST(fsm_foods, dining_ends_when_table_cleared_without_faces_signal) {
+    // 桩人脸场景（has_faces 恒真）：撤桌 + 静止 = 止餐（旧条件在此死锁）
+    SceneHoldThresholds small;
+    small.hold_motion = 2;
+    small.hold_faces = 2;
+    small.hold_quiet = 4;
+    small.hold_empty = 4;
+    SceneStateMachine sm(small);
+    drive(sm, {0.10, false, false}, 2);              // PREPARING
+    drive(sm, {0.0, true, true}, 2);                 // DINING
+    EXPECT_EQ(sm.state(), SceneState::DINING);
+
+    // 有菜 + 静止 + 有人：保持用餐（防空桌误判反向）
+    EXPECT_EQ(drive(sm, {0.0, true, true}, 50), SceneState::DINING);
+    // 撤桌：安静且无菜 -> 餐后
+    EXPECT_EQ(drive(sm, {0.0, true, false}, 4), SceneState::AFTER_MEAL);
+    // 继续空桌 -> 空桌待机（桩下全周期可达，旧条件在此卡死）
+    EXPECT_EQ(drive(sm, {0.0, true, false}, 4), SceneState::IDLE);
+}
+
+TEST(fsm_foods, old_semantics_unchanged_when_foods_unknown) {
+    // has_foods 默认 true 时四条转移 == 旧式：用旧式两字段驱动全周期
+    SceneStateMachine sm;
+    drive(sm, moving(), SceneStateMachine::HOLD_MOTION);      // PREPARING
+    drive(sm, face_only(), SceneStateMachine::HOLD_FACES);    // DINING
+    drive(sm, still_no_face(), SceneStateMachine::HOLD_QUIET);// AFTER_MEAL
+    EXPECT_EQ(drive(sm, still_no_face(), SceneStateMachine::HOLD_EMPTY),
+              SceneState::IDLE);
+}
+
+// ---- 阈值折算（秒 -> 帧）----
+
+TEST(fsm_thresholds, default_timing_at_three_seconds) {
+    const SceneHoldThresholds t = MakeHoldThresholds(3000);
+    EXPECT_EQ(t.hold_motion, 5);    // 15s
+    EXPECT_EQ(t.hold_faces, 10);    // 30s
+    EXPECT_EQ(t.hold_quiet, 30);    // 90s
+    EXPECT_EQ(t.hold_empty, 60);    // 180s
+}
+
+TEST(fsm_thresholds, custom_timing_and_rounding) {
+    const SceneHoldThresholds t = MakeHoldThresholds(1000, {15, 30, 90, 180});
+    EXPECT_EQ(t.hold_motion, 15);
+    EXPECT_EQ(t.hold_faces, 30);
+    // 向上取整：10.5s/3s = 3.5 -> 4
+    const SceneHoldThresholds r = MakeHoldThresholds(3000, {10.5, 1, 1, 1});
+    EXPECT_EQ(r.hold_motion, 4);
+    EXPECT_EQ(r.hold_faces, 1);     // 下限 1（0.x 秒 -> 1 帧）
+}
+
+TEST(fsm_thresholds, non_positive_interval_falls_back_to_three_seconds) {
+    EXPECT_EQ(MakeHoldThresholds(0).hold_motion, 5);
+    EXPECT_EQ(MakeHoldThresholds(-100).hold_faces, 10);
+}
+
+TEST(fsm_thresholds, injected_holds_scale) {
+    SceneStateMachine fast(MakeHoldThresholds(3000));   // hold_motion=5
+    EXPECT_EQ(drive(fast, moving(), 4), SceneState::IDLE);
+    EXPECT_EQ(drive(fast, moving(), 1), SceneState::PREPARING);
+}
+
+// ---- SceneTicker：同帧键幂等（App 场景节拍 + MealMonitor 双驱动共存）----
+
+TEST(scene_ticker, same_frame_key_advances_once) {
+    SceneHoldThresholds small;
+    small.hold_motion = 3;
+    SceneTicker ticker(small);
+    const SceneObservation moving_obs{0.10, true, true};
+
+    for (int i = 0; i < 10; ++i) {
+        ticker.observe("frame_000001", moving_obs);   // 同帧重复驱动
+    }
+    EXPECT_EQ(ticker.state(), SceneState::IDLE);      // 只算 1 帧，未到 3
+    EXPECT_EQ(ticker.transitions(), 0);
+
+    ticker.observe("frame_000002", moving_obs);
+    ticker.observe("frame_000003", moving_obs);
+    EXPECT_EQ(ticker.state(), SceneState::PREPARING); // 3 帧达标
+}
+
+TEST(scene_ticker, empty_key_always_advances) {
+    SceneHoldThresholds small;
+    small.hold_motion = 2;
+    SceneTicker ticker(small);
+    ticker.observe("", {0.10, true, true});
+    ticker.observe("", {0.10, true, true});
+    EXPECT_EQ(ticker.state(), SceneState::PREPARING);
+}
+
+TEST(scene_ticker, reset_clears_state_and_key) {
+    SceneHoldThresholds small;
+    small.hold_motion = 1;
+    SceneTicker ticker(small);
+    ticker.observe("f1", {0.10, true, true});
+    EXPECT_EQ(ticker.state(), SceneState::PREPARING);
+    ticker.reset();
+    EXPECT_EQ(ticker.state(), SceneState::IDLE);
+    ticker.observe("f1", {0.10, true, true});         // 同键但已 reset：应推进
+    EXPECT_EQ(ticker.state(), SceneState::PREPARING);
+}

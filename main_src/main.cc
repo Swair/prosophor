@@ -41,7 +41,8 @@ int main(int argc, char* argv[]) {
     int exit_code = 0;
     try {
 #ifdef PROSOPHOR_NUTRIBOT
-        exit_code = prosophor::nr::nutribot::NutriBotApp::GetInstance().Run();
+        // nutribot 形态透传 argv：--selftest 跑确定性自检，默认进常驻语音回路
+        exit_code = prosophor::nr::nutribot::NutriBotApp::GetInstance().Run(argc, argv);
 #elif defined(PROSOPHOR_SDL_UI)
         exit_code = prosophor::VirtualSprite::GetInstance().Run();
 #elif defined(PROSOPHOR_AICODING)

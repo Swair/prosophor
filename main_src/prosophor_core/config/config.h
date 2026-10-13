@@ -252,6 +252,11 @@ struct TtsConfig {
     int   sherpa_speaker_id = 0;
     float sherpa_speed      = 1.0f;
 
+    // aidvoice (MeloTTS) 本地 NPU 后端：backend == "aidvoice" 时生效。
+    // SDK 1.5.0 无发音人参数，只有语速可调
+    std::string aidvoice_model_dir;   // 模型目录（config.json 的 type 决定中/英）
+    double aidvoice_speed = 1.0;      // 语速倍率（1.0 = 模型原生）
+
     // edge-tts voice list
     std::vector<std::string> voice_list;
 
@@ -262,9 +267,75 @@ struct TtsConfig {
 struct AsrConfig {
     bool enabled = false;
     bool push_to_talk = true;         // true: hold M to talk; false: VAD full-duplex always-on
+    std::string backend = "http";     // "http"（whisper server）| "aidvoice"（本地 NPU，nutribot 形态）
     std::string server_url = "http://127.0.0.1:9100";  // whisper server endpoint
 
+    // aidvoice 本地后端：backend == "aidvoice" 时生效
+    std::string model_dir;            // 模型目录（含 config.json 与 *.aidem）
+    int echo_ms = 15000;              // 单轮推理窗口；SenseVoice 上限 15000
+    int timeout_ms = 20000;           // 单句等待 FINAL 上限（超时回空串）
+    bool reuse_instance = true;       // false = 每句重建实例（1.6s/句 退路开关）
+
     static AsrConfig FromJson(const nlohmann::json& json);
+};
+
+/// Configuration for the resident voice loop（nutribot 常驻语音回路）
+struct VoiceConfig {
+    std::string capture_device = "plughw:CARD=PowerConf,DEV=0";
+    std::string playback_device = "plughw:0,0";
+    double vad_rms_dbfs = -38.0;      // 能量 VAD 门限（dBFS）
+    int start_confirm_frames = 3;     // 起判确认帧数（90ms）
+    int end_silence_ms = 700;         // 句尾静音判定
+    int max_utterance_ms = 12000;     // 单句上限（须 < asr.echo_ms）
+    int pre_roll_frames = 5;          // 起始回捞帧数（150ms）
+    int warmup_discard_frames = 8;    // 开流后丢弃帧数（设备唤醒期可能是数字静音）
+    int speak_max_chars = 120;        // 单次播报截断（按字符）
+    int speak_min_gap_ms = 10000;     // 主动播报最小间隔
+
+    static VoiceConfig FromJson(const nlohmann::json& json);
+};
+
+/// 摄像头抓帧配置（nutribot 常驻形态：ffmpeg 定期单帧抓拍落盘，供 VL 看菜）
+struct CameraConfig {
+    std::string device = "/dev/video2";                          // v4l2 节点（Astra Pro 板上为 video2）
+    std::string output_dir = "/tmp/prosophor/nutribot_camera";   // 帧落盘目录
+    int interval_ms = 3000;                                      // 抓帧节拍（≈ 用餐态感知节拍）
+    int idle_interval_ms = 15000;                                // 空闲/餐后态的感知（VL）节拍
+    int timeout_ms = 8000;                                       // 单次抓拍超时（含设备唤醒）
+    int keep_frames = 3;                                         // 落盘保留帧数（防 VL 读时被删）
+    // 场景帧差的像素差二值化阈值（0-255）：静态画面噪声高（过曝/自动曝光泵动）
+    // 时会误判"运动"，板上标定优先调它（见 scene_monitor.h）
+    int motion_pixel_threshold = 12;
+
+    static CameraConfig FromJson(const nlohmann::json& json);
+};
+
+/// 饭点窗口配置（"HH:MM" 原文；解析与判定在 main_src/nutribot/meal_schedule）
+struct MealWindowConfig {
+    std::string name;
+    std::string start;
+    std::string end;
+};
+
+/// 饭点日程配置（进入窗口时主动播报问候）
+struct MealConfig {
+    bool announce = true;
+    std::vector<MealWindowConfig> windows = {
+        {"早餐", "07:00", "09:00"},
+        {"午餐", "11:30", "13:30"},
+        {"晚餐", "17:30", "19:30"},
+    };
+
+    static MealConfig FromJson(const nlohmann::json& json);
+};
+
+/// nutribot 特有装配：成员档案目录与"常在场"桩成员（人脸识别接入前的演示链路）
+struct NutribotConfig {
+    std::string member_store_dir;            // 空 = <BaseDir>/nutribot_members
+    std::string stub_member_name = "小明";    // 桩人脸常驻成员名（须在档案库中）
+    std::string nutrition_file;              // 菜品营养库；空 = <BaseDir>/nutribot_dishes.json
+
+    static NutribotConfig FromJson(const nlohmann::json& json);
 };
 
 /// Configuration for the Web server (multi-user browser frontend)
@@ -302,6 +373,10 @@ struct ProsophorConfig {
     SkillsConfig skills;
     TtsConfig tts;
     AsrConfig asr;
+    VoiceConfig voice;
+    CameraConfig camera;
+    MealConfig meal;
+    NutribotConfig nutribot;
     WebConfig web;
     std::vector<LlamacppModelConfig> llamacpp_models;
 

@@ -1,0 +1,870 @@
+{
+  "version": 1,
+  "disclaimer": "演示用营养数据：按《中国食物成分表》标准版第6版常用食材值 + 家常做法折算，非精确值，请勿用于医疗或营养决策。",
+  "source": "《中国食物成分表》标准版第6版（家常做法折算）+ 公开菜谱营养标注，2026-10 整理",
+  "per_serving_note": "每份 = 常见单人份（一碟/一碗/一杯）",
+  "dishes": [
+    {
+      "name": "冰糖炖雪梨",
+      "per_serving": {
+        "energy_kcal": 120.0,
+        "protein_g": 0.4,
+        "fat_g": 0.2,
+        "carb_g": 30.0,
+        "sodium_mg": 5.0,
+        "sugar_g": 26.0
+      },
+      "tags": [
+        "高糖"
+      ]
+    },
+    {
+      "name": "凉拌木耳",
+      "per_serving": {
+        "energy_kcal": 80.0,
+        "protein_g": 2.5,
+        "fat_g": 5.0,
+        "carb_g": 6.0,
+        "sodium_mg": 480.0,
+        "sugar_g": 2.0
+      }
+    },
+    {
+      "name": "剁椒鱼头",
+      "per_serving": {
+        "energy_kcal": 320.0,
+        "protein_g": 30.0,
+        "fat_g": 20.0,
+        "carb_g": 6.0,
+        "sodium_mg": 1500.0,
+        "sugar_g": 3.0
+      },
+      "tags": [
+        "高钠"
+      ],
+      "source": "腌椒+蒸鱼豉油，钠偏高"
+    },
+    {
+      "name": "卤凤爪",
+      "aliases": [
+        "卤鸡爪"
+      ],
+      "per_serving": {
+        "energy_kcal": 230.0,
+        "protein_g": 20.0,
+        "fat_g": 15.0,
+        "carb_g": 3.0,
+        "sodium_mg": 700.0,
+        "sugar_g": 1.0
+      }
+    },
+    {
+      "name": "卤牛肉",
+      "per_serving": {
+        "energy_kcal": 220.0,
+        "protein_g": 28.0,
+        "fat_g": 10.0,
+        "carb_g": 4.0,
+        "sodium_mg": 900.0,
+        "sugar_g": 2.0
+      },
+      "tags": [
+        "高钠"
+      ]
+    },
+    {
+      "name": "卤素鸡",
+      "per_serving": {
+        "energy_kcal": 180.0,
+        "protein_g": 12.0,
+        "fat_g": 12.0,
+        "carb_g": 8.0,
+        "sodium_mg": 800.0,
+        "sugar_g": 2.0
+      },
+      "tags": [
+        "高钠"
+      ]
+    },
+    {
+      "name": "卤肉",
+      "per_serving": {
+        "energy_kcal": 380.0,
+        "protein_g": 15.0,
+        "fat_g": 33.0,
+        "carb_g": 5.0,
+        "sodium_mg": 950.0,
+        "sugar_g": 5.0
+      },
+      "tags": [
+        "高钠",
+        "高脂"
+      ]
+    },
+    {
+      "name": "土豆炖牛肉",
+      "aliases": [
+        "土豆牛肉"
+      ],
+      "per_serving": {
+        "energy_kcal": 320.0,
+        "protein_g": 22.0,
+        "fat_g": 18.0,
+        "carb_g": 18.0,
+        "sodium_mg": 700.0,
+        "sugar_g": 3.0
+      }
+    },
+    {
+      "name": "土豆烧鸡块",
+      "aliases": [
+        "土豆鸡块"
+      ],
+      "per_serving": {
+        "energy_kcal": 300.0,
+        "protein_g": 24.0,
+        "fat_g": 16.0,
+        "carb_g": 16.0,
+        "sodium_mg": 650.0,
+        "sugar_g": 4.0
+      }
+    },
+    {
+      "name": "家常豆腐",
+      "per_serving": {
+        "energy_kcal": 210.0,
+        "protein_g": 12.0,
+        "fat_g": 13.0,
+        "carb_g": 10.0,
+        "sodium_mg": 600.0,
+        "sugar_g": 3.0
+      }
+    },
+    {
+      "name": "巧克力慕斯",
+      "per_serving": {
+        "energy_kcal": 340.0,
+        "protein_g": 4.0,
+        "fat_g": 22.0,
+        "carb_g": 30.0,
+        "sodium_mg": 90.0,
+        "sugar_g": 26.0
+      },
+      "tags": [
+        "高糖"
+      ],
+      "source": "高糖甜点"
+    },
+    {
+      "name": "干煎带鱼",
+      "per_serving": {
+        "energy_kcal": 280.0,
+        "protein_g": 26.0,
+        "fat_g": 17.0,
+        "carb_g": 4.0,
+        "sodium_mg": 550.0,
+        "sugar_g": 1.0
+      }
+    },
+    {
+      "name": "干煸四季豆",
+      "per_serving": {
+        "energy_kcal": 160.0,
+        "protein_g": 5.0,
+        "fat_g": 10.0,
+        "carb_g": 12.0,
+        "sodium_mg": 620.0,
+        "sugar_g": 3.0
+      }
+    },
+    {
+      "name": "手撕包菜",
+      "per_serving": {
+        "energy_kcal": 90.0,
+        "protein_g": 2.0,
+        "fat_g": 6.0,
+        "carb_g": 8.0,
+        "sodium_mg": 450.0,
+        "sugar_g": 3.0
+      }
+    },
+    {
+      "name": "拔丝红薯",
+      "per_serving": {
+        "energy_kcal": 320.0,
+        "protein_g": 2.0,
+        "fat_g": 12.0,
+        "carb_g": 52.0,
+        "sodium_mg": 60.0,
+        "sugar_g": 38.0
+      },
+      "tags": [
+        "高糖"
+      ],
+      "source": "熬糖挂浆，高糖"
+    },
+    {
+      "name": "梅菜扣肉",
+      "per_serving": {
+        "energy_kcal": 520.0,
+        "protein_g": 14.0,
+        "fat_g": 48.0,
+        "carb_g": 8.0,
+        "sodium_mg": 1100.0,
+        "sugar_g": 8.0
+      },
+      "tags": [
+        "高钠",
+        "高脂"
+      ],
+      "source": "梅干菜+五花肉，高脂高钠"
+    },
+    {
+      "name": "清炒生菜",
+      "per_serving": {
+        "energy_kcal": 60.0,
+        "protein_g": 1.5,
+        "fat_g": 4.0,
+        "carb_g": 5.0,
+        "sodium_mg": 320.0,
+        "sugar_g": 2.0
+      }
+    },
+    {
+      "name": "炒胡萝卜丝",
+      "per_serving": {
+        "energy_kcal": 80.0,
+        "protein_g": 1.2,
+        "fat_g": 5.0,
+        "carb_g": 8.0,
+        "sodium_mg": 350.0,
+        "sugar_g": 4.0
+      }
+    },
+    {
+      "name": "炒蛋",
+      "aliases": [
+        "炒鸡蛋"
+      ],
+      "per_serving": {
+        "energy_kcal": 150.0,
+        "protein_g": 10.0,
+        "fat_g": 11.0,
+        "carb_g": 2.0,
+        "sodium_mg": 400.0,
+        "sugar_g": 1.0
+      }
+    },
+    {
+      "name": "炒面",
+      "per_serving": {
+        "energy_kcal": 480.0,
+        "protein_g": 14.0,
+        "fat_g": 16.0,
+        "carb_g": 68.0,
+        "sodium_mg": 900.0,
+        "sugar_g": 6.0
+      },
+      "tags": [
+        "高钠"
+      ],
+      "source": "酱油用量大，钠偏高"
+    },
+    {
+      "name": "炸红薯块",
+      "per_serving": {
+        "energy_kcal": 260.0,
+        "protein_g": 2.0,
+        "fat_g": 12.0,
+        "carb_g": 36.0,
+        "sodium_mg": 80.0,
+        "sugar_g": 12.0
+      }
+    },
+    {
+      "name": "炸酱面",
+      "per_serving": {
+        "energy_kcal": 520.0,
+        "protein_g": 18.0,
+        "fat_g": 18.0,
+        "carb_g": 72.0,
+        "sodium_mg": 1100.0,
+        "sugar_g": 8.0
+      },
+      "tags": [
+        "高钠"
+      ],
+      "source": "黄酱咸，钠偏高"
+    },
+    {
+      "name": "炸鸡翅",
+      "per_serving": {
+        "energy_kcal": 320.0,
+        "protein_g": 20.0,
+        "fat_g": 22.0,
+        "carb_g": 10.0,
+        "sodium_mg": 650.0,
+        "sugar_g": 2.0
+      }
+    },
+    {
+      "name": "焦糖布丁",
+      "per_serving": {
+        "energy_kcal": 240.0,
+        "protein_g": 5.0,
+        "fat_g": 10.0,
+        "carb_g": 33.0,
+        "sodium_mg": 80.0,
+        "sugar_g": 28.0
+      },
+      "tags": [
+        "高糖"
+      ],
+      "source": "高糖甜点"
+    },
+    {
+      "name": "牛肉面",
+      "per_serving": {
+        "energy_kcal": 460.0,
+        "protein_g": 22.0,
+        "fat_g": 12.0,
+        "carb_g": 66.0,
+        "sodium_mg": 1200.0,
+        "sugar_g": 5.0
+      },
+      "tags": [
+        "高钠"
+      ],
+      "source": "汤底盐重，钠偏高"
+    },
+    {
+      "name": "玉米排骨汤",
+      "aliases": [
+        "排骨玉米汤"
+      ],
+      "per_serving": {
+        "energy_kcal": 220.0,
+        "protein_g": 12.0,
+        "fat_g": 14.0,
+        "carb_g": 14.0,
+        "sodium_mg": 700.0,
+        "sugar_g": 3.0
+      }
+    },
+    {
+      "name": "玉米粥",
+      "per_serving": {
+        "energy_kcal": 150.0,
+        "protein_g": 3.0,
+        "fat_g": 1.0,
+        "carb_g": 32.0,
+        "sodium_mg": 120.0,
+        "sugar_g": 3.0
+      }
+    },
+    {
+      "name": "番茄蛋花汤",
+      "aliases": [
+        "西红柿蛋花汤"
+      ],
+      "per_serving": {
+        "energy_kcal": 90.0,
+        "protein_g": 5.0,
+        "fat_g": 4.0,
+        "carb_g": 8.0,
+        "sodium_mg": 600.0,
+        "sugar_g": 4.0
+      }
+    },
+    {
+      "name": "番茄西兰花",
+      "aliases": [
+        "西红柿炒西兰花"
+      ],
+      "per_serving": {
+        "energy_kcal": 90.0,
+        "protein_g": 3.0,
+        "fat_g": 5.0,
+        "carb_g": 9.0,
+        "sodium_mg": 400.0,
+        "sugar_g": 4.0
+      }
+    },
+    {
+      "name": "皮蛋瘦肉粥",
+      "per_serving": {
+        "energy_kcal": 220.0,
+        "protein_g": 9.0,
+        "fat_g": 5.0,
+        "carb_g": 34.0,
+        "sodium_mg": 750.0,
+        "sugar_g": 1.0
+      }
+    },
+    {
+      "name": "糖醋里脊",
+      "per_serving": {
+        "energy_kcal": 380.0,
+        "protein_g": 16.0,
+        "fat_g": 20.0,
+        "carb_g": 34.0,
+        "sodium_mg": 700.0,
+        "sugar_g": 18.0
+      }
+    },
+    {
+      "name": "紫菜蛋花汤",
+      "per_serving": {
+        "energy_kcal": 70.0,
+        "protein_g": 5.0,
+        "fat_g": 3.0,
+        "carb_g": 5.0,
+        "sodium_mg": 650.0,
+        "sugar_g": 1.0
+      }
+    },
+    {
+      "name": "红油肉丝",
+      "per_serving": {
+        "energy_kcal": 320.0,
+        "protein_g": 15.0,
+        "fat_g": 26.0,
+        "carb_g": 6.0,
+        "sodium_mg": 850.0,
+        "sugar_g": 2.0
+      },
+      "tags": [
+        "高钠"
+      ]
+    },
+    {
+      "name": "红烧狮子头",
+      "per_serving": {
+        "energy_kcal": 420.0,
+        "protein_g": 18.0,
+        "fat_g": 34.0,
+        "carb_g": 10.0,
+        "sodium_mg": 900.0,
+        "sugar_g": 6.0
+      },
+      "tags": [
+        "高钠",
+        "高脂"
+      ]
+    },
+    {
+      "name": "红烧猪蹄",
+      "per_serving": {
+        "energy_kcal": 460.0,
+        "protein_g": 22.0,
+        "fat_g": 40.0,
+        "carb_g": 6.0,
+        "sodium_mg": 950.0,
+        "sugar_g": 7.0
+      },
+      "tags": [
+        "高钠",
+        "高脂"
+      ]
+    },
+    {
+      "name": "红烧羊肉",
+      "per_serving": {
+        "energy_kcal": 380.0,
+        "protein_g": 26.0,
+        "fat_g": 28.0,
+        "carb_g": 6.0,
+        "sodium_mg": 850.0,
+        "sugar_g": 3.0
+      },
+      "tags": [
+        "高钠"
+      ]
+    },
+    {
+      "name": "红烧肉",
+      "aliases": [
+        "红烧五花肉"
+      ],
+      "per_serving": {
+        "energy_kcal": 470.0,
+        "protein_g": 13.0,
+        "fat_g": 42.0,
+        "carb_g": 8.0,
+        "sodium_mg": 900.0,
+        "sugar_g": 12.0
+      },
+      "tags": [
+        "高钠",
+        "高脂"
+      ],
+      "source": "五花肉+糖色，高脂"
+    },
+    {
+      "name": "草莓挞",
+      "per_serving": {
+        "energy_kcal": 280.0,
+        "protein_g": 3.0,
+        "fat_g": 15.0,
+        "carb_g": 34.0,
+        "sodium_mg": 90.0,
+        "sugar_g": 20.0
+      },
+      "tags": [
+        "高糖"
+      ],
+      "source": "高糖甜点"
+    },
+    {
+      "name": "荷叶蒸饭",
+      "per_serving": {
+        "energy_kcal": 420.0,
+        "protein_g": 12.0,
+        "fat_g": 10.0,
+        "carb_g": 70.0,
+        "sodium_mg": 600.0,
+        "sugar_g": 3.0
+      }
+    },
+    {
+      "name": "葱油饼",
+      "per_serving": {
+        "energy_kcal": 320.0,
+        "protein_g": 6.0,
+        "fat_g": 16.0,
+        "carb_g": 38.0,
+        "sodium_mg": 550.0,
+        "sugar_g": 2.0
+      }
+    },
+    {
+      "name": "蒜蓉芦笋",
+      "per_serving": {
+        "energy_kcal": 80.0,
+        "protein_g": 3.0,
+        "fat_g": 5.0,
+        "carb_g": 7.0,
+        "sodium_mg": 350.0,
+        "sugar_g": 2.0
+      }
+    },
+    {
+      "name": "蛋卷",
+      "per_serving": {
+        "energy_kcal": 180.0,
+        "protein_g": 7.0,
+        "fat_g": 11.0,
+        "carb_g": 13.0,
+        "sodium_mg": 300.0,
+        "sugar_g": 2.0
+      }
+    },
+    {
+      "name": "蛋皮卷",
+      "per_serving": {
+        "energy_kcal": 200.0,
+        "protein_g": 9.0,
+        "fat_g": 13.0,
+        "carb_g": 11.0,
+        "sodium_mg": 420.0,
+        "sugar_g": 2.0
+      }
+    },
+    {
+      "name": "蛋饺",
+      "per_serving": {
+        "energy_kcal": 190.0,
+        "protein_g": 12.0,
+        "fat_g": 13.0,
+        "carb_g": 6.0,
+        "sodium_mg": 480.0,
+        "sugar_g": 1.0
+      }
+    },
+    {
+      "name": "辣子鸡",
+      "per_serving": {
+        "energy_kcal": 340.0,
+        "protein_g": 24.0,
+        "fat_g": 24.0,
+        "carb_g": 8.0,
+        "sodium_mg": 800.0,
+        "sugar_g": 3.0
+      },
+      "tags": [
+        "高钠"
+      ]
+    },
+    {
+      "name": "辣子鸡丁",
+      "per_serving": {
+        "energy_kcal": 330.0,
+        "protein_g": 23.0,
+        "fat_g": 23.0,
+        "carb_g": 9.0,
+        "sodium_mg": 780.0,
+        "sugar_g": 3.0
+      }
+    },
+    {
+      "name": "辣炒肉丁",
+      "per_serving": {
+        "energy_kcal": 300.0,
+        "protein_g": 16.0,
+        "fat_g": 23.0,
+        "carb_g": 7.0,
+        "sodium_mg": 750.0,
+        "sugar_g": 3.0
+      }
+    },
+    {
+      "name": "辣炒鸡块",
+      "per_serving": {
+        "energy_kcal": 310.0,
+        "protein_g": 24.0,
+        "fat_g": 21.0,
+        "carb_g": 8.0,
+        "sodium_mg": 760.0,
+        "sugar_g": 3.0
+      }
+    },
+    {
+      "name": "青椒炒肉丝",
+      "per_serving": {
+        "energy_kcal": 240.0,
+        "protein_g": 14.0,
+        "fat_g": 17.0,
+        "carb_g": 7.0,
+        "sodium_mg": 620.0,
+        "sugar_g": 3.0
+      }
+    },
+    {
+      "name": "青椒炒肉片",
+      "per_serving": {
+        "energy_kcal": 240.0,
+        "protein_g": 14.0,
+        "fat_g": 17.0,
+        "carb_g": 7.0,
+        "sodium_mg": 620.0,
+        "sugar_g": 3.0
+      }
+    },
+    {
+      "name": "韭菜炒豆干",
+      "per_serving": {
+        "energy_kcal": 210.0,
+        "protein_g": 14.0,
+        "fat_g": 13.0,
+        "carb_g": 9.0,
+        "sodium_mg": 580.0,
+        "sugar_g": 2.0
+      }
+    },
+    {
+      "name": "韭菜炒鸡蛋",
+      "aliases": [
+        "韭菜炒蛋"
+      ],
+      "per_serving": {
+        "energy_kcal": 190.0,
+        "protein_g": 11.0,
+        "fat_g": 13.0,
+        "carb_g": 6.0,
+        "sodium_mg": 450.0,
+        "sugar_g": 2.0
+      }
+    },
+    {
+      "name": "韭菜煎饼",
+      "per_serving": {
+        "energy_kcal": 260.0,
+        "protein_g": 7.0,
+        "fat_g": 12.0,
+        "carb_g": 32.0,
+        "sodium_mg": 500.0,
+        "sugar_g": 2.0
+      }
+    },
+    {
+      "name": "鱼片汤",
+      "per_serving": {
+        "energy_kcal": 140.0,
+        "protein_g": 18.0,
+        "fat_g": 4.0,
+        "carb_g": 6.0,
+        "sodium_mg": 700.0,
+        "sugar_g": 1.0
+      }
+    },
+    {
+      "name": "鲜虾豆腐煲",
+      "aliases": [
+        "虾仁豆腐煲"
+      ],
+      "per_serving": {
+        "energy_kcal": 240.0,
+        "protein_g": 20.0,
+        "fat_g": 13.0,
+        "carb_g": 8.0,
+        "sodium_mg": 750.0,
+        "sugar_g": 2.0
+      }
+    },
+    {
+      "name": "鸡蛋饼",
+      "per_serving": {
+        "energy_kcal": 230.0,
+        "protein_g": 9.0,
+        "fat_g": 11.0,
+        "carb_g": 24.0,
+        "sodium_mg": 420.0,
+        "sugar_g": 2.0
+      },
+      "aliases": [
+        "煎蛋"
+      ]
+    },
+    {
+      "name": "麻婆豆腐",
+      "per_serving": {
+        "energy_kcal": 260.0,
+        "protein_g": 13.0,
+        "fat_g": 17.0,
+        "carb_g": 12.0,
+        "sodium_mg": 900.0,
+        "sugar_g": 3.0
+      },
+      "tags": [
+        "高钠"
+      ],
+      "source": "豆瓣酱+花椒，钠偏高"
+    },
+    {
+      "name": "麻辣豆腐",
+      "per_serving": {
+        "energy_kcal": 250.0,
+        "protein_g": 12.0,
+        "fat_g": 17.0,
+        "carb_g": 11.0,
+        "sodium_mg": 880.0,
+        "sugar_g": 3.0
+      },
+      "tags": [
+        "高钠"
+      ]
+    },
+    {
+      "name": "黄焖鸡",
+      "per_serving": {
+        "energy_kcal": 380.0,
+        "protein_g": 26.0,
+        "fat_g": 24.0,
+        "carb_g": 12.0,
+        "sodium_mg": 900.0,
+        "sugar_g": 4.0
+      },
+      "tags": [
+        "高钠"
+      ]
+    },
+    {
+      "name": "牛奶",
+      "aliases": [
+        "纯牛奶"
+      ],
+      "per_serving": {
+        "energy_kcal": 160.0,
+        "protein_g": 8.0,
+        "fat_g": 9.0,
+        "carb_g": 12.0,
+        "sodium_mg": 120.0,
+        "sugar_g": 12.0
+      },
+      "source": "按 250ml 一份计"
+    },
+    {
+      "name": "白灼虾",
+      "aliases": [
+        "水煮虾"
+      ],
+      "per_serving": {
+        "energy_kcal": 120.0,
+        "protein_g": 22.0,
+        "fat_g": 2.0,
+        "carb_g": 1.0,
+        "sodium_mg": 550.0,
+        "sugar_g": 0.0
+      }
+    },
+    {
+      "name": "清蒸鲈鱼",
+      "aliases": [
+        "蒸鲈鱼"
+      ],
+      "per_serving": {
+        "energy_kcal": 180.0,
+        "protein_g": 24.0,
+        "fat_g": 8.0,
+        "carb_g": 2.0,
+        "sodium_mg": 500.0,
+        "sugar_g": 0.0
+      }
+    },
+    {
+      "name": "奶油蛋糕",
+      "per_serving": {
+        "energy_kcal": 380.0,
+        "protein_g": 5.0,
+        "fat_g": 20.0,
+        "carb_g": 45.0,
+        "sodium_mg": 220.0,
+        "sugar_g": 28.0
+      },
+      "tags": [
+        "高糖"
+      ],
+      "source": "高糖高脂甜点"
+    },
+    {
+      "name": "清炒时蔬",
+      "per_serving": {
+        "energy_kcal": 80.0,
+        "protein_g": 2.5,
+        "fat_g": 5.0,
+        "carb_g": 6.0,
+        "sodium_mg": 380.0,
+        "sugar_g": 2.0
+      },
+      "source": "泛指绿叶菜清炒"
+    },
+    {
+      "name": "花生酱拌面",
+      "per_serving": {
+        "energy_kcal": 520.0,
+        "protein_g": 16.0,
+        "fat_g": 20.0,
+        "carb_g": 68.0,
+        "sodium_mg": 800.0,
+        "sugar_g": 8.0
+      },
+      "tags": [
+        "高钠"
+      ]
+    },
+    {
+      "name": "炒青菜",
+      "aliases": [
+        "清炒青菜"
+      ],
+      "per_serving": {
+        "energy_kcal": 80.0,
+        "protein_g": 2.0,
+        "fat_g": 5.0,
+        "carb_g": 6.0,
+        "sodium_mg": 380.0,
+        "sugar_g": 2.0
+      }
+    }
+  ]
+}

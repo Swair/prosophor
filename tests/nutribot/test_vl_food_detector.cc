@@ -314,3 +314,77 @@ TEST(food_detector, meal_monitor_pipeline_end_to_end) {
     EXPECT_EQ(pkg.events[0].food, "牛奶");
     EXPECT_EQ(model.calls, 1);                   // 管道内同样只调一次模型
 }
+
+// ---- 闭集模式（候选进 prompt，解析只认候选并归一为规范名）----
+
+namespace {
+
+const std::vector<std::string> kCandidates = {"红烧肉", "鲜虾豆腐煲", "清炒时蔬",
+                                              "麻婆豆腐"};
+
+}  // namespace
+
+TEST(vl_detector_closed, prompt_lists_candidates_and_asks_ranking) {
+    const std::string prompt = build_food_detect_prompt(kCandidates);
+    for (const auto& name : kCandidates) {
+        EXPECT_TRUE(prompt.find(name) != std::string::npos);
+    }
+    EXPECT_TRUE(prompt.find("最多 5 个") != std::string::npos);
+    // 不给 JSON 示例、不给空数组提示（开放模式的实测教训同样适用）
+    EXPECT_TRUE(prompt.find("[]") == std::string::npos);
+    EXPECT_TRUE(prompt.find("\"") == std::string::npos);   // prompt 里没有任何引号字面
+    // 空候选 = 开放模式（回归）
+    EXPECT_EQ(build_food_detect_prompt({}), build_food_detect_prompt());
+}
+
+TEST(vl_detector_closed, parse_accepts_candidates_and_canonicalizes) {
+    // 精确命中、包含命中（模型加后缀）、带编号前缀
+    const auto foods = parse_food_detect_response(
+        R"(["红烧肉", "鲜虾豆腐煲盖饭", "2. 麻婆豆腐"])", kCandidates);
+    EXPECT_EQ(foods.size(), 3u);
+    EXPECT_EQ(foods[0].name, std::string("红烧肉"));
+    EXPECT_EQ(foods[1].name, std::string("鲜虾豆腐煲"));   // 归一为规范名
+    EXPECT_EQ(foods[2].name, std::string("麻婆豆腐"));
+}
+
+TEST(vl_detector_closed, parse_rejects_out_of_list_names) {
+    // 候选外一律丢弃（含旧回吐陷阱："汤"单字、"餐桌上的菜品"提示词字面）
+    const auto foods = parse_food_detect_response(
+        R"(["汤", "餐桌上的菜品", "宫保鸡丁", "清炒时蔬"])", kCandidates);
+    EXPECT_EQ(foods.size(), 1u);
+    EXPECT_EQ(foods[0].name, std::string("清炒时蔬"));
+}
+
+TEST(vl_detector_closed, parse_dedupes_after_canonicalization) {
+    // "红烧肉" 与 "红烧肉盖饭" 归一后是同一道：去重只留一条
+    const auto foods = parse_food_detect_response(
+        R"(["红烧肉", "红烧肉盖饭"])", kCandidates);
+    EXPECT_EQ(foods.size(), 1u);
+}
+
+TEST(vl_detector_closed, match_candidate_name_rules) {
+    EXPECT_EQ(MatchCandidateName("红烧肉", kCandidates).value(), std::string("红烧肉"));
+    EXPECT_EQ(MatchCandidateName(" 鲜虾豆腐煲 ", kCandidates).value(),
+              std::string("鲜虾豆腐煲"));
+    EXPECT_EQ(MatchCandidateName("清炒时蔬拼盘", kCandidates).value(),
+              std::string("清炒时蔬"));
+    EXPECT_FALSE(MatchCandidateName("汤", kCandidates).has_value());      // 单字不配
+    EXPECT_FALSE(MatchCandidateName("宫保鸡丁", kCandidates).has_value());
+    EXPECT_FALSE(MatchCandidateName("", kCandidates).has_value());
+    EXPECT_FALSE(MatchCandidateName("红烧肉", {}).has_value());
+}
+
+TEST(vl_detector_closed, detector_uses_candidates_end_to_end) {
+    // Fake 后端回一段"带干扰"的答案：候选内外混合 + 编号
+    auto backend = [](const std::string&, const std::string& question)
+        -> std::optional<std::string> {
+        EXPECT_TRUE(question.find("鲜虾豆腐煲") != std::string::npos);   // 候选进了提问
+        return R"(["1、麻婆豆腐", "牛排", "红烧肉盖饭"])";
+    };
+    prosophor::nr::app::VlFoodDetector detector(backend, 0.0, kCandidates);
+    const prosophor::nr::app::ImageFrame frame{"tests/nutribot/assets/vl_demo.jpg"};
+    const auto foods = detector.detect_domain(&frame);
+    EXPECT_EQ(foods.size(), 2u);
+    EXPECT_EQ(foods[0].name, std::string("麻婆豆腐"));
+    EXPECT_EQ(foods[1].name, std::string("红烧肉"));   // "红烧肉盖饭" 归一
+}

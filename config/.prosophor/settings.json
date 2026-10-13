@@ -133,16 +133,24 @@
     "aidgen": {
       "api_key": "local",
       "base_url": "local",
-      "config_file": "~/aidmlm/qnn236_qcs8550_cl2048/aidgen_config.json",
+      "config_file": "~/models/qnn236_qcs8550_cl2048/aidgen_config.json",
       "backend": "auto",
-      "vit_backend": "qnn240"
+      "vit_backend": "qnn248",
+      "models": [
+        {
+          "model": "Qwen2.5-0.5B",
+          "temperature": 0.7,
+          "max_tokens": 256,
+          "context_window": 2048
+        }
+      ]
     }
   },
   "tts": {
     "enabled": true,
     "provider": [
       {
-        "backend": "edge-tts",
+        "backend": "aidvoice",
         "auto_start": false,
         "voice_list": [
           "zh-CN-XiaoxiaoNeural",
@@ -172,15 +180,18 @@
           "de-DE-ConradNeural"
         ]
       }
-    ]
+    ],
+    "backend": "aidvoice",
+    "aidvoice_model_dir": "~/models/melotts-zh/models/QCS8550/FP16",
+    "aidvoice_speed": 1.0
   },
   "asr": {
     "enabled": true,
-    "backend": "whisper",
-    "model_path": "/e/ai_ws/prosophor_dev/models/ggml-small.bin",
-    "vad_model_path": "/e/ai_ws/prosophor_dev/models/ggml-silero-vad.bin",
-    "language": "zh",
-    "threads": 4
+    "backend": "aidvoice",
+    "model_dir": "~/models/sensevoicesmall/models/QCS8550/FP16",
+    "echo_ms": 15000,
+    "timeout_ms": 20000,
+    "reuse_instance": true
   },
   "security": {
     "allow_local_execute": true,
@@ -194,5 +205,39 @@
     "role": "default",
     "data_dir": "",
     "token_ttl_hours": 168
+  },
+  "voice": {
+    "capture_device": "plughw:CARD=PowerConf,DEV=0",
+    "playback_device": "plughw:0,0",
+    "vad_rms_dbfs": -38.0,
+    "start_confirm_frames": 3,
+    "end_silence_ms": 700,
+    "max_utterance_ms": 12000,
+    "pre_roll_frames": 5,
+    "warmup_discard_frames": 8,
+    "speak_max_chars": 120,
+    "speak_min_gap_ms": 10000
+  },
+  "camera": {
+    "device": "/dev/video2",
+    "output_dir": "/tmp/prosophor/nutribot_camera",
+    "interval_ms": 3000,
+    "idle_interval_ms": 15000,
+    "timeout_ms": 8000,
+    "keep_frames": 3,
+    "motion_pixel_threshold": 12
+  },
+  "meal": {
+    "announce": true,
+    "windows": [
+      {"name": "早餐", "start": "07:00", "end": "09:00"},
+      {"name": "午餐", "start": "11:30", "end": "13:30"},
+      {"name": "晚餐", "start": "17:30", "end": "19:30"}
+    ]
+  },
+  "nutribot": {
+    "member_store_dir": "",
+    "stub_member_name": "小明",
+    "nutrition_file": ""
   }
 }

@@ -44,9 +44,9 @@ prosophor::nr::domain::ScenePackage MealMonitor::Tick(FrameRef frame, double thr
     // 3) 场景状态：确定轨 +（可选）复核轨
     std::string scene_state = "unknown";
     if (scene_) {
-        // 复用当帧人脸结果（has_faces），不重复检测
-        const std::string fsm_label =
-            scene_->update(frame, /*has_faces=*/!obs_list.empty());
+        // 复用当帧人脸结果（has_faces）与当帧菜品（has_foods），不重复感知
+        const std::string fsm_label = scene_->update(
+            frame, /*has_faces=*/!obs_list.empty(), /*has_foods=*/!foods.empty());
         scene_state = judge_ ? JudgeScene(obs_list, foods, fsm_label)
                              : fsm_label;
     }

@@ -65,8 +65,10 @@ public:
 class SceneMonitorPort {
 public:
     virtual ~SceneMonitorPort() = default;
-    // 处理一帧（内部算运动）并推进 FSM，返回状态中文标签
-    virtual std::string update(FrameRef frame, bool has_faces) = 0;
+    // 处理一帧（内部算运动）并推进 FSM，返回状态中文标签。
+    // has_faces = 人脸在场；has_foods = 桌上是否有菜（VL 信号，桩人脸下它是
+    // 止餐主信号）—— 两个布尔都不默认化：虚函数默认参数是静态绑定，易踩坑
+    virtual std::string update(FrameRef frame, bool has_faces, bool has_foods) = 0;
     // 判决侧确认后强制同步 FSM（幂等，UNKNOWN 忽略）
     virtual void force(std::string_view label) = 0;
     // 运动档位: "high" / "low" / "mid" / "unknown"（供 LLM 判据）

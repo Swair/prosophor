@@ -23,6 +23,9 @@ struct FoodItem {
     std::string name;
     double confidence = 1.0;
     Nutrition nutrition;
+    // 营养数据是否命中知识库 —— 区分"确实 0 千卡"与"没查到"（后者的
+    // nutrition 六字段是缺省 0，直接当数值用会说"这道菜 0 千卡"）
+    bool has_nutrition = false;
 
     FoodItem() = default;
     FoodItem(std::string id, std::string nm, double conf = 1.0)

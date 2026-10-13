@@ -10,8 +10,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <deque>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -19,24 +21,39 @@
 #include <vector>
 
 #include "common/file_utils.h"
+#include "config/config.h"
 #include "core/agent_types.h"
 #include "core/messages_schema.h"
+#include "platform/platform.h"
 
 #include "agent_engine.h"
+#include "audio_io.h"
+#include "camera_source.h"
+#include "dish_nutrition.h"
 #include "events.h"
 #include "food.h"
+#include "meal_journal.h"
 #include "meal_monitor.h"
+#include "meal_schedule.h"
 #include "member.h"
 #include "member_repository.h"
 #include "ports.h"
+#include "proactive_announcer.h"
 #include "quiz_cli.h"
 #include "rule_engine.h"
 #include "scene.h"
+#include "scene_monitor.h"
+#include "vision_stub.h"
+#include "voice_session.h"
 #include "vl_food_detector.h"
 
+#include "providers/asr/aidvoice_asr_provider.h"
 #include "providers/llm/aidgen_provider.h"
 #include "providers/llm/llm_provider.h"
+#include "providers/provider_router/asr_provider_router.h"
 #include "providers/provider_router/llm_provider_router.h"
+#include "providers/provider_router/tts_provider_router.h"
+#include "providers/tts/aidvoice_tts_provider.h"
 
 namespace prosophor::nr::nutribot {
 
@@ -190,9 +207,10 @@ public:
     explicit ScriptedSceneMonitorPort(const SessionScript& script)
         : script_(&script) {}
 
-    std::string update(prosophor::nr::app::FrameRef, bool has_faces) override {
+    std::string update(prosophor::nr::app::FrameRef, bool has_faces,
+                       bool has_foods) override {
         const auto& frame = script_->cur();
-        fsm_.update({frame.motion_ratio, has_faces});
+        fsm_.update({frame.motion_ratio, has_faces, has_foods});
         return std::string(fsm_.label());
     }
     void force(std::string_view label) override {
@@ -405,6 +423,109 @@ void DemoMealMonitorSession(prosophor::nr::infra::JsonMemberRepository& repo) {
     LOG_INFO("     状态转移 {} 次（FSM 帧计数消抖）; 提醒 {} 条", scene.transitions(), reminders.size());
 }
 
+// 营养库路径：配置非空 -> 用它；否则 <BaseDir>/nutribot_dishes.json；再退回
+// 仓库相对路径（cwd=仓库根时命中，与 config/.prosophor 惯例同构）
+std::string ResolveNutritionFile(const prosophor::NutribotConfig& cfg) {
+    if (!cfg.nutrition_file.empty()) {
+        return prosophor::ExpandHome(cfg.nutrition_file);
+    }
+    const std::string base = prosophor::JoinPath(
+        prosophor::ProsophorConfig::BaseDir().string(), "nutribot_dishes.json");
+    if (prosophor::FileExists(base)) return base;
+    return "config/.prosophor/nutribot_dishes.json";
+}
+
+// 逐菜基准的人工标注（labels.tsv：文件名 -> 菜名真值；# 开头为注释）
+std::map<std::string, std::string> LoadDishLabels() {
+    std::map<std::string, std::string> labels;
+    const std::string path = "tests/nutribot/assets/dishes/labels.tsv";
+    if (!prosophor::FileExists(path)) return labels;
+    const auto text = prosophor::ReadFile(path);
+    if (!text.has_value()) return labels;
+    std::string line;
+    for (const char ch : *text) {
+        if (ch != '\n') { line += ch; continue; }
+        const size_t tab = line.find('\t');
+        if (!line.empty() && line[0] != '#' && tab != std::string::npos) {
+            labels.emplace(line.substr(0, tab), line.substr(tab + 1));
+        }
+        line.clear();
+    }
+    return labels;
+}
+
+// 两道菜名是否指同一道（评测口径）：精确，或含头含尾的包含（两侧≥2 字符）
+// —— 复用闭集匹配的规则，避免评测口径与产品口径分叉
+bool SameDish(const std::string& a, const std::string& b) {
+    return prosophor::nr::app::MatchCandidateName(a, {b}).has_value();
+}
+
+// [7] 营养库自检：加载真实数据文件 -> 覆盖率（对识别基准人工标注）-> 样例热量
+void DemoNutrition() {
+    const std::string path =
+        ResolveNutritionFile(prosophor::ProsophorConfig::GetInstance().nutribot);
+    std::string error;
+    auto table = prosophor::nr::app::DishNutritionTable::LoadFromFile(path, error);
+    if (!table.has_value()) {
+        LOG_INFO("  （跳过: {}）", error.c_str());
+        return;
+    }
+    LOG_INFO("  营养库 {} 道菜（跳过坏条目 {}）：{}", table->size(),
+             table->skipped_entries(), path.c_str());
+
+    // 覆盖率：识别基准标注（labels.tsv，人工判读的菜名）里有多少能查到营养
+    std::set<std::string> benchmark;
+    for (const auto& [file, truth] : LoadDishLabels()) {
+        benchmark.insert(truth);
+    }
+    if (!benchmark.empty()) {
+        std::vector<std::string> missed;
+        for (const auto& name : benchmark) {
+            if (!table->Match(name).has_value()) missed.push_back(name);
+        }
+        LOG_INFO("  识别基准菜名覆盖：{}/{}", benchmark.size() - missed.size(),
+                 benchmark.size());
+        if (!missed.empty()) {
+            const std::set<std::string> missed_set(missed.begin(), missed.end());
+            LOG_INFO("  未覆盖：{}", JoinNames(missed_set).c_str());
+        }
+    }
+
+    // 样例：走一遍"菜名 -> 每份营养"，附带来源备注
+    const std::vector<std::string> samples = {"红烧肉", "番茄蛋花汤", "没见过的菜"};
+    for (const auto& name : samples) {
+        const auto match = table->Match(name);
+        if (match.has_value()) {
+            LOG_INFO("  {} -> 约 {} 千卡/份（钠 {} 毫克{}）", name.c_str(),
+                     static_cast<int>(match->per_serving.energy_kcal),
+                     static_cast<int>(match->per_serving.sodium_mg),
+                     match->source.empty() ? "" : "，" + match->source);
+        } else {
+            LOG_INFO("  {} -> （未知，播报将计为\"没见过\"）", name.c_str());
+        }
+    }
+}
+
+// 板上环境约束（2026-10-13 实测，装 aidvoice-sdk 后）：aidlite(qnn248) 必须先于
+// aidgen 核心（QNN 2.36/Genie）初始化，否则视觉编码器的 QNN deviceCreate 直接失败
+// （"QNN deviceCreate failed 14001"），[5b]/[5c]/[6] 的视觉段全灭 —— 实测先预热
+// aidvoice 一次即恢复（五菜样本逐菜正确）。常驻路径天然满足（ASR/TTS 预热在前）；
+// 自检路径无语音，故在 [5] 之前显式预热一次。失败不阻断：只告警，视觉段照常报错。
+void PreloadAidliteBeforeAidgen() {
+    // AgentEngine 首次构造会完成 TTS 路由器 Initialize（读配置）
+    (void)prosophor::AgentEngine::GetInstance();
+    auto provider = prosophor::TtsProviderRouter::GetInstance().GetProvider();
+    if (auto* tts = dynamic_cast<prosophor::AidVoiceTtsProvider*>(provider.get())) {
+        std::string error;
+        if (!tts->WarmUp(error)) {
+            LOG_WARN("nutribot: TTS 预热失败（{}），视觉编码器可能装载失败（aidlite 顺序约束）",
+                     error.c_str());
+        }
+    } else if (provider == nullptr) {
+        LOG_WARN("nutribot: TTS provider 不可用，视觉编码器可能装载失败（aidlite 顺序约束）");
+    }
+}
+
 // [5] AgentEngine 会话自检：CreateSession(nutribot) + SendUserMessage
 // LLM 调用一律经 AgentEngine（角色/路由/会话体系），不直连 provider。
 // SendUserMessage 是同步接口：阻塞至整轮结束并返回助手回复 —— 回调仅用于
@@ -485,7 +606,7 @@ void DemoVlImageCheck() {
         return;
     }
     if (!vl->HasVisionConfig()) {
-        LOG_INFO("  （跳过: 当前装配为纯文本模型 —— 要跑图文，把 settings.json 里\n   llm_providers.aidgen.config_file 指向含 vlm_model 段的 VL 配置，\n   例如 ~/aidmlm/qnn236_qcs8550_cl2048/aidgen_config.json）");
+        LOG_INFO("  （跳过: 当前装配为纯文本模型 —— 要跑图文，把 settings.json 里\n   llm_providers.aidgen.config_file 指向含 vlm_model 段的 VL 配置，\n   例如 ~/models/qnn236_qcs8550_cl2048/aidgen_config.json）");
         return;
     }
     if (!prosophor::FileExists(image)) {
@@ -556,9 +677,32 @@ void DemoMultiTurnVision() {
     }
 }
 
+// aidgen 图文后端：图片 + 提问 -> 回复文本。感知调用直连 provider（同 [5b]）——
+// 不是对话：问的是"图里有什么菜"、答的是机器要解析的 JSON，角色人格 prompt
+// 只会帮倒忙，也不该进对话会话历史。model_calls/last_reply 供节流自证与解析
+// 失败回看（可传 nullptr）；selftest [6] 与常驻感知共用本工厂。
+prosophor::nr::app::VisionQueryBackend MakeAidgenVisionBackend(
+    prosophor::AidGenProvider* vl, int* model_calls, std::string* last_reply) {
+    return [vl, model_calls, last_reply](const std::string& image_path,
+                                         const std::string& question)
+               -> std::optional<std::string> {
+        prosophor::ChatRequest req;
+        prosophor::MessageSchema user("user", question);
+        user.AddImageContent(image_path);
+        req.messages.push_back(std::move(user));
+        req.max_tokens = 128;   // 识别输出只是短 JSON 数组：限尾防小模型放飞（默认 8192）
+        if (model_calls != nullptr) ++*model_calls;
+        const auto resp = vl->Chat(req);
+        if (!resp.error_msg.empty()) {
+            LOG_INFO("  [后端错误] {}", resp.error_msg.c_str());
+            return std::nullopt;
+        }
+        if (last_reply != nullptr) *last_reply = resp.content_text;
+        return resp.content_text;
+    };
+}
+
 // [6] 看菜自检（Phase 3）：VL 看帧 -> 菜品列表 -> MealMonitor -> 规则引擎。
-// 直连 provider（同 [5b]）—— 感知调用不是对话：问的是"图里有什么菜"、答的是机器
-// 要解析的 JSON，角色人格 prompt 在此只会帮倒忙，也不该进对话会话历史。
 void DemoFoodRecognition(prosophor::nr::infra::JsonMemberRepository& repo) {
     // 菜图随仓库不带（拍图命令见下方跳过提示）；无图时本段跳过，链路仍由单测端到端覆盖
     const std::string image = "tests/nutribot/assets/vl_food_table.jpg";
@@ -579,32 +723,33 @@ void DemoFoodRecognition(prosophor::nr::infra::JsonMemberRepository& repo) {
         return;
     }
 
-    // 后端：图片 + 提问 -> 回复文本（装配同 [5b] 的 ChatRequest 图文请求）。
+    // 后端：图片 + 提问 -> 回复文本（MakeAidgenVisionBackend，同 [5b] 的图文请求）。
     // 计数供节流/缓存自证：模型调用次数必须与 detect_domain 次数解耦。
     // last_reply 供解析失败时回看模型原话 —— 检测器只交出解析结果，证据留在装配层。
     int model_calls = 0;
     std::string last_reply;
     prosophor::nr::app::VisionQueryBackend backend =
-        [vl, &model_calls, &last_reply](const std::string& image_path,
-                                        const std::string& question)
-        -> std::optional<std::string> {
-        prosophor::ChatRequest req;
-        prosophor::MessageSchema user("user", question);
-        user.AddImageContent(image_path);
-        req.messages.push_back(std::move(user));
-        ++model_calls;
-        const auto resp = vl->Chat(req);
-        if (!resp.error_msg.empty()) {
-            LOG_INFO("  [后端错误] {}", resp.error_msg.c_str());
-            return std::nullopt;
-        }
-        last_reply = resp.content_text;
-        return resp.content_text;
-    };
+        MakeAidgenVisionBackend(vl, &model_calls, &last_reply);
 
+    // 闭集候选：营养库的 66 个菜名（开放命名是小 VL 模型的弱项；闭集把任务降维
+    // 成"识别+从候选里选"）。营养库缺失则退化为开放模式，行为与接库前一致。
+    std::vector<std::string> candidates;
+    std::string nutrition_error;
+    if (const auto table = prosophor::nr::app::DishNutritionTable::LoadFromFile(
+            ResolveNutritionFile(prosophor::ProsophorConfig::GetInstance().nutribot),
+            nutrition_error);
+        table.has_value()) {
+        for (const auto& dish : table->dishes()) candidates.push_back(dish.name);
+    } else {
+        LOG_INFO("  （营养库不可用，退化为开放命名: {}）", nutrition_error.c_str());
+    }
+
+    // 产品口径 = 开放命名（实测见 vl_food_detector.h 的对照结论：66 选 1 会让
+    // 小 VL 模型退化成"抄列表"，且非餐桌图会误报库内菜名）；闭集保留为基准对照。
     // min_interval=0：本节要验的是"同帧缓存"，不是节流窗口（真实帧流用默认 3s）
     prosophor::nr::app::VlFoodDetector detector(backend, /*min_interval_seconds=*/0.0);
     prosophor::nr::app::ImageFrame frame{image};
+    LOG_INFO("  闭集候选 {} 道（产品口径=开放命名；闭集仅作基准对照）", candidates.size());
 
     LOG_INFO("  -- 识别（真调模型）--");
     // 诊断：同一张图先问开放式问题 —— 模型若答得出内容，说明图进了模型，问题在提问；
@@ -658,8 +803,9 @@ void DemoFoodRecognition(prosophor::nr::infra::JsonMemberRepository& repo) {
     }
 
     // 逐菜基准：dish 目录是切好的单菜图 + 人工标注（labels.tsv）。
-    // 每张图独立走一次 detect_domain，答案进日志，由 scripts 侧比对标注算准确率。
-    // 换 provider 配置（换模型/换分辨率）后重跑本段即可得到新数字。
+    // 每张图独立走一次 detect_domain，答案与真值当场比对 —— Top-1 严格同名 /
+    // Top-1 放宽（包含匹配）/ Top-5 命中（书里承诺指标的口径）三个数字直接打出来；
+    // 开放与闭集两种模式各跑一遍，同场 A/B（换模型/换分辨率后重跑即可）。
     {
         const std::string dir = "tests/nutribot/assets/dishes";
         std::set<std::string> files;
@@ -667,24 +813,46 @@ void DemoFoodRecognition(prosophor::nr::infra::JsonMemberRepository& repo) {
             if (f.find("copy_of") != std::string::npos) continue;   // 调试残留
             files.insert(f);
         }
+        const auto labels = LoadDishLabels();
         if (!files.empty()) {
-            LOG_INFO("  -- 逐菜批量识别（{} 张，单菜图）--", files.size());
-            int blank = 0;
-            for (const auto& f : files) {
-                const prosophor::nr::app::ImageFrame dish_frame{
-                    prosophor::JoinPath(dir, f)};
-                const auto dish_foods = detector.detect_domain(&dish_frame);
-                if (dish_foods.empty()) ++blank;
-                LOG_INFO("  {}  {}", f.c_str(),
-                         dish_foods.empty() ? "（无）" : JoinFoodNames(dish_foods).c_str());
-                // 解析为空时回看模型原话：区分"模型没输出"与"输出被解析器过滤"
-                // （回吐守卫会丢弃 prompt 里出现过的字面，若模型答"餐桌上菜品"这类改述，
-                //   结果为空但并非模型沉默 —— 少了这行会把它误记成识别失败）
-                if (dish_foods.empty()) {
-                    LOG_INFO("      raw={}", last_reply.empty() ? "(空)" : last_reply.c_str());
+            // 评测跑法：mode_name + 检测器 -> 打印 Top-1/Top-5
+            const auto bench = [&](const char* mode_name,
+                                   prosophor::nr::app::VlFoodDetector& bench_detector) {
+                int blank = 0, total_truth = 0, top1_strict = 0, top1_lenient = 0,
+                    top5_hit = 0;
+                LOG_INFO("  -- 逐菜批量识别（{} 张，单菜图；{}）--", files.size(), mode_name);
+                for (const auto& f : files) {
+                    const prosophor::nr::app::ImageFrame dish_frame{
+                        prosophor::JoinPath(dir, f)};
+                    const auto dish_foods = bench_detector.detect_domain(&dish_frame);
+                    if (dish_foods.empty()) ++blank;
+                    LOG_INFO("  {}  {}", f.c_str(),
+                             dish_foods.empty() ? "（无）" : JoinFoodNames(dish_foods).c_str());
+
+                    const auto truth_it = labels.find(f);
+                    if (truth_it == labels.end()) continue;   // 无人工真值：不进统计
+                    ++total_truth;
+                    const std::string& truth = truth_it->second;
+                    if (!dish_foods.empty()) {
+                        if (dish_foods[0].name == truth) ++top1_strict;
+                        if (SameDish(dish_foods[0].name, truth)) ++top1_lenient;
+                        for (size_t i = 0; i < dish_foods.size() && i < 5; ++i) {
+                            if (SameDish(dish_foods[i].name, truth)) { ++top5_hit; break; }
+                        }
+                    }
                 }
+                LOG_INFO("  [基准] {}：Top-1 严格 {}/{}，Top-1 放宽 {}/{}，Top-5 命中 {}/{}"
+                         "（空返回 {} / {} 张）",
+                         mode_name, top1_strict, total_truth, top1_lenient, total_truth,
+                         top5_hit, total_truth, blank, files.size());
+            };
+
+            bench("开放命名（产品口径）", detector);
+            if (!candidates.empty()) {
+                prosophor::nr::app::VlFoodDetector closed_detector(
+                    backend, /*min_interval_seconds=*/0.0, candidates);
+                bench("闭集候选（对照）", closed_detector);
             }
-            LOG_INFO("  未识别出菜品 {} / {} 张", blank, files.size());
         }
     }
 
@@ -704,7 +872,7 @@ void DemoFoodRecognition(prosophor::nr::infra::JsonMemberRepository& repo) {
 
 }  // namespace
 
-int NutriBotApp::Run() {
+int NutriBotApp::RunSelfTest() {
     LOG_INFO("nutribot (C++ demo)");
     LOG_INFO("[1] 场景状态机轨迹（确定性核心）:");
     DemoSceneMachine();
@@ -720,6 +888,7 @@ int NutriBotApp::Run() {
     LOG_INFO("[4] 用餐监控用例: MealMonitor + Fake 感知（确定性核心端到端）:");
     DemoMealMonitorSession(members);
     LOG_INFO("[5] LLM 会话自检（nutribot 角色 + aidgen/aidgen-vl provider，NPU）:");
+    PreloadAidliteBeforeAidgen();
     DemoEngineAgent();
     LOG_INFO("[5b] VL 图文自检（aidgen-vl 装配下, 同一 Context 实例）:");
     DemoVlImageCheck();
@@ -727,6 +896,537 @@ int NutriBotApp::Run() {
     DemoMultiTurnVision();
     LOG_INFO("[6] 看菜自检（VL 看帧 -> 菜品 -> MealMonitor -> 规则引擎）:");
     DemoFoodRecognition(members);
+    LOG_INFO("[7] 营养库自检（菜名 -> 每份营养；识别基准覆盖率）:");
+    DemoNutrition();
+    return 0;
+}
+
+// ============================================================================
+// 常驻回路（Phase 1）：
+//   语音：麦克风 → VAD → ASR → AgentEngine → TTS
+//   感知：摄像头抓帧 → VL 看菜 → 规则比对 → 主动播报（②③ 段）
+//
+// 线程划分（设计详见 voice_session.h / audio_io.h / camera_source.h 头注释）：
+//   主循环（本函数，100ms tick）—— 唯一 aidgen 调用者（Context 不可并发的
+//                                   硬约束）：话轮派发 + 感知节拍 + 饭点 + 退出收尾
+//   采集线程 —— ReadFrame → FeedFrame（永不做推理）
+//   抓帧线程 —— CameraSource 内部：ffmpeg 单帧抓拍落盘（不碰 aidgen/aidvoice）
+//   VoiceSession 内 ASR/TTS 两个 worker —— 只调 aidvoice（与 aidgen 分属
+//                                   不同 SDK，互不阻塞）
+//
+// 主 tick 四段：④ 场景节拍（帧差，每帧，不受播报门控）→ ① 话轮（最高优先）
+// → ③ 饭点/小结（便宜，先于感知）→ ② 感知节拍（VL 秒级推理：未在播报、有
+// 新帧、过节拍才做，节拍随场景状态收放；期间用户话句落后一轮再答，v1 接受）
+// ============================================================================
+
+namespace {
+
+// 退出标志：信号处理器只置原子（信号上下文安全的唯一动作）
+std::atomic<bool> g_stop{false};
+
+// config.voice → VoiceSession 调参（帧长固定 480 样本 = 30ms @16k）
+prosophor::nr::app::VoiceTuning TuningFromConfig(const prosophor::VoiceConfig& cfg) {
+    constexpr int frame_ms = 30;
+    prosophor::nr::app::VoiceTuning tuning;
+    tuning.vad_rms_dbfs = cfg.vad_rms_dbfs;
+    tuning.start_confirm_frames = cfg.start_confirm_frames;
+    tuning.end_silence_frames =
+        cfg.end_silence_ms / frame_ms > 1 ? cfg.end_silence_ms / frame_ms : 1;
+    tuning.max_utterance_frames =
+        cfg.max_utterance_ms / frame_ms > 1 ? cfg.max_utterance_ms / frame_ms : 1;
+    tuning.pre_roll_frames = cfg.pre_roll_frames;
+    return tuning;
+}
+
+// 本地时间当日分钟数（饭点判定；localtime_r 线程安全）
+int LocalMinutesOfDay() {
+    const std::time_t wallclock = std::time(nullptr);
+    std::tm local{};
+    localtime_r(&wallclock, &local);
+    return local.tm_hour * 60 + local.tm_min;
+}
+
+// 成员档案目录：配置为空时用 <BaseDir>/nutribot_members。常驻形态持久化 ——
+// 不像 selftest 每跑一次清空重建，删目录即恢复出厂（重新预置演示成员）
+std::string ResolveMemberStoreDir(const prosophor::NutribotConfig& cfg) {
+    if (!cfg.member_store_dir.empty()) {
+        return prosophor::ExpandHome(cfg.member_store_dir);
+    }
+    return prosophor::JoinPath(prosophor::ProsophorConfig::BaseDir().string(),
+                               "nutribot_members");
+}
+
+// 空档案库预置演示成员：人脸未接，禁忌链路需要"档案库里真有这个人"
+// （nutribot.stub_member_name 指向其中之一）。建档走与 selftest [3] 相同的
+// 脚本化问答路径 —— 预置档案与交互建档同构，不是另一套旁路。
+void SeedDemoMembersIfEmpty(prosophor::nr::infra::JsonMemberRepository& repo) {
+    if (!repo.list_members().empty()) return;
+    LOG_INFO("nutribot: 档案库为空 —— 预置演示成员（人脸识别接入后可删库重建）");
+    const std::vector<RegistrationCase> cases = {
+        {"小明", {"小明", "6", "男", "牛奶、花生", "虾", "少盐", "清淡、甜食",
+                  "儿童、乳糖不耐受"}},
+        {"王奶奶", {"王奶奶", "68", "女", "蛋糕、肥肉", "没有", "低糖、少盐",
+                    "软烂、清淡", "2型糖尿病、老年人"}},
+    };
+    for (const auto& c : cases) {
+        ScriptedDialoguePort dialogue(c.answers);
+        prosophor::nr::app::RunQuizCli(repo, std::nullopt, dialogue);
+    }
+}
+
+}  // namespace
+
+int NutriBotApp::Run(int argc, char** argv) {
+    for (int i = 1; argv != nullptr && i < argc; ++i) {
+        if (std::string(argv[i]) == "--selftest") {
+            return RunSelfTest();
+        }
+    }
+    return RunResident();
+}
+
+int NutriBotApp::RunResident() {
+    auto& config = prosophor::ProsophorConfig::GetInstance();
+    const prosophor::VoiceConfig& voice_cfg = config.voice;
+
+    g_stop.store(false);
+    prosophor::Platform::SetConsoleSignalHandler([] { g_stop.store(true); });
+
+    // ── 音频 I/O：采集必须成功（没麦克风就不是语音回路）；播放首次播报时再开 ──
+    prosophor::nr::infra::AudioCapture capture;
+    prosophor::nr::infra::AudioPlayback playback;
+    {
+        prosophor::nr::infra::CaptureConfig capture_cfg;
+        capture_cfg.device = voice_cfg.capture_device;
+        std::string error;
+        if (!capture.Open(capture_cfg, error)) {
+            LOG_ERROR("nutribot: {}", error.c_str());
+            return 1;
+        }
+    }
+
+    // ── AgentEngine 先构造：其构造里完成 TTS 路由器 Initialize（读配置） ──
+    auto& engine = prosophor::AgentEngine::GetInstance();
+    prosophor::AsrProviderRouter::GetInstance().Initialize();
+
+    auto* asr_raw = prosophor::AsrProviderRouter::GetInstance().GetRawProvider();
+    if (auto* aidvoice_asr = dynamic_cast<prosophor::AidVoiceAsrProvider*>(asr_raw)) {
+        std::string error;
+        if (!aidvoice_asr->WarmUp(error)) {   // 预创建（约 1.6s），挪出首句
+            LOG_ERROR("nutribot: ASR 预热失败: {}", error.c_str());
+        }
+    }
+    auto tts = prosophor::TtsProviderRouter::GetInstance().GetProvider();
+    if (auto* aidvoice_tts = dynamic_cast<prosophor::AidVoiceTtsProvider*>(tts.get())) {
+        std::string error;
+        if (!aidvoice_tts->WarmUp(error)) {   // 预创建（约 2.4s），挪出首播
+            LOG_ERROR("nutribot: TTS 预热失败: {}", error.c_str());
+        }
+    }
+    if (asr_raw == nullptr || tts == nullptr) {
+        LOG_ERROR("nutribot: 语音后端不可用（asr={} tts={}）—— 检查 settings.json 的 "
+                  "asr/tts 段（backend=aidvoice 与模型路径）",
+                  asr_raw == nullptr ? "null" : "ok", tts == nullptr ? "null" : "ok");
+        return 1;
+    }
+
+    // ── 语音会话装配：ASR/TTS 以注入方式进 voice_session（可单测的边界） ──
+    prosophor::nr::app::TranscribeFn transcribe =
+        [asr_raw](const std::vector<int16_t>& pcm) { return asr_raw->AsrProcess(pcm); };
+
+    // speak 回调里要重置 VAD（播报前后清句），但会话对象在回调之后才构造 ——
+    // 用指针占位，worker 首次触发时必然已赋值
+    prosophor::nr::app::VoiceSession* voice_ptr = nullptr;
+    prosophor::nr::app::SpeakFn speak = [&](const std::string& text) -> bool {
+        // 播报期闭麦 + 前后重置 VAD：防自听（v1 不做 barge-in）
+        capture.Mute(true);
+        prosophor::TtsRequest request;
+        request.text = text;
+        const prosophor::TtsResponse response = tts->Synthesize(request);
+        bool ok = false;
+        if (response.success) {
+            if (!playback.IsOpen()) {
+                prosophor::nr::infra::PlaybackConfig playback_cfg;
+                playback_cfg.device = voice_cfg.playback_device;
+                playback_cfg.sample_rate = response.sample_rate;
+                playback_cfg.channels = response.channels;
+                std::string error;
+                if (!playback.Open(playback_cfg, error)) {
+                    LOG_ERROR("nutribot: {}", error.c_str());
+                }
+            }
+            if (playback.IsOpen()) {
+                ok = playback.Write(response.pcm.data(), response.pcm.size()) &&
+                     playback.Drain();
+            }
+        } else {
+            LOG_ERROR("nutribot: TTS 合成失败: {}", response.error_msg.c_str());
+        }
+        capture.Mute(false);
+        if (voice_ptr != nullptr) {
+            voice_ptr->ResetUtterance();
+        }
+        return ok;
+    };
+
+    prosophor::nr::app::VoiceSession voice(transcribe, speak,
+                                           TuningFromConfig(voice_cfg), /*start_workers=*/true);
+    voice_ptr = &voice;
+
+    // ── 感知装配（②③ 段）：摄像头 → 桩人脸 → VL 看菜 → 规则 → 播报规划 ──
+    // 摄像头/VL 任缺一件只降级感知（语音问答照常），不阻断常驻回路
+    prosophor::nr::infra::CameraSource camera;
+    bool camera_ok = false;
+    {
+        prosophor::nr::infra::CameraConfig camera_cfg;
+        camera_cfg.device      = config.camera.device;
+        camera_cfg.output_dir  = config.camera.output_dir;
+        camera_cfg.interval_ms = config.camera.interval_ms;
+        camera_cfg.timeout_ms  = config.camera.timeout_ms;
+        camera_cfg.keep_frames = config.camera.keep_frames;
+        std::string camera_error;
+        camera_ok = camera.Start(camera_cfg, camera_error);
+        if (!camera_ok) {
+            LOG_ERROR("nutribot: 摄像头不可用，主动提醒停用 —— {}", camera_error.c_str());
+        }
+    }
+
+    // 成员档案库（常驻持久目录；空库预置演示成员）
+    const std::string members_dir = ResolveMemberStoreDir(config.nutribot);
+    prosophor::EnsureDirectory(members_dir);
+    prosophor::nr::infra::JsonMemberRepository members(members_dir);
+    SeedDemoMembersIfEmpty(members);
+
+    // 桩人脸：人脸识别未接，固定一位档案成员"在场"（vision_stub.h）
+    prosophor::nr::app::StubFaceRecognitionPort stub_vision(config.nutribot.stub_member_name);
+    if (!members.get_member(stub_vision.member_name()).has_value()) {
+        LOG_ERROR("nutribot: 桩成员「{}」不在档案库 {}，禁忌提醒不会触发"
+                  "（改 settings.json 的 nutribot.stub_member_name 为库里已有成员）",
+                  stub_vision.member_name().c_str(), members_dir.c_str());
+    }
+
+    // 看菜检测器与用餐监控器：懒装配。aidgen 的就绪是**异步三段式**（provider
+    // 对象 → 核心/视觉编码器装载 → vlm 配置解析，实测启动后约 4s），启动时
+    // 一次性判定必然误判（实测误报"未装配"并把感知路锁死）。主 tick 里按
+    // 探针节奏现查，就绪即构造；就绪前感知整段跳过。
+    std::unique_ptr<prosophor::nr::app::VlFoodDetector> detector;
+    // 营养富化装饰器（包住 VL 检测器；知识库不可用时不包 = 行为与今天一致）
+    std::unique_ptr<prosophor::nr::app::NutritionEnrichingDetector> enriched_detector;
+    std::unique_ptr<prosophor::nr::app::MealMonitor> monitor;
+    // 场景 FSM（帧差运动；随相机帧驱动，与 VL 懒装配无关）——"自动起止餐"核心
+    std::unique_ptr<prosophor::nr::infra::SceneMonitor> scene_monitor;
+    if (camera_ok) {
+        prosophor::nr::infra::MotionConfig motion_cfg;
+        motion_cfg.pixel_threshold = config.camera.motion_pixel_threshold;
+        scene_monitor = std::make_unique<prosophor::nr::infra::SceneMonitor>(
+            prosophor::nr::domain::MakeHoldThresholds(config.camera.interval_ms),
+            motion_cfg);
+    }
+    // 就餐会话账本（用餐中→餐后 之间的累计，餐后小结用）
+    prosophor::nr::app::MealJournal journal;
+    prosophor::nr::app::ProactiveAnnouncer announcer({voice_cfg.speak_min_gap_ms});
+
+    // 营养知识库（菜品 -> 每份营养）：加载失败只降级（播报不含热量），不阻断
+    std::optional<prosophor::nr::app::DishNutritionTable> nutrition_table;
+    {
+        const std::string nutrition_path = ResolveNutritionFile(config.nutribot);
+        std::string nutrition_error;
+        auto loaded =
+            prosophor::nr::app::DishNutritionTable::LoadFromFile(nutrition_path, nutrition_error);
+        if (loaded.has_value()) {
+            if (loaded->skipped_entries() > 0) {
+                LOG_WARN("nutribot: 营养库跳过坏条目 {} 条（{}）",
+                         loaded->skipped_entries(), nutrition_path.c_str());
+            }
+            LOG_INFO("nutribot: 营养库已加载 {} 道菜（{}）", loaded->size(),
+                     nutrition_path.c_str());
+            nutrition_table = std::move(loaded);
+        } else {
+            LOG_WARN("nutribot: 营养库不可用（{}）—— 播报不含热量", nutrition_error.c_str());
+        }
+    }
+
+    // 饭点表（非法窗口跳过并告警 —— 配置错不该拦住常驻回路）
+    prosophor::nr::app::MealSchedule schedule;
+    for (const auto& window : config.meal.windows) {
+        if (!schedule.AddWindow(window.name, window.start, window.end)) {
+            LOG_WARN("nutribot: 饭点窗口非法已跳过：{} {}-{}", window.name.c_str(),
+                     window.start.c_str(), window.end.c_str());
+        }
+    }
+    LOG_INFO("nutribot: 感知路 {}（摄像头 {} / 场景 FSM {} / 桩成员「{}」/ 饭点 {} 段 / 营养库 {} 道）",
+             camera_ok ? "待命，VL 就绪后自动开看" : "停用",
+             camera_ok ? "ok" : "失败",
+             scene_monitor != nullptr ? "已接" : "未接",
+             stub_vision.member_name().c_str(), schedule.windows().size(),
+             nutrition_table.has_value() ? nutrition_table->size() : 0);
+
+    const std::string session_id = engine.CreateSession("nutribot", "常驻语音会话");
+    LOG_INFO("nutribot 常驻回路已启动：采集={} 播放={} 会话={}",
+             voice_cfg.capture_device.c_str(), voice_cfg.playback_device.c_str(),
+             session_id.c_str());
+    LOG_INFO("  >>> 对着麦克风说一句话，或把一道菜放到摄像头前试试（Ctrl-C 退出）");
+
+    // ── 采集线程：一次排空可用数据 → 按 30ms 切帧（带跨读余数）→ 喂 VAD ──
+    std::thread capture_thread([&] {
+        constexpr size_t frame_samples = 480;    // 30ms @16k，与 VAD 帧长一致
+        std::vector<int16_t> buffer(4800);       // 一次最多取 300ms（抗调度抖动）
+        std::vector<int16_t> pending;            // 不足一帧的余数，跨读续接
+        int discarded_frames = 0;
+        while (!g_stop.load()) {
+            const int got = capture.ReadFrame(buffer.data(),
+                                              static_cast<int>(buffer.size()), 100);
+            if (got <= 0) {
+                continue;
+            }
+            pending.insert(pending.end(), buffer.begin(), buffer.begin() + got);
+            size_t offset = 0;
+            while (offset + frame_samples <= pending.size()) {
+                if (discarded_frames < voice_cfg.warmup_discard_frames) {
+                    ++discarded_frames;   // 设备唤醒期可能是数字静音（audio_io.h 已知坑）
+                } else {
+                    voice.FeedFrame(pending.data() + offset, frame_samples);
+                }
+                offset += frame_samples;
+            }
+            pending.erase(pending.begin(),
+                          pending.begin() + static_cast<std::ptrdiff_t>(offset));
+        }
+    });
+
+    // ── 主 tick 四段（唯一 aidgen 调用点）──
+    auto next_tick = std::chrono::steady_clock::now();
+    const auto perception_period = std::chrono::milliseconds(
+        config.camera.interval_ms > 0 ? config.camera.interval_ms : 3000);
+    const auto idle_perception_period = std::chrono::milliseconds(
+        config.camera.idle_interval_ms > 0 ? config.camera.idle_interval_ms : 15000);
+    auto next_perception_at = std::chrono::steady_clock::now();
+    auto next_meal_retry_at = std::chrono::steady_clock::now();
+    auto next_vl_probe_at = std::chrono::steady_clock::now();
+    const auto run_started_at = std::chrono::steady_clock::now();
+    bool vl_probe_warned = false;
+    std::string last_frame_path;                       // 去重：同一帧只感知一次
+    std::string last_scene_frame_path;                 // 场景节拍去重（④ 段）
+    std::string current_scene_label;                   // 当前场景状态（FSM 标签）
+    bool faces_latest = false;                         // 最近一轮 VL 的"有人"信号
+    bool foods_latest = true;                          // 最近一轮 VL 的"有菜"信号（未知按有）
+    std::string current_meal_name;                     // 上一 tick 所处饭点（空 = 不在窗口）
+    std::optional<std::string> pending_meal_greeting;  // 节流中挂起的饭点问候
+    std::optional<prosophor::nr::app::MealSummary> pending_meal_summary;  // 挂起的餐后小结
+    int tick_count = 0;
+
+    while (!g_stop.load()) {
+        const auto now = std::chrono::steady_clock::now();
+
+        // 感知件懒装配：每 10s 探一次 VL 就绪（三段式异步），就绪才构造检测器/
+        // 监控器；30s 仍不就来一句告警（装载失败/未装配），之后不再刷屏
+        if (camera_ok && monitor == nullptr && now >= next_vl_probe_at) {
+            next_vl_probe_at = now + std::chrono::seconds(10);
+            auto provider =
+                prosophor::LlmProviderRouter::GetInstance().GetProviderByName("aidgen");
+            auto* vl_candidate = dynamic_cast<prosophor::AidGenProvider*>(provider.get());
+            if (vl_candidate != nullptr && vl_candidate->IsLoaded() &&
+                vl_candidate->HasVisionConfig()) {
+                // 开放命名（产品口径）：闭集 66 选 1 实测更差且非餐桌图会误报，
+                // 菜名归一交给 NutritionEnrichingDetector（命中即换规范名）
+                detector = std::make_unique<prosophor::nr::app::VlFoodDetector>(
+                    MakeAidgenVisionBackend(vl_candidate, nullptr, nullptr));
+                // 营养富化装饰器：知识库可用才包（包住 VL 检测器后，规则引擎与
+                // 账本拿到的菜就带每份营养；知识库缺失则行为与接库前完全一致）
+                prosophor::nr::app::FoodDetectorPort* detector_port = detector.get();
+                if (nutrition_table.has_value()) {
+                    enriched_detector = std::make_unique<
+                        prosophor::nr::app::NutritionEnrichingDetector>(
+                        detector.get(), &*nutrition_table);
+                    detector_port = enriched_detector.get();
+                }
+                monitor = std::make_unique<prosophor::nr::app::MealMonitor>(
+                    &stub_vision, &members, nullptr, scene_monitor.get(), detector_port);
+                LOG_INFO("nutribot: VL 就绪，感知路启用（后台装载耗时 {:.1f}s）",
+                         std::chrono::duration<double>(now - run_started_at).count());
+            } else if (!vl_probe_warned && now - run_started_at > std::chrono::seconds(30)) {
+                vl_probe_warned = true;
+                LOG_WARN("nutribot: VL 30s 未就绪（aidgen {}），看菜保持停用：{}",
+                         vl_candidate == nullptr
+                             ? "未装配"
+                             : (vl_candidate->IsLoading() ? "装载中" : "装载失败"),
+                         vl_candidate == nullptr ? "" : vl_candidate->GetLoadError().c_str());
+            }
+        }
+
+        // ④ 场景节拍：每个新相机帧驱动一次（纯 opencv ~30ms，不耗 NPU）——
+        // 刻意不受 !speaking 门控：播报期场景照常推进，否则"安静 90s"这类
+        // 时间常数会被语音活动悄悄拉长；也要比 VL 快，起餐探测才不被慢节拍吃掉
+        if (scene_monitor != nullptr) {
+            const std::string frame_path = camera.LatestFrame();
+            if (!frame_path.empty() && frame_path != last_scene_frame_path) {
+                last_scene_frame_path = frame_path;
+                const prosophor::nr::app::ImageFrame frame{frame_path};
+                const std::string previous_label = current_scene_label;
+                current_scene_label =
+                    scene_monitor->update(&frame, faces_latest, foods_latest);
+                if (current_scene_label != previous_label) {
+                    LOG_INFO("[场景] {} → {}（运动 {:.3f} / 人脸 {} / 菜 {}，累计转移 {}）",
+                             previous_label.empty() ? "（启动）" : previous_label.c_str(),
+                             current_scene_label.c_str(), scene_monitor->last_motion_ratio(),
+                             faces_latest ? "有" : "无", foods_latest ? "有" : "无",
+                             scene_monitor->transitions());
+                    // 状态变了立刻看一眼桌面：把"起餐时菜还没被 VL 认出来"的
+                    // 虚惊回落窗口压到一轮 VL 之内（见 scene.cc 的窗口注记）
+                    next_perception_at = now;
+                    if (current_scene_label == "用餐中") {
+                        journal.BeginMeal(now);   // 开饭：开始记这顿的账
+                    } else if (current_scene_label == "餐后") {
+                        if (auto summary = journal.EndMeal(now);
+                            summary.has_value() && config.meal.announce) {
+                            pending_meal_summary = std::move(summary);   // 小节话术稍后播
+                        }
+                    }
+                }
+            }
+        }
+
+        // ① 话轮：用户说话 → 会话回复 → 播报（最高优先）
+        if (!voice.speaking()) {
+            if (auto text = voice.PollUtterance(0)) {
+                LOG_INFO("[用户] {}", text->c_str());
+                const std::string reply = engine.SendUserMessage(session_id, *text);
+                if (reply.empty()) {
+                    LOG_WARN("nutribot: 会话无回复");
+                } else if (prosophor::nr::app::IsSilentReply(reply)) {
+                    // LLM 自主判断不接话（角色 prompt 的沉默约定）：话进了对话
+                    // 上下文，但不开口 —— 桌边闲聊不该句句插嘴
+                    LOG_INFO("[沉默] 判断无需回应，仅记录上下文");
+                } else {
+                    const std::string speech = prosophor::nr::app::SanitizeForSpeech(
+                        prosophor::nr::app::StripSilenceMarker(reply),
+                        voice_cfg.speak_max_chars);
+                    if (!speech.empty()) {
+                        LOG_INFO("[助手] {}", speech.c_str());
+                        voice.Speak(speech);
+                        announcer.NoteConversationSpeech(now);   // 主动播报不追着对话抢麦
+                    }
+                }
+            }
+        }
+
+        // ③ 饭点：进入窗口问候一次（节流中挂起，按感知节拍重试）；排在感知前 ——
+        // 问候是瞬时的，不该排在一次秒级 VL 推理后面。问候承诺"我帮你看看"，
+        // 故与感知同步启用（VL 未就绪时不问候）
+        if (monitor != nullptr && !voice.speaking()) {
+            const auto window = schedule.Lookup(LocalMinutesOfDay());
+            const std::string meal_now = window.has_value() ? window->name : std::string();
+            if (meal_now != current_meal_name) {
+                current_meal_name = meal_now;
+                if (!meal_now.empty()) {
+                    LOG_INFO("[饭点] 进入「{}」窗口", meal_now.c_str());
+                    pending_meal_greeting = meal_now;
+                }
+            }
+            // 饭点问候（受 meal.announce 管：报菜名/禁忌提醒不受它管，那是安全/信息类）
+            if (pending_meal_greeting.has_value() && config.meal.announce &&
+                now >= next_meal_retry_at) {
+                next_meal_retry_at = now + perception_period;
+                const std::string speech = announcer.PlanMealEntry(*pending_meal_greeting, now);
+                if (!speech.empty()) {
+                    LOG_INFO("[主动] {}", speech.c_str());
+                    voice.Speak(speech);
+                    pending_meal_greeting.reset();
+                }
+            }
+            // 餐后小结（进入"餐后"时记账产出；节流中挂起，按感知节拍重试）
+            if (pending_meal_summary.has_value() && now >= next_meal_retry_at) {
+                next_meal_retry_at = now + perception_period;
+                const std::string speech =
+                    announcer.PlanMealSummary(*pending_meal_summary, now);
+                if (!speech.empty()) {
+                    LOG_INFO("[主动] {}", speech.c_str());
+                    const std::string sanitized = prosophor::nr::app::SanitizeForSpeech(
+                        speech, voice_cfg.speak_max_chars);
+                    if (!sanitized.empty()) voice.Speak(sanitized);
+                    pending_meal_summary.reset();
+                }
+            }
+        }
+
+        // ② 感知节拍：有新帧、未在播报、过节拍 → 看菜 → 规则 → 播报计划。
+        // 节拍随场景状态收放：备餐/用餐全速（3s），空闲/餐后放慢（15s）—— VL 是
+        // 板上最大的一块 NPU 开销，桌上没饭时不必每 3 秒看一眼
+        if (monitor != nullptr && !voice.speaking() && now >= next_perception_at) {
+            const std::string frame_path = camera.LatestFrame();
+            if (!frame_path.empty() && frame_path != last_frame_path) {
+                last_frame_path = frame_path;
+                const bool scene_active =
+                    (current_scene_label == "备餐中" || current_scene_label == "用餐中");
+                // 节拍从本轮起点起算（VL 耗时不计入）
+                next_perception_at =
+                    now + (scene_active ? perception_period : idle_perception_period);
+                const prosophor::nr::app::ImageFrame frame{frame_path};
+                const auto pkg = monitor->Tick(&frame);
+                // 场景 FSM 的输入信号取自最近一轮 VL（未答先按"有人有菜"的旧语义）
+                faces_latest = !pkg.members.empty();
+                foods_latest = !pkg.foods.empty();
+                journal.Observe(pkg);   // 用餐中的账：菜品/热量/提醒累计
+                LOG_DEBUG("nutribot: 看菜 -> {} 道: {}", pkg.foods.size(),
+                          JoinFoodNames(pkg.foods).c_str());
+                const std::string speech = announcer.PlanPerception(pkg, now);
+                if (!speech.empty()) {
+                    LOG_INFO("[主动] {}", speech.c_str());
+                    const std::string sanitized = prosophor::nr::app::SanitizeForSpeech(
+                        speech, voice_cfg.speak_max_chars);
+                    if (!sanitized.empty()) voice.Speak(sanitized);
+                }
+            }
+        }
+
+        if (++tick_count % 300 == 0) {   // 每 30s 打点一次统计
+            const auto stats = voice.stats();
+            const auto ann = announcer.stats();
+            LOG_INFO("[统计] 帧={} 句={} 播报={} 丢弃(短/弱/忙)={}/{}/{} ASR空={} | "
+                     "抓帧={} 看菜={} 提醒(播/挂)={}/{} 报菜名={} 饭点={} 小结={} 节流推迟={} | "
+                     "场景={} 转移={} 账本={}",
+                     stats.feed_frames, stats.utterances, stats.spoken,
+                     stats.dropped_short, stats.dropped_lowpeak, stats.dropped_busy,
+                     stats.asr_empty, camera.frame_count(),
+                     detector != nullptr ? detector->query_count() : 0,
+                     ann.reminders_spoken, ann.pending_reminders,
+                     ann.food_announcements, ann.meal_announcements, ann.meal_summaries,
+                     ann.suppressed_by_gap,
+                     current_scene_label.empty() ? "未知" : current_scene_label.c_str(),
+                     scene_monitor != nullptr ? scene_monitor->transitions() : 0,
+                     journal.active() ? "记账中" : "空闲");
+        }
+        next_tick += std::chrono::milliseconds(100);
+        std::this_thread::sleep_until(next_tick);
+    }
+
+    // ── 退出收尾（main 的 std::_Exit 跳过静态析构，顺序敏感）──
+    LOG_INFO("nutribot: 退出中……");
+    capture.Mute(true);
+    if (capture_thread.joinable()) {
+        capture_thread.join();
+    }
+    capture.Close();
+    camera.Stop();      // 抓帧线程先停：此后不再起新的 ffmpeg 抓拍
+    playback.Abort();   // 让在飞的播放立即返回
+    voice.Stop();       // join ASR/TTS worker：此后不再有 SDK 调用
+    prosophor::AsrProviderRouter::GetInstance().DestroyProvider();
+    prosophor::TtsProviderRouter::GetInstance().ReleaseProviders();
+    playback.Close();
+    const auto stats = voice.stats();
+    const auto ann = announcer.stats();
+    LOG_INFO("nutribot: 统计 帧={} 句={} 播报={} 丢弃(短/弱/忙)={}/{}/{} ASR空={} | "
+             "抓帧={} 看菜={} 提醒(播/挂)={}/{} 报菜名={} 饭点={} 小结={} 节流推迟={} | "
+             "场景={} 转移={}",
+             stats.feed_frames, stats.utterances, stats.spoken, stats.dropped_short,
+             stats.dropped_lowpeak, stats.dropped_busy, stats.asr_empty,
+             camera.frame_count(), detector != nullptr ? detector->query_count() : 0,
+             ann.reminders_spoken, ann.pending_reminders, ann.food_announcements,
+             ann.meal_announcements, ann.meal_summaries,
+             ann.suppressed_by_gap,
+             current_scene_label.empty() ? "未知" : current_scene_label.c_str(),
+             scene_monitor != nullptr ? scene_monitor->transitions() : 0);
+    LOG_INFO("nutribot 常驻循环结束");
     return 0;
 }
 

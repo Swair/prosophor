@@ -58,10 +58,12 @@ class FakeScene : public SceneMonitorPort {
 public:
     std::string current = "空桌待机";
     bool last_has_faces = false;
+    bool last_has_foods = true;
     bool forced = false;
 
-    std::string update(FrameRef, bool has_faces) override {
+    std::string update(FrameRef, bool has_faces, bool has_foods) override {
         last_has_faces = has_faces;
+        last_has_foods = has_foods;
         return current;
     }
     void force(std::string_view label) override {
@@ -140,7 +142,23 @@ TEST(meal_monitor, fsm_only_output) {
 
     EXPECT_EQ(pkg.scene_state, "备餐中");
     EXPECT_EQ(scene.last_has_faces, false);
+    EXPECT_EQ(scene.last_has_foods, false);   // 无菜品端口 -> 桌上无菜
     EXPECT_TRUE(pkg.events.empty());
+}
+
+// 2b) 场景机在场且有菜：has_foods 透传（止餐信号的下游依赖）
+TEST(meal_monitor, scene_receives_has_foods) {
+    FakeVision vision;
+    FakeRepo repo;
+    FakeScene scene;
+    scene.current = "用餐中";
+    FakeFood food;
+    food.foods = {FoodItem("f1", "清炒时蔬")};
+
+    MealMonitor mm(&vision, &repo, nullptr, &scene, &food);
+    const ScenePackage pkg = mm.Tick(nullptr);
+    EXPECT_EQ(pkg.scene_state, "用餐中");
+    EXPECT_EQ(scene.last_has_foods, true);
 }
 
 // 3) 复核轨 cadence + 投票窗：LLM 连续 agree_window 次一致才覆盖 FSM
