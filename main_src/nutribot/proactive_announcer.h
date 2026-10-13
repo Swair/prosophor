@@ -32,7 +32,8 @@ namespace prosophor::nr::app {
 using Clock = std::chrono::steady_clock;
 
 struct AnnouncerTuning {
-    int min_gap_ms = 10000;   // 两次播报最小间隔（含用户话轮回复）
+    int min_gap_ms = 10000;   // 一般主动播报最小间隔（报菜名/小结/问候）
+    int warn_gap_ms = 2000;   // 警告级（禁忌/过敏）最小间隔：安全优先，就近播
 };
 
 class ProactiveAnnouncer {
@@ -63,7 +64,7 @@ public:
     Stats stats() const;
 
 private:
-    bool GapElapsed(Clock::time_point now) const;
+    bool GapElapsed(Clock::time_point now, int gap_ms) const;
     void NoteSpoken(Clock::time_point now);
     // 撤桌登记清理：挂起提醒与已播登记中，菜品不在桌上的条目作废
     void DropVanished(const std::set<std::string>& food_names);

@@ -1,6 +1,7 @@
 // ProactiveAnnouncer 实现 —— 主动播报去重/节流/组话术（纯逻辑）
 #include "proactive_announcer.h"
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 
@@ -131,11 +132,11 @@ std::string FoodSetKey(const std::vector<prosophor::nr::domain::FoodItem>& foods
 ProactiveAnnouncer::ProactiveAnnouncer(AnnouncerTuning tuning)
     : tuning_(tuning) {}
 
-bool ProactiveAnnouncer::GapElapsed(Clock::time_point now) const {
+bool ProactiveAnnouncer::GapElapsed(Clock::time_point now, int gap_ms) const {
     if (!last_spoke_at_.has_value()) return true;
     const auto elapsed_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(now - *last_spoke_at_);
-    return elapsed_ms.count() >= tuning_.min_gap_ms;
+    return elapsed_ms.count() >= gap_ms;
 }
 
 void ProactiveAnnouncer::NoteSpoken(Clock::time_point now) {
@@ -178,10 +179,12 @@ std::string ProactiveAnnouncer::PlanPerception(
         if (pkg.foods.empty()) {
             announced_food_key_.clear();   // 撤桌静默记账：下一餐上菜重新报菜名
         }
-        for (const auto& event : pkg.events) {
-            if (notified_.insert({event.member_name, event.food}).second) {
-                pending_reminders_.push_back(event);
-            }
+    }
+    // 提醒**不等两轮稳定**：禁忌/过敏是安全项，看到即排队（重复由 notified_ 去重、
+    // 撤桌由 DropVanished 作废）—— 代价是 VL 单轮抖动会出一条误报，用误触发率量化
+    for (const auto& event : pkg.events) {
+        if (notified_.insert({event.member_name, event.food}).second) {
+            pending_reminders_.push_back(event);
         }
     }
 
@@ -193,8 +196,12 @@ std::string ProactiveAnnouncer::PlanPerception(
         return {};
     }
 
-    // 3) 节流：挂起提醒不丢，等窗口过去补播
-    if (!GapElapsed(now)) {
+    // 3) 节流：挂起提醒不丢，等窗口过去补播。警告级用短窗（warn_gap_ms）就近播，
+    //    一般播报（报菜名/小结）用 10s 长窗
+    const bool has_warn = std::any_of(
+        pending_reminders_.begin(), pending_reminders_.end(),
+        [](const prosophor::nr::domain::ReminderEvent& e) { return e.level == "warn"; });
+    if (!GapElapsed(now, has_warn ? tuning_.warn_gap_ms : tuning_.min_gap_ms)) {
         ++stats_.suppressed_by_gap;
         stats_.pending_reminders = static_cast<int>(pending_reminders_.size());
         return {};
@@ -208,7 +215,7 @@ std::string ProactiveAnnouncer::PlanPerception(
         stats_.pending_reminders = 0;
         if (spoken_count == 0) return {};   // 事件无话术（规则引擎异常产物）：清掉不作声
         stats_.reminders_spoken += spoken_count;
-        announced_food_key_ = settled_food_key_;   // 提醒已带菜名语境，本轮不再单独报菜名
+        announced_food_key_ = food_key;   // 提醒已带菜名语境，本轮/本轮稳定后都不再单独报菜名
         NoteSpoken(now);
         return text;
     }
@@ -223,8 +230,8 @@ std::string ProactiveAnnouncer::PlanPerception(
 
 std::string ProactiveAnnouncer::PlanMealSummary(const MealSummary& summary,
                                                 Clock::time_point now) {
-    // 与其它主动话源同一节流：刚回答完用户/刚报过菜时不抢麦，等窗口过去补播
-    if (!GapElapsed(now)) {
+    // 与其它一般播报同一节流（10s 长窗）：刚回答完用户/刚报过菜时不抢麦
+    if (!GapElapsed(now, tuning_.min_gap_ms)) {
         ++stats_.suppressed_by_gap;
         return {};
     }
@@ -238,7 +245,7 @@ std::string ProactiveAnnouncer::PlanMealSummary(const MealSummary& summary,
 std::string ProactiveAnnouncer::PlanMealEntry(const std::string& meal_name,
                                               Clock::time_point now) {
     if (meal_name.empty()) return {};
-    if (!GapElapsed(now)) {
+    if (!GapElapsed(now, tuning_.min_gap_ms)) {
         ++stats_.suppressed_by_gap;
         return {};
     }

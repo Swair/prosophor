@@ -221,7 +221,9 @@
   "camera": {
     "device": "/dev/video2",
     "output_dir": "/tmp/prosophor/nutribot_camera",
-    "interval_ms": 3000,
+    "interval_ms": 1500,
+    "scene_interval_ms": 3000,
+    "perception_interval_ms": 3000,
     "idle_interval_ms": 15000,
     "timeout_ms": 8000,
     "keep_frames": 3,

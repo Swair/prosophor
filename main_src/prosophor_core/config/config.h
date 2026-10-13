@@ -299,8 +299,10 @@ struct VoiceConfig {
 struct CameraConfig {
     std::string device = "/dev/video2";                          // v4l2 节点（Astra Pro 板上为 video2）
     std::string output_dir = "/tmp/prosophor/nutribot_camera";   // 帧落盘目录
-    int interval_ms = 3000;                                      // 抓帧节拍（≈ 用餐态感知节拍）
-    int idle_interval_ms = 15000;                                // 空闲/餐后态的感知（VL）节拍
+    int interval_ms = 1500;                                      // 抓帧节拍（帧新鲜度；抓拍本身 ~1.2s）
+    int scene_interval_ms = 3000;                                // 场景判定节拍（FSM 的时间基准）
+    int perception_interval_ms = 3000;                           // 看菜（VL）节拍（用餐/备餐态）
+    int idle_interval_ms = 15000;                                // 空闲/餐后态的看菜（VL）节拍
     int timeout_ms = 8000;                                       // 单次抓拍超时（含设备唤醒）
     int keep_frames = 3;                                         // 落盘保留帧数（防 VL 读时被删）
     // 场景帧差的像素差二值化阈值（0-255）：静态画面噪声高（过曝/自动曝光泵动）

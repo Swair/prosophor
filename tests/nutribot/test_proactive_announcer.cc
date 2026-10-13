@@ -113,21 +113,33 @@ TEST(announcer, cleared_table_reannounces_next_meal) {
     EXPECT_EQ(announcer.stats().food_announcements, 2);
 }
 
-TEST(announcer, reminder_emitted_once_and_takes_priority) {
+TEST(announcer, reminder_fires_on_first_sighting_and_only_once) {
+    // 警告级不等两轮稳定：第一轮就播（安全优先，兑现"放菜到播报"低时延）
     ProactiveAnnouncer announcer;
     const auto pkg = MakePackage({"花生酱拌面"}, {TabooEvent("小明", "花生酱拌面")});
-    EXPECT_EQ(announcer.PlanPerception(pkg, At(0)), std::string(""));   // 未稳定
-    const std::string speech = announcer.PlanPerception(pkg, At(3));    // 稳定 -> 提醒
+    const std::string speech = announcer.PlanPerception(pkg, At(0));
     EXPECT_TRUE(Contains(speech, "小明"));
     EXPECT_TRUE(Contains(speech, "花生酱拌面"));
     EXPECT_EQ(announcer.stats().reminders_spoken, 1);
-    // 同事件不再重复（后续 tick 静默）
+
+    // 同事件不再重复（后续 tick 静默，含稳定后的报菜名也不重复——提醒已带菜名语境）
+    EXPECT_EQ(announcer.PlanPerception(pkg, At(3)), std::string(""));
     EXPECT_EQ(announcer.PlanPerception(pkg, At(6)), std::string(""));
-    EXPECT_EQ(announcer.PlanPerception(pkg, At(9)), std::string(""));
+}
+
+TEST(announcer, warn_uses_short_gap_after_other_speech) {
+    ProactiveAnnouncer announcer;   // 默认 warn_gap_ms=2000
+    EXPECT_TRUE(Contains(announcer.PlanMealEntry("晚餐", At(0)), "晚餐"));
+
+    const auto pkg = MakePackage({"花生酱拌面"}, {TabooEvent("小明", "花生酱拌面")});
+    EXPECT_EQ(announcer.PlanPerception(pkg, At(1)), std::string(""));   // 1s < 2s 警告窗
+    const std::string speech = announcer.PlanPerception(pkg, At(3));    // 3s > 2s -> 播
+    EXPECT_TRUE(Contains(speech, "花生酱拌面"));
 }
 
 TEST(announcer, reminder_pending_through_gap_then_spoken) {
-    ProactiveAnnouncer announcer;
+    // 本用例测"挂起不丢"的长窗行为：把警告窗也设成 10s
+    ProactiveAnnouncer announcer(AnnouncerTuning{10000, 10000});
     // 先播一句饭点问候占掉节流窗口
     EXPECT_TRUE(Contains(announcer.PlanMealEntry("午餐", At(0)), "午餐"));
 
@@ -143,7 +155,7 @@ TEST(announcer, reminder_pending_through_gap_then_spoken) {
 }
 
 TEST(announcer, pending_reminder_dropped_when_food_leaves_table) {
-    ProactiveAnnouncer announcer;
+    ProactiveAnnouncer announcer(AnnouncerTuning{10000, 10000});
     EXPECT_TRUE(Contains(announcer.PlanMealEntry("午餐", At(0)), "午餐"));
 
     const auto pkg = MakePackage({"花生酱拌面"}, {TabooEvent("小明", "花生酱拌面")});

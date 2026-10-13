@@ -1113,13 +1113,18 @@ int NutriBotApp::RunResident() {
     // 营养富化装饰器（包住 VL 检测器；知识库不可用时不包 = 行为与今天一致）
     std::unique_ptr<prosophor::nr::app::NutritionEnrichingDetector> enriched_detector;
     std::unique_ptr<prosophor::nr::app::MealMonitor> monitor;
-    // 场景 FSM（帧差运动；随相机帧驱动，与 VL 懒装配无关）——"自动起止餐"核心
+    // 场景 FSM（帧差运动；按场景节拍驱动，与 VL 懒装配无关）——"自动起止餐"核心。
+    // 阈值按 scene_interval_ms 折算：帧更勤（抓帧 1.5s）但判定节拍固定 3s，
+    // 时间常数在两个节拍下都准（VL 阻塞主循环时判定节拍自然拉长到 3~4s，同量级）
     std::unique_ptr<prosophor::nr::infra::SceneMonitor> scene_monitor;
+    const auto scene_period = std::chrono::milliseconds(
+        config.camera.scene_interval_ms > 0 ? config.camera.scene_interval_ms : 3000);
     if (camera_ok) {
         prosophor::nr::infra::MotionConfig motion_cfg;
         motion_cfg.pixel_threshold = config.camera.motion_pixel_threshold;
         scene_monitor = std::make_unique<prosophor::nr::infra::SceneMonitor>(
-            prosophor::nr::domain::MakeHoldThresholds(config.camera.interval_ms),
+            prosophor::nr::domain::MakeHoldThresholds(
+                static_cast<int>(scene_period.count())),
             motion_cfg);
     }
     // 就餐会话账本（用餐中→餐后 之间的累计，餐后小结用）
@@ -1197,10 +1202,12 @@ int NutriBotApp::RunResident() {
     // ── 主 tick 四段（唯一 aidgen 调用点）──
     auto next_tick = std::chrono::steady_clock::now();
     const auto perception_period = std::chrono::milliseconds(
-        config.camera.interval_ms > 0 ? config.camera.interval_ms : 3000);
+        config.camera.perception_interval_ms > 0 ? config.camera.perception_interval_ms
+                                                 : 3000);
     const auto idle_perception_period = std::chrono::milliseconds(
         config.camera.idle_interval_ms > 0 ? config.camera.idle_interval_ms : 15000);
     auto next_perception_at = std::chrono::steady_clock::now();
+    auto next_scene_at = std::chrono::steady_clock::now();
     auto next_meal_retry_at = std::chrono::steady_clock::now();
     auto next_vl_probe_at = std::chrono::steady_clock::now();
     const auto run_started_at = std::chrono::steady_clock::now();
@@ -1254,26 +1261,25 @@ int NutriBotApp::RunResident() {
             }
         }
 
-        // ④ 场景节拍：每个新相机帧驱动一次（纯 opencv ~30ms，不耗 NPU）——
-        // 刻意不受 !speaking 门控：播报期场景照常推进，否则"安静 90s"这类
-        // 时间常数会被语音活动悄悄拉长；也要比 VL 快，起餐探测才不被慢节拍吃掉
-        if (scene_monitor != nullptr) {
+        // ④ 场景节拍：按 scene_period 取最新帧判定一次（纯 opencv ~30ms，不耗
+        // NPU）—— 刻意不受 !speaking 门控：播报期场景照常推进，否则"安静 90s"
+        // 这类时间常数会被语音活动悄悄拉长；也要比 VL 快，起餐探测才不被慢节拍吃掉
+        if (scene_monitor != nullptr && now >= next_scene_at) {
             const std::string frame_path = camera.LatestFrame();
             if (!frame_path.empty() && frame_path != last_scene_frame_path) {
                 last_scene_frame_path = frame_path;
+                next_scene_at = now + scene_period;   // 判定节拍固定（抓帧更勤只赚新鲜度）
                 const prosophor::nr::app::ImageFrame frame{frame_path};
                 const std::string previous_label = current_scene_label;
                 current_scene_label =
                     scene_monitor->update(&frame, faces_latest, foods_latest);
+
                 if (current_scene_label != previous_label) {
                     LOG_INFO("[场景] {} → {}（运动 {:.3f} / 人脸 {} / 菜 {}，累计转移 {}）",
                              previous_label.empty() ? "（启动）" : previous_label.c_str(),
                              current_scene_label.c_str(), scene_monitor->last_motion_ratio(),
                              faces_latest ? "有" : "无", foods_latest ? "有" : "无",
                              scene_monitor->transitions());
-                    // 状态变了立刻看一眼桌面：把"起餐时菜还没被 VL 认出来"的
-                    // 虚惊回落窗口压到一轮 VL 之内（见 scene.cc 的窗口注记）
-                    next_perception_at = now;
                     if (current_scene_label == "用餐中") {
                         journal.BeginMeal(now);   // 开饭：开始记这顿的账
                     } else if (current_scene_label == "餐后") {
@@ -1282,6 +1288,15 @@ int NutriBotApp::RunResident() {
                             pending_meal_summary = std::move(summary);   // 小节话术稍后播
                         }
                     }
+                    // 状态变了立刻看一眼桌面：把"起餐时菜还没被 VL 认出来"的
+                    // 虚惊回落窗口压到一轮 VL 之内（见 scene.cc 的窗口注记）
+                    next_perception_at = now;
+                }
+                // 有动静也把下一轮看菜拉到眼前：空闲态干等 15s 的节拍是"放菜到
+                // 播报"时延的大头（实测 22s 里占 15s）—— 动静过去后自然退回慢节拍
+                if (scene_monitor->last_motion_ratio() >
+                    prosophor::nr::domain::SceneStateMachine::MOTION_LOW) {
+                    if (next_perception_at > now) next_perception_at = now;
                 }
             }
         }
@@ -1352,7 +1367,9 @@ int NutriBotApp::RunResident() {
         // ② 感知节拍：有新帧、未在播报、过节拍 → 看菜 → 规则 → 播报计划。
         // 节拍随场景状态收放：备餐/用餐全速（3s），空闲/餐后放慢（15s）—— VL 是
         // 板上最大的一块 NPU 开销，桌上没饭时不必每 3 秒看一眼
-        if (monitor != nullptr && !voice.speaking() && now >= next_perception_at) {
+        // 刻意不带 !voice.speaking()：播报期麦克风已闭麦、看菜与 TTS 分属两条
+        // 线程，提醒不该因为"机器人正在说话"被推后（播报队列深度 1 丢旧保新）
+        if (monitor != nullptr && now >= next_perception_at) {
             const std::string frame_path = camera.LatestFrame();
             if (!frame_path.empty() && frame_path != last_frame_path) {
                 last_frame_path = frame_path;

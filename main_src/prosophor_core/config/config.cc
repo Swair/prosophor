@@ -511,6 +511,10 @@ CameraConfig CameraConfig::FromJson(const nlohmann::json& json) {
     config.device      = json.value("device", config.device);
     config.output_dir  = json.value("output_dir", config.output_dir);
     config.interval_ms = json.value("interval_ms", config.interval_ms);
+    config.scene_interval_ms =
+        json.value("scene_interval_ms", config.scene_interval_ms);
+    config.perception_interval_ms =
+        json.value("perception_interval_ms", config.perception_interval_ms);
     config.idle_interval_ms = json.value("idle_interval_ms", config.idle_interval_ms);
     config.timeout_ms  = json.value("timeout_ms", config.timeout_ms);
     config.keep_frames = json.value("keep_frames", config.keep_frames);
