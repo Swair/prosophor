@@ -68,20 +68,43 @@ bool DialogStrategy::NeedsCompaction(const std::vector<MessageSchema>& messages,
     return false;
 }
 
+namespace {
+
+// 分字符集估算 token：CJK 码点 ≈ 1 token，其余按 4 字符/token（英文经验值）。
+// 原来一律 chars/4 —— 对中文低估约 4 倍：小上下文模型（nutribot 用 cl2048，
+// 实测 role.context_window=2048）因此迟迟不触发压缩，直到 KV 溢出后模型退化
+// 成复读（实测：约 30 轮后只回 "I."）。
+int EstimateTextTokens(const std::string& text) {
+    size_t multibyte = 0;   // 多字节码点数（UTF-8：非续接字节各计一个码点）
+    size_t singlebyte = 0;
+    for (const unsigned char c : text) {
+        if ((c & 0xC0) == 0x80) continue;
+        if (c >= 0x80) {
+            ++multibyte;
+        } else {
+            ++singlebyte;
+        }
+    }
+    return static_cast<int>(multibyte + singlebyte / kCharsPerTokenEstimate);
+}
+
+}  // namespace
+
 int DialogStrategy::EstimateTokens(const std::vector<MessageSchema>& messages) {
-    int total_chars = 0;
+    int total = 0;
     for (const auto& msg : messages) {
         for (const auto& block : msg.content) {
             if (block.type == "text" || block.type == "thinking") {
-                total_chars += static_cast<int>(block.text.size());
+                total += EstimateTextTokens(block.text);
             } else if (block.type == "tool_use") {
-                total_chars += static_cast<int>(block.name.size() + block.input.dump().size());
+                total += EstimateTextTokens(block.name) +
+                         EstimateTextTokens(block.input.dump());
             } else if (block.type == "tool_result") {
-                total_chars += static_cast<int>(block.content.size());
+                total += EstimateTextTokens(block.content);
             }
         }
     }
-    return total_chars / kCharsPerTokenEstimate;
+    return total;
 }
 
 std::vector<MessageSchema> DialogStrategy::KeepRecentMessages(
@@ -285,7 +308,7 @@ DialogStrategy::Result DialogStrategy::CompactWithLLM(
     }
 
     int original_tokens = EstimateTokens(old_messages);
-    int summary_tokens = summary.empty() ? 0 : static_cast<int>(summary.size()) / kCharsPerTokenEstimate;
+    int summary_tokens = EstimateTextTokens(summary);   // 同口径（CJK 按码点）
     result.tokens_saved = original_tokens - summary_tokens;
 
     compaction_count_++;
