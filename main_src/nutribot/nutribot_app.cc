@@ -1314,6 +1314,9 @@ int NutriBotApp::RunResident() {
     const auto idle_perception_period = std::chrono::milliseconds(
         config.camera.idle_interval_ms > 0 ? config.camera.idle_interval_ms : 15000);
     auto next_perception_at = std::chrono::steady_clock::now();
+    // 菜品连续命中计数：VL 对非餐桌画面会编菜名（且每帧不同），单帧结果直接
+    // 播报会造成"明明没菜也报菜"。同一道菜连续两帧出现才采信。
+    std::map<std::string, int> food_streak;
     auto next_scene_at = std::chrono::steady_clock::now();
     auto next_meal_retry_at = std::chrono::steady_clock::now();
     auto next_vl_probe_at = std::chrono::steady_clock::now();
@@ -1574,10 +1577,22 @@ int NutriBotApp::RunResident() {
                     now + (scene_active ? perception_period : idle_perception_period);
                 const prosophor::nr::app::ImageFrame frame{frame_path};
                 const auto pkg = monitor->Tick(&frame);
+                // 幻觉抑制：本帧出现过的菜记连续计数，连续 ≥2 帧才进入场景包
+                std::map<std::string, int> next_streak;
+                for (const auto& food : pkg.foods) {
+                    const auto it = food_streak.find(food.name);
+                    next_streak[food.name] = (it == food_streak.end() ? 1 : it->second + 1);
+                }
+                food_streak = std::move(next_streak);
+                auto stable_pkg = pkg;
+                stable_pkg.foods.clear();
+                for (const auto& food : pkg.foods) {
+                    if (food_streak[food.name] >= 2) stable_pkg.foods.push_back(food);
+                }
                 // 场景 FSM 的输入信号取自最近一轮 VL（未答先按"有人有菜"的旧语义）
-                faces_latest = !pkg.members.empty();
-                foods_latest = !pkg.foods.empty();
-                journal.Observe(pkg);   // 用餐中的账：菜品/热量/提醒累计
+                faces_latest = !stable_pkg.members.empty();
+                foods_latest = !stable_pkg.foods.empty();
+                journal.Observe(stable_pkg);   // 用餐中的账：菜品/热量/提醒累计
                 // 本餐在场成员认定（识别到谁记谁；开餐清空、跨轮累积）
                 for (const auto& member : pkg.members) {
                     if (!member.name.empty()) active_diner_names.insert(member.name);
@@ -1588,12 +1603,13 @@ int NutriBotApp::RunResident() {
                              active_diner_names.empty() ? "无" : JoinNames(active_diner_names).c_str());
                     visitor_mode = visitor_now;
                 }
-                LOG_DEBUG("nutribot: 看菜 -> {} 道: {}", pkg.foods.size(),
-                          JoinFoodNames(pkg.foods).c_str());
+                LOG_DEBUG("nutribot: 看菜 -> 稳定 {} 道（原始 {}）: {}",
+                          stable_pkg.foods.size(), pkg.foods.size(),
+                          JoinFoodNames(stable_pkg.foods).c_str());
                 // 访客静默：识别到谁都不认识的画面（客人/无人）时不主动开口；
                 // PlanPerception 照喂 —— 内部登记/去重状态要随感知推进
                 const std::string speech =
-                    visitor_mode ? std::string() : announcer.PlanPerception(pkg, now);
+                    visitor_mode ? std::string() : announcer.PlanPerception(stable_pkg, now);
                 if (visitor_mode) ++silence_skipped;
                 if (!speech.empty()) {
                     LOG_INFO("[主动] {}", speech.c_str());
