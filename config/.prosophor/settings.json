@@ -133,15 +133,15 @@
         "aidgen": {
             "api_key": "local",
             "base_url": "local",
-            "config_file": "/home/aidlux/models/qwen3vl_4b/qnn240_qcs8550_cl2048/aidgen_config.json",
+            "config_file": "/home/aidlux/models/qwen3vl_8b/qnn248_qcs8550_cl4096/aidgen_config.json",
             "backend": "auto",
-            "vit_backend": "qnn240",
+            "vit_backend": "qnn248",
             "models": [
                 {
-                    "model": "Qwen3-VL-4B-Instruct",
+                    "model": "Qwen3-VL-8B-Instruct",
                     "temperature": 0.3,
                     "max_tokens": 256,
-                    "context_window": 2048
+                    "context_window": 4096
                 }
             ]
         }

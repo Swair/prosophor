@@ -6,7 +6,7 @@
     "spritesheet": "",
     "llm": {
         "protocal": "aidgen",
-        "model": "Qwen3-VL-4B-Instruct",
+        "model": "Qwen3-VL-8B-Instruct",
         "skills_white_list": [],
         "tools_white_list": [
             "robot_face",
