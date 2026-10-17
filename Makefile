@@ -421,3 +421,28 @@ test_nutribot:
 clean_nutribot:
 	rm -rf $(BUILD_DIR_NUTRIBOT)
 .PHONY: clean_nutribot
+
+# ==============================================================================
+# NutriBot 端侧模型切换（改 settings/角色 JSON，重启进程生效）
+#   make model_8b     - Qwen3-VL-8B（qnn248，默认；识别最强，较慢）
+#   make model_3b     - Qwen2.5-VL-3B（qnn236；响应最快，回退用）
+#   make model_4b     - Qwen3-VL-4B（qnn240；视觉需 aidlite-qnn240>=2.5.1）
+#   make model_status - 显示当前模型
+# ==============================================================================
+switch_nutribot_model ?= python3 $(PROJECT_DIR)/scripts/switch_nutribot_model.py
+
+model_3b:
+	$(switch_nutribot_model) 3b
+.PHONY: model_3b
+
+model_4b:
+	$(switch_nutribot_model) 4b
+.PHONY: model_4b
+
+model_8b:
+	$(switch_nutribot_model) 8b
+.PHONY: model_8b
+
+model_status:
+	$(switch_nutribot_model) status
+.PHONY: model_status
