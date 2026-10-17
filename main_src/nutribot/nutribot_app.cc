@@ -556,6 +556,20 @@ bool IsMeaningfulUtterance(const std::string& text) {
     return cjk >= 2;
 }
 
+// 定向话轮判定：只有提问或命令才值得送进 LLM。环境里的电视/有声书多是陈述句，
+// 送进去只会得到（沉默）并污染历史 —— 模型会从自己的历史里模仿"沉默"模式，
+// 连真问题也开始沉默（实测 4B：连续两个营养问题重问两次仍全沉默）。
+bool IsDirectedUtterance(const std::string& text) {
+    if (IsActionCommand(text)) return true;
+    static const std::vector<std::string> question_markers = {
+        "吗", "？", "?", "什么", "怎么", "哪", "推荐", "可以",
+        "多少", "是否", "能不能", "要不要", "怎么样"};
+    for (const auto& marker : question_markers) {
+        if (text.find(marker) != std::string::npos) return true;
+    }
+    return false;
+}
+
 // 电机是锁存语义：一次 move 指令后固件保持目标速度，只有显式 stop 才停。
 // 上一实例若在"发方向 → 睡 1 秒 → 发 stop"之间崩溃，stop 就永远没机会发出 ——
 // 启动与退出时各清一次，防止带着锁存目标无人看管地跑。
@@ -1404,6 +1418,10 @@ int NutriBotApp::RunResident() {
             if (auto text = voice.PollUtterance(0)) {
                 if (!IsMeaningfulUtterance(*text)) {
                     LOG_INFO("[忽略] 无有效中文（{}）", text->c_str());
+                    continue;
+                }
+                if (!IsDirectedUtterance(*text)) {
+                    LOG_INFO("[忽略] 非定向话轮（{}）", text->c_str());
                     continue;
                 }
                 LOG_INFO("[用户] {}", text->c_str());
