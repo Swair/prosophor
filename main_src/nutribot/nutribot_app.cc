@@ -820,12 +820,12 @@ void DemoFoodRecognition(prosophor::nr::infra::JsonMemberRepository& repo) {
         LOG_INFO("  （营养库不可用，退化为开放命名: {}）", nutrition_error.c_str());
     }
 
-    // 产品口径 = 开放命名（实测见 vl_food_detector.h 的对照结论：66 选 1 会让
-    // 小 VL 模型退化成"抄列表"，且非餐桌图会误报库内菜名）；闭集保留为基准对照。
+    // 产品口径已切到闭集（8B 基准：闭集严格 Top-1 22/72，开放命名 2/72；
+    // 3B 时代"闭集退化成抄列表"的结论不再适用）。本节保留两种模式对照。
     // min_interval=0：本节要验的是"同帧缓存"，不是节流窗口（真实帧流用默认 3s）
     prosophor::nr::app::VlFoodDetector detector(backend, /*min_interval_seconds=*/0.0);
     prosophor::nr::app::ImageFrame frame{image};
-    LOG_INFO("  闭集候选 {} 道（产品口径=开放命名；闭集仅作基准对照）", candidates.size());
+    LOG_INFO("  闭集候选 {} 道（产品口径=闭集；开放命名保留为对照）", candidates.size());
 
     LOG_INFO("  -- 识别（真调模型）--");
     // 诊断：同一张图先问开放式问题 —— 模型若答得出内容，说明图进了模型，问题在提问；
@@ -923,11 +923,11 @@ void DemoFoodRecognition(prosophor::nr::infra::JsonMemberRepository& repo) {
                          top5_hit, total_truth, blank, files.size());
             };
 
-            bench("开放命名（产品口径）", detector);
+            bench("开放命名（对照）", detector);
             if (!candidates.empty()) {
                 prosophor::nr::app::VlFoodDetector closed_detector(
                     backend, /*min_interval_seconds=*/0.0, candidates);
-                bench("闭集候选（对照）", closed_detector);
+                bench("闭集候选（产品口径）", closed_detector);
             }
         }
     }
@@ -1347,10 +1347,19 @@ int NutriBotApp::RunResident() {
             auto* vl_candidate = dynamic_cast<prosophor::AidGenProvider*>(provider.get());
             if (vl_candidate != nullptr && vl_candidate->IsLoaded() &&
                 vl_candidate->HasVisionConfig()) {
-                // 开放命名（产品口径）：闭集 66 选 1 实测更差且非餐桌图会误报，
-                // 菜名归一交给 NutritionEnrichingDetector（命中即换规范名）
+                // 闭集模式（知识库口径）：候选来自营养库菜名 —— assets/labels.tsv
+                // 的 59 个"知识库种子"菜名被营养库 66 道全覆盖。8B 基准：闭集
+                // 严格 Top-1 22/72，开放命名只有 2/72（3B 时代"闭集更差"的结论
+                // 不再适用）；非餐桌画面的闭集误报由连续两帧稳定性门控兜底。
+                std::vector<std::string> candidates;
+                if (nutrition_table.has_value()) {
+                    for (const auto& dish : nutrition_table->dishes()) {
+                        candidates.push_back(dish.name);
+                    }
+                }
                 detector = std::make_unique<prosophor::nr::app::VlFoodDetector>(
-                    MakeAidgenVisionBackend(vl_candidate, nullptr, nullptr));
+                    MakeAidgenVisionBackend(vl_candidate, nullptr, nullptr),
+                    /*min_interval_seconds=*/3.0, std::move(candidates));
                 // 营养富化装饰器：知识库可用才包（包住 VL 检测器后，规则引擎与
                 // 账本拿到的菜就带每份营养；知识库缺失则行为与接库前完全一致）
                 prosophor::nr::app::FoodDetectorPort* detector_port = detector.get();
