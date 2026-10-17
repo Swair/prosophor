@@ -19,6 +19,7 @@
 #include "managers/permission_manager.h"
 #include "mcp/mcp_client.h"
 #include "tools/command_tools/background_run_tool.h"
+#include "tools/robot_control_tools.h"
 
 namespace prosophor {
 
@@ -246,6 +247,9 @@ void ToolRegistry::RegisterBuiltinTools() {
 
     // Register MCP tools dynamically
     // RegisterMcpTools();
+
+    // 机器人控制工具（robot.control_enabled=false 时不注册）
+    RegisterRobotControlTools(*this);
 
     LOG_DEBUG("Registered built-in tools", tool_schemas_.size());
 }

@@ -340,6 +340,20 @@ struct NutribotConfig {
     static NutribotConfig FromJson(const nlohmann::json& json);
 };
 
+/// 机器人底盘/舵机控制（远程主控的 HTTP 接口）
+///
+/// 安全默认：enabled=false —— 运动是物理动作，不配就不注册工具。
+/// move_pulse_ms 是固定脉冲（工具内计时自动 stop），模型改不了这个数。
+struct RobotControlConfig {
+    bool enabled = false;                            // 总开关：关则控制工具不注册
+    std::string base_url = "http://192.168.0.202";   // 主控地址（无尾斜杠）
+    int default_speed = 50;                          // speed 缺省值（0~100）
+    int move_pulse_ms = 1000;                        // 每次移动的固定脉冲时长
+    long command_timeout_ms = 2000;                  // 单次 HTTP 超时（毫秒）
+
+    static RobotControlConfig FromJson(const nlohmann::json& json);
+};
+
 /// Configuration for the Web server (multi-user browser frontend)
 /// 独立可执行 prosophor_web 使用;桌面端默认关闭。
 struct WebConfig {
@@ -379,6 +393,7 @@ struct ProsophorConfig {
     CameraConfig camera;
     MealConfig meal;
     NutribotConfig nutribot;
+    RobotControlConfig robot;
     WebConfig web;
     std::vector<LlamacppModelConfig> llamacpp_models;
 

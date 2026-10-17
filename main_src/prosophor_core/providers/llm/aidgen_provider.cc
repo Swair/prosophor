@@ -28,6 +28,7 @@
 #include "common/log_wrapper.h"
 #include "common/string_utils.h"
 #include "common/thread_pool.h"
+#include "providers/llm/tool_call_protocol.h"
 
 namespace prosophor {
 
@@ -73,8 +74,8 @@ static Aidlux::Aidlite::FrameworkType ToAidliteFramework(const std::string& back
     return Aidlux::Aidlite::FrameworkType::TYPE_DEFAULT;
 }
 
-// 按内容块顺序渲染消息体：文本/思考块出文本，图像块在原位出视觉槽位。
-// 用户随时给图 —— 每张图挂在它跟的那条消息上，槽位就落在该消息内。
+// 按内容块顺序渲染消息体：文本/思考块出文本，图像块在原位出视觉槽位，
+// 工具块回放为与提示词约定同构的标签（多跳时模型看到的调用/结果就是它自己的格式）。
 // 纯文本消息的输出与 MessageSchema::text() 完全一致（非 VL 路径零变化）。
 static std::string RenderMessageBody(const MessageSchema& message,
                                      const std::string& vision_start,
@@ -86,6 +87,12 @@ static std::string RenderMessageBody(const MessageSchema& message,
             body += block.text;
         } else if (block.type == "image") {
             body += vision_start + vision_end;
+        } else if (block.type == "tool_use") {
+            if (!body.empty()) body += "\n\n";
+            body += RenderToolCallBlock(block.name, block.input);
+        } else if (block.type == "tool_result") {
+            if (!body.empty()) body += "\n\n";
+            body += RenderToolResultBlock(block.content);
         }
     }
     return body;
@@ -98,6 +105,16 @@ static void StripControlMarkers(std::string& text, const std::string& marker) {
     for (size_t pos = text.find(marker); pos != std::string::npos;
          pos = text.find(marker, pos)) {
         text.erase(pos, marker.size());
+    }
+}
+
+// 端侧 EOS 标记族：Qwen2.5 是 <|im_end|>，Qwen3-VL 是 <|endoftext|>。
+// 只剥配置里的一个会漏 —— 实测 4B 把 "<|endoftext|>" 当正文吐出来，
+// 上层把它当有效回复播报/记录。
+static void StripEndMarkers(std::string& text, const std::string& im_end) {
+    StripControlMarkers(text, im_end);
+    for (const char* marker : {"<|endoftext|>", "<|end|>", "<|eot_id|>"}) {
+        StripControlMarkers(text, marker);
     }
 }
 
@@ -826,7 +843,22 @@ ChatResponse AidGenProvider::ChatStream(
     }
 
     RunInference(encoded, response, callback);
-    FinalizeResponse(response);
+    // 空输出不是合法回复（角色的"不接话"是显式输出「（沉默）」）：小模型偶发
+    // 一上来就吐 EOS，同提示词重生成一次 —— 比上层重问干净（不往对话历史里
+    // 塞第二条 user 消息）。
+    if (response.error_msg.empty() && response.stop_reason != "abort" &&
+        response.content_text.empty()) {
+        LOG_INFO("[aidgen] 空输出，同提示词重生成一次");
+        // 必须先 reset：生成结束的 KV 里带着 EOS，前缀复用会从 EOS 之后续写，
+        // 同提示词只会再吐一次空
+        {
+            std::lock_guard<std::mutex> lock(model_mutex_);
+            if (core_ && core_->generator) core_->generator->reset();
+        }
+        response = ChatResponse{};
+        RunInference(encoded, response, callback);
+    }
+    FinalizeResponse(response, request);
     return response;
 }
 
@@ -853,6 +885,7 @@ std::string AidGenProvider::BuildPrompt(const ChatRequest& request) const {
         if (!system_text.empty()) system_text += "\n";
         system_text += block.text;
     }
+    system_text += BuildToolsPrompt(request.tools);   // 无工具 → 空段，提示词零变化
 
     std::string prompt;
     if (!system_text.empty()) {
@@ -1011,6 +1044,10 @@ bool AidGenProvider::RunInference(
     const EncodedPrompt& encoded,
     ChatResponse& response,
     std::function<void(StreamEvent, std::string)>& callback) {
+    // 提示词全文（debug 级）：模型行为异常时的最终证据 —— 没有它只能猜
+    // "注入没进去"还是"模型跑偏"（同 VL 解析为空回看原话的教训）
+    LOG_DEBUG("[aidgen] Prompt:\n{}", encoded.text.c_str());
+
     std::shared_ptr<AidGenCore> core;
     {
         std::lock_guard<std::mutex> lock(model_mutex_);
@@ -1019,6 +1056,15 @@ bool AidGenProvider::RunInference(
     if (!core || !core->generator) {
         response.error_msg = "aidgen 状态无效";
         return false;
+    }
+
+    // 真 token 数（debug）：上下文边界的最终裁判 —— 压缩器按字符集估算，
+    // 系统提示词与工具段的真实占比只能靠分词器量（小上下文模型实测会溢出退化）
+    if (core->tokenizer) {
+        std::vector<int32_t> tokens;
+        if (core->tokenizer->encode(encoded.text, tokens) == ErrorCode::SUCCESS) {
+            LOG_DEBUG("[aidgen] Prompt tokens: {}", tokens.size());
+        }
     }
 
     // 图集合发生变化时必须清 KV。SDK 的前缀复用只认序列本身，无法感知张量里
@@ -1060,7 +1106,7 @@ bool AidGenProvider::RunInference(
             case GenState::END: {
                 ensure_started();
                 std::string tail = event.text;
-                StripControlMarkers(tail, state->im_end_marker);
+                StripEndMarkers(tail, state->im_end_marker);
                 if (!tail.empty()) {
                     out.AppendText(tail);
                     if (emit) emit(StreamEvent::kContentDelta, tail);
@@ -1096,9 +1142,31 @@ bool AidGenProvider::RunInference(
 }
 
 // 步骤 5：补齐停止原因 —— SDK 未发 END 时兜底
-void AidGenProvider::FinalizeResponse(ChatResponse& response) const {
+// 步骤 5b：生成文本 → 工具调用（协议与解析见 tool_call_protocol.h）。
+// 工具调用从正文剥出后不再回给用户，正文变空即视为纯调用轮。
+void AidGenProvider::FinalizeResponse(ChatResponse& response,
+                                      const ChatRequest& request) const {
+    // 原始响应留证（debug 级）：正文与工具解析的分歧只能靠它裁决
+    LOG_DEBUG("[aidgen] Raw response: [{}] stop_reason={}", response.content_text,
+              response.stop_reason);
     // 兜底：SDK 未走 END 事件时标记仍可能留在正文里
-    StripControlMarkers(response.content_text, cfg_.im_end);
+    StripEndMarkers(response.content_text, cfg_.im_end);
+    if (!request.tools.empty()) {
+        ToolCallParseResult parsed = ParseToolCalls(response.content_text, request.tools);
+        if (parsed.malformed_count > 0) {
+            LOG_WARN("[aidgen] {} malformed tool call block(s) dropped", parsed.malformed_count);
+        }
+        if (!parsed.tool_calls.empty()) {
+            LOG_DEBUG("[aidgen] Parsed {} tool call(s), remaining=[{}]",
+                      parsed.tool_calls.size(), parsed.remaining_text);
+            response.content_text = std::move(parsed.remaining_text);
+            response.tool_calls = std::move(parsed.tool_calls);
+            response.stop_reason = "tool_calls";
+        } else if (parsed.malformed_count > 0) {
+            // 只有坏调用：正文已被剥空 —— 替换掉原始内容，避免坏调用文本被播报
+            response.content_text = std::move(parsed.remaining_text);
+        }
+    }
     if (response.stop_reason.empty() && response.error_msg.empty()) {
         response.stop_reason = "end_turn";
     }

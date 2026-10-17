@@ -122,36 +122,31 @@ namespace {
 const char* const kPuncts[] = {"。", "，", "！", "？", "；", "、", "：", "…", "—",
                                ".", ",", ";", "!", "?", ":", "-"};
 
-// 剥掉首尾的空白与一串标点（"（沉默）。" -> "（沉默）"）
+// 剥掉首尾的空白与**一轮**标点（"（沉默）。" -> "（沉默）"）。
+// 只剥一轮是刻意为之：IsSilentReply 的等值判断需要标记本体完整;
+// 反复剥会把 "（沉默）.-" 这类变体剥成残句，多轮无收益只增误伤面。
 std::string TrimEdges(const std::string& text) {
     std::string out = text;
-    for (;;) {
-        const size_t begin = out.find_first_not_of(" \t\r\n");
-        if (begin == std::string::npos) return {};
-        out.erase(0, begin);
-        out.erase(out.find_last_not_of(" \t\r\n") + 1);
+    const size_t begin = out.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) return {};
+    out.erase(0, begin);
+    out.erase(out.find_last_not_of(" \t\r\n") + 1);
 
-        bool stripped = false;
-        for (const char* punct : kPuncts) {
-            const size_t len = std::string_view(punct).size();
-            if (out.size() >= len && out.compare(0, len, punct) == 0) {
-                out.erase(0, len);
-                stripped = true;
-                break;
-            }
+    for (const char* punct : kPuncts) {
+        const size_t len = std::string_view(punct).size();
+        if (out.size() >= len && out.compare(0, len, punct) == 0) {
+            out.erase(0, len);
+            break;
         }
-        if (!stripped) {
-            for (const char* punct : kPuncts) {
-                const size_t len = std::string_view(punct).size();
-                if (out.size() >= len && out.compare(out.size() - len, len, punct) == 0) {
-                    out.erase(out.size() - len);
-                    stripped = true;
-                    break;
-                }
-            }
-        }
-        if (!stripped) return out;
     }
+    for (const char* punct : kPuncts) {
+        const size_t len = std::string_view(punct).size();
+        if (out.size() >= len && out.compare(out.size() - len, len, punct) == 0) {
+            out.erase(out.size() - len);
+            break;
+        }
+    }
+    return out;
 }
 
 }  // namespace
@@ -170,6 +165,19 @@ std::string StripSilenceMarker(const std::string& text) {
         }
     }
     return out;
+}
+
+bool ShouldAnswerUtterance(const std::string& text) {
+    // 问询词：出现即"在问话"
+    for (const char* token : {"？", "?", "吗", "呢", "怎么", "多少", "什么", "推荐"}) {
+        if (text.find(token) != std::string::npos) return true;
+    }
+    // 营养把关词：即使陈述句，"这汤太咸了"也该接（餐桌管家职责内）
+    for (const char* token : {"热量", "千卡", "卡路里", "糖", "盐", "咸", "油",
+                              "减肥", "禁忌", "过敏", "能吃", "不能吃", "可以吃"}) {
+        if (text.find(token) != std::string::npos) return true;
+    }
+    return false;
 }
 
 std::string SanitizeForSpeech(const std::string& reply, size_t max_chars) {

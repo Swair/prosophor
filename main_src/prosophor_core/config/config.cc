@@ -548,6 +548,16 @@ NutribotConfig NutribotConfig::FromJson(const nlohmann::json& json) {
     return config;
 }
 
+RobotControlConfig RobotControlConfig::FromJson(const nlohmann::json& json) {
+    RobotControlConfig config;
+    config.enabled            = json.value("control_enabled", config.enabled);
+    config.base_url           = json.value("base_url", config.base_url);
+    config.default_speed      = json.value("default_speed", config.default_speed);
+    config.move_pulse_ms      = json.value("move_pulse_ms", config.move_pulse_ms);
+    config.command_timeout_ms = json.value("command_timeout_ms", config.command_timeout_ms);
+    return config;
+}
+
 WebConfig WebConfig::FromJson(const nlohmann::json& json) {
     WebConfig config;
     config.enabled        = json.value("enabled", false);
@@ -702,6 +712,9 @@ ProsophorConfig ProsophorConfig::FromJson(const nlohmann::json& json) {
     }
     if (expanded.contains("nutribot") && expanded["nutribot"].is_object()) {
         config.nutribot = NutribotConfig::FromJson(expanded["nutribot"]);
+    }
+    if (expanded.contains("robot") && expanded["robot"].is_object()) {
+        config.robot = RobotControlConfig::FromJson(expanded["robot"]);
     }
     if (expanded.contains("web") && expanded["web"].is_object()) {
         config.web = WebConfig::FromJson(expanded["web"]);

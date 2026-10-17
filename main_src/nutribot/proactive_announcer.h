@@ -44,11 +44,15 @@ public:
     std::string PlanPerception(const prosophor::nr::domain::ScenePackage& pkg,
                                Clock::time_point now);
 
-    // 饭点进入 -> 问候语；空 = 节流中，调用方保留"待问候"状态下轮重试
-    std::string PlanMealEntry(const std::string& meal_name, Clock::time_point now);
+    // 饭点进入 -> 问候语；空 = 节流中，调用方保留"待问候"状态下轮重试。
+    // salutation 非空时前置直呼（在场单成员成员名），空则保持通用问候
+    std::string PlanMealEntry(const std::string& meal_name, Clock::time_point now,
+                              const std::string& salutation = {});
 
-    // 餐后小结 -> 播报文本；空 = 节流中，调用方挂起等下轮重试
-    std::string PlanMealSummary(const MealSummary& summary, Clock::time_point now);
+    // 餐后小结 -> 播报文本；空 = 节流中，调用方挂起等下轮重试。
+    // salutation 语义同 PlanMealEntry（单成员在场时点名，"简洁数据"档不直呼）
+    std::string PlanMealSummary(const MealSummary& summary, Clock::time_point now,
+                                const std::string& salutation = {});
 
     // 用户话轮播报后刷新节流基准（主动播报不与刚回答完的话抢麦）
     void NoteConversationSpeech(Clock::time_point now);

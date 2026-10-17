@@ -29,6 +29,7 @@
 #include "agent_engine.h"
 #include "audio_io.h"
 #include "camera_source.h"
+#include "diner_context.h"
 #include "dish_nutrition.h"
 #include "events.h"
 #include "food.h"
@@ -506,6 +507,67 @@ void DemoNutrition() {
     }
 }
 
+// [8] 机器人控制自检：注册表按名执行 robot_* 工具（与主循环同一条执行路径），
+// 移动用低速短脉冲——自检也会让机器人走一步，跑之前确认场地安全
+void DemoRobotControl() {
+    auto& registry = prosophor::ToolRegistry::GetInstance();
+    const auto& cfg = prosophor::ProsophorConfig::GetInstance().robot;
+    if (!cfg.enabled) {
+        LOG_INFO("  （跳过: robot.control_enabled=false）");
+        return;
+    }
+
+    LOG_INFO("  状态: {}", registry.ExecuteTool("robot_status", {}).c_str());
+    LOG_INFO("  移动: {}",
+             registry.ExecuteTool("robot_move", {{"direction", "forward"}, {"speed", 30}})
+                 .c_str());
+    LOG_INFO("  舵机: {}",
+             registry.ExecuteTool("robot_servo", {{"servo_id", 6}, {"angle", 30}}).c_str());
+    LOG_INFO("  表情: {}",
+             registry.ExecuteTool("robot_face", {{"face", "happy"}}).c_str());
+    LOG_INFO("  非法方向（应被参数校验拦下）: {}",
+             registry.ExecuteTool("robot_move", {{"direction", "fly"}}).c_str());
+}
+
+// 动作命令判定（演示向）：小模型在历史里看到"同一指令 + 已完成的文字回复"会
+// 照抄那条回复而不是重新执行（实测：连说两遍"做个开心的表情"，第二遍只回
+// "好的，我已经开心地笑了。"）。消息前贴短标记把注意力拉回工具调用 ——
+// 远处 soul 里的长指令压不住这种近邻模仿。
+bool IsActionCommand(const std::string& text) {
+    static const std::vector<std::string> action_words = {
+        "爪子", "机械爪", "手臂", "表情", "移动", "前进", "后退",
+        "走一步", "转身", "状态", "张开", "闭上", "合上", "握"};
+    for (const auto& word : action_words) {
+        if (text.find(word) != std::string::npos) return true;
+    }
+    return false;
+}
+
+// 环境噪音过滤：ASR 会把电视/人声碎片转成 "."、"The."、"。" 这类句子，送进
+// LLM 会污染对话历史并把小上下文灌满（实测 8 分钟 35 句全是噪音，prompt 涨到
+// 3000+ 后模型只会吐 EOS）。口语指令以中文为主：至少两个汉字才算有效话轮。
+bool IsMeaningfulUtterance(const std::string& text) {
+    int cjk = 0;
+    for (const char c : text) {
+        const auto byte = static_cast<unsigned char>(c);
+        if ((byte & 0xC0) == 0x80) continue;   // 续接字节
+        if (byte >= 0xE4 && byte <= 0xE9) ++cjk;   // UTF-8 常用汉字首字节
+    }
+    return cjk >= 2;
+}
+
+// 电机是锁存语义：一次 move 指令后固件保持目标速度，只有显式 stop 才停。
+// 上一实例若在"发方向 → 睡 1 秒 → 发 stop"之间崩溃，stop 就永远没机会发出 ——
+// 启动与退出时各清一次，防止带着锁存目标无人看管地跑。
+void ClearLatchedMotion(const char* occasion) {
+    if (!prosophor::ProsophorConfig::GetInstance().robot.enabled) return;
+    auto& registry = prosophor::ToolRegistry::GetInstance();
+    if (!registry.HasTool("robot_move")) return;
+    const std::string result =
+        registry.ExecuteTool("robot_move", {{"direction", "stop"}});
+    LOG_INFO("robot: {}清运动目标 -> {}", occasion, result.c_str());
+}
+
 // 板上环境约束（2026-10-13 实测，装 aidvoice-sdk 后）：aidlite(qnn248) 必须先于
 // aidgen 核心（QNN 2.36/Genie）初始化，否则视觉编码器的 QNN deviceCreate 直接失败
 // （"QNN deviceCreate failed 14001"），[5b]/[5c]/[6] 的视觉段全灭 —— 实测先预热
@@ -898,6 +960,8 @@ int NutriBotApp::RunSelfTest() {
     DemoFoodRecognition(members);
     LOG_INFO("[7] 营养库自检（菜名 -> 每份营养；识别基准覆盖率）:");
     DemoNutrition();
+    LOG_INFO("[8] 机器人控制自检（robot_* 工具 -> HTTP -> 主控遥测）:");
+    DemoRobotControl();
     return 0;
 }
 
@@ -959,6 +1023,19 @@ std::string ResolveMemberStoreDir(const prosophor::NutribotConfig& cfg) {
 // 空档案库预置演示成员：人脸未接，禁忌链路需要"档案库里真有这个人"
 // （nutribot.stub_member_name 指向其中之一）。建档走与 selftest [3] 相同的
 // 脚本化问答路径 —— 预置档案与交互建档同构，不是另一套旁路。
+// 直呼名候选：本餐在场的已识别成员里挑一个该直呼的名字（儿童优先，
+// 见 diner_context.h 的 DirectAddress）。名单为空时退回档案库全体的
+// 演示档（人脸未接时的"全家可能在"场景），保证饭点问候/小结仍有称呼。
+std::string PickSalutation(const std::set<std::string>& active_diner_names,
+                           const std::vector<prosophor::nr::domain::Member>& all_members) {
+    std::vector<prosophor::nr::domain::Member> active;
+    for (const auto& member : all_members) {
+        if (active_diner_names.count(member.name) > 0) active.push_back(member);
+    }
+    if (active.empty()) active = all_members;
+    return prosophor::nr::app::DirectAddress(active);
+}
+
 void SeedDemoMembersIfEmpty(prosophor::nr::infra::JsonMemberRepository& repo) {
     if (!repo.list_members().empty()) return;
     LOG_INFO("nutribot: 档案库为空 —— 预置演示成员（人脸识别接入后可删库重建）");
@@ -1171,6 +1248,22 @@ int NutriBotApp::RunResident() {
              voice_cfg.capture_device.c_str(), voice_cfg.playback_device.c_str(),
              session_id.c_str());
     LOG_INFO("  >>> 对着麦克风说一句话，或把一道菜放到摄像头前试试（Ctrl-C 退出）");
+    ClearLatchedMotion("启动");
+
+    // 工具执行跟踪：动作命令的"没执行就重问"兜底用。回调与主循环同线程，
+    // 单个 bool 足够（不加原子）。
+    bool turn_had_tool = false;
+    engine.AddOutputCallback([&turn_had_tool](
+                                  const std::string&, const std::string&,
+                                  prosophor::AgentRuntimeState state,
+                                  const std::string&,
+                                  const std::optional<prosophor::MessageSchema>&,
+                                  const std::string&) {
+        if (state == prosophor::AgentRuntimeState::EXECUTING_TOOL ||
+            state == prosophor::AgentRuntimeState::TOOL_USE) {
+            turn_had_tool = true;
+        }
+    });
 
     // ── 采集线程：一次排空可用数据 → 按 30ms 切帧（带跨读余数）→ 喂 VAD ──
     std::thread capture_thread([&] {
@@ -1220,6 +1313,9 @@ int NutriBotApp::RunResident() {
     std::string current_meal_name;                     // 上一 tick 所处饭点（空 = 不在窗口）
     std::optional<std::string> pending_meal_greeting;  // 节流中挂起的饭点问候
     std::optional<prosophor::nr::app::MealSummary> pending_meal_summary;  // 挂起的餐后小结
+    std::set<std::string> active_diner_names;          // 本餐已识别的成员名（开餐清空）
+    bool visitor_mode = false;                         // 访客静默：本帧无注册成员在场
+    int silence_skipped = 0;                           // 因访客静默放弃的主动播报次数（诊断）
     int tick_count = 0;
 
     while (!g_stop.load()) {
@@ -1282,6 +1378,7 @@ int NutriBotApp::RunResident() {
                              scene_monitor->transitions());
                     if (current_scene_label == "用餐中") {
                         journal.BeginMeal(now);   // 开饭：开始记这顿的账
+                        active_diner_names.clear();   // 新的一餐：在场成员重新认定
                     } else if (current_scene_label == "餐后") {
                         if (auto summary = journal.EndMeal(now);
                             summary.has_value() && config.meal.announce) {
@@ -1301,17 +1398,79 @@ int NutriBotApp::RunResident() {
             }
         }
 
-        // ① 话轮：用户说话 → 会话回复 → 播报（最高优先）
+        // ① 话轮：用户说话 → 会话回复 → 播报（最高优先）。响应路不受访客
+        // 静默约束 —— 被点名要能回应，静默只针对"主动开口"
         if (!voice.speaking()) {
             if (auto text = voice.PollUtterance(0)) {
+                if (!IsMeaningfulUtterance(*text)) {
+                    LOG_INFO("[忽略] 无有效中文（{}）", text->c_str());
+                    continue;
+                }
                 LOG_INFO("[用户] {}", text->c_str());
-                const std::string reply = engine.SendUserMessage(session_id, *text);
+                // 语气自适应：在场成员档案压成提示块随消息注入（system 保持
+                // 稳定，KV 前缀不受影响；块内容见角色 prompt 的成员约定）
+                std::vector<prosophor::nr::domain::Member> diners;
+                if (!active_diner_names.empty()) {
+                    for (const auto& member : members.list_members()) {
+                        if (active_diner_names.count(member.name) > 0) {
+                            diners.push_back(member);
+                        }
+                    }
+                }
+                const std::string prompt_block =
+                    prosophor::nr::app::ComposeDinerPromptBlock(diners);
+                // 动作命令贴短标记：紧邻生成点，抵消"照抄上一轮已完成回复"的惯性
+                const std::string action_prefix =
+                    IsActionCommand(*text) ? "【动作命令】" : "";
+                const std::string user_message = prompt_block + action_prefix + *text;
+                turn_had_tool = false;
+                std::string reply = engine.SendUserMessage(session_id, user_message);
+                // 动作未执行兜底：小模型会照抄历史里"已完成"的文字回复而不调用工具
+                //（实测连说两遍"做个开心的表情"，第二遍只回"做得开心"）。动作命令
+                // 但本轮无工具执行 → 重问一次并强调必须调用。
+                if (IsActionCommand(*text) && !turn_had_tool) {
+                    LOG_INFO("[动作未执行] 重问一次（原话: {}）", reply.c_str());
+                    turn_had_tool = false;
+                    reply = engine.SendUserMessage(
+                        session_id,
+                        prompt_block +
+                            "（旁白：这是动作命令，必须调用工具执行，不要用一句话代替）\n" +
+                            action_prefix + *text);
+                }
+                // 沉默兜底：0.5B 对"可以不接话"的出口过拟合（连"有什么推荐"都
+                // 沉默），规则认为该答就重问一次 —— 话术质量次要，把话接住优先
+                if (!reply.empty() && prosophor::nr::app::IsSilentReply(reply) &&
+                    prosophor::nr::app::ShouldAnswerUtterance(*text)) {
+                    LOG_INFO("[沉默] 但句子需要回应，重问一次（原话: {}）", reply.c_str());
+                    reply = engine.SendUserMessage(
+                        session_id,
+                        prompt_block +
+                            "（旁白：刚才你判断保持沉默，但这句话是直接问你的，请作出简短回答）\n" +
+                            action_prefix + *text);
+                }
+                // 空回复兜底：0.5B 偶发一上来就吐 EOS（零内容），与沉默过拟合同源，
+                // 重问一次；问句/动作命令被吞同样是"把话接住"优先
                 if (reply.empty()) {
-                    LOG_WARN("nutribot: 会话无回复");
+                    LOG_INFO("[空回复] 重问一次");
+                    reply = engine.SendUserMessage(
+                        session_id,
+                        prompt_block +
+                            "（旁白：刚才你没有输出任何内容，请直接回应这句话）\n" +
+                            action_prefix + *text);
+                }
+                // 小模型会把重问旁白当正文复述（实测："刚才你没有输出任何内容，
+                // 请直接回应这句话。"被原样念出来）—— 复述不是回复，按失败处理
+                const bool retry_narration_echo =
+                    reply.find("刚才你没有输出任何内容") != std::string::npos ||
+                    reply.find("刚才你判断保持沉默") != std::string::npos ||
+                    reply.find("这是动作命令") != std::string::npos;
+                if (reply.empty() || retry_narration_echo) {
+                    LOG_WARN("nutribot: 会话无有效回复（{}）",
+                             retry_narration_echo ? "复述了重问旁白" : "空");
                 } else if (prosophor::nr::app::IsSilentReply(reply)) {
                     // LLM 自主判断不接话（角色 prompt 的沉默约定）：话进了对话
                     // 上下文，但不开口 —— 桌边闲聊不该句句插嘴
-                    LOG_INFO("[沉默] 判断无需回应，仅记录上下文");
+                    LOG_INFO("[沉默] 判断无需回应，仅记录上下文（原话: {}）", reply.c_str());
                 } else {
                     const std::string speech = prosophor::nr::app::SanitizeForSpeech(
                         prosophor::nr::app::StripSilenceMarker(reply),
@@ -1329,6 +1488,8 @@ int NutriBotApp::RunResident() {
         // 问候是瞬时的，不该排在一次秒级 VL 推理后面。问候承诺"我帮你看看"，
         // 故与感知同步启用（VL 未就绪时不问候）
         if (monitor != nullptr && !voice.speaking()) {
+            const std::vector<prosophor::nr::domain::Member> all_members =
+                members.list_members();   // 本 tick 快照：打招呼查询用
             const auto window = schedule.Lookup(LocalMinutesOfDay());
             const std::string meal_now = window.has_value() ? window->name : std::string();
             if (meal_now != current_meal_name) {
@@ -1338,28 +1499,43 @@ int NutriBotApp::RunResident() {
                     pending_meal_greeting = meal_now;
                 }
             }
+            // 访客静默（书 1.2/3.3）：本帧未识别到注册成员（客人或无人）时，
+            // 主动播报整体转静默 —— 问候挂在 pending 上等下轮（只是推迟，不丢）；
+            // 小结没有重播时机，放弃并计数（下次"餐后"会有新账）
             // 饭点问候（受 meal.announce 管：报菜名/禁忌提醒不受它管，那是安全/信息类）
             if (pending_meal_greeting.has_value() && config.meal.announce &&
                 now >= next_meal_retry_at) {
                 next_meal_retry_at = now + perception_period;
-                const std::string speech = announcer.PlanMealEntry(*pending_meal_greeting, now);
-                if (!speech.empty()) {
-                    LOG_INFO("[主动] {}", speech.c_str());
-                    voice.Speak(speech);
-                    pending_meal_greeting.reset();
+                if (visitor_mode) {
+                    ++silence_skipped;   // 访客在座：问候等下轮
+                } else {
+                    const std::string speech = announcer.PlanMealEntry(
+                        *pending_meal_greeting, now,
+                        PickSalutation(active_diner_names, all_members));
+                    if (!speech.empty()) {
+                        LOG_INFO("[主动] {}", speech.c_str());
+                        voice.Speak(speech);
+                        pending_meal_greeting.reset();
+                    }
                 }
             }
             // 餐后小结（进入"餐后"时记账产出；节流中挂起，按感知节拍重试）
             if (pending_meal_summary.has_value() && now >= next_meal_retry_at) {
                 next_meal_retry_at = now + perception_period;
-                const std::string speech =
-                    announcer.PlanMealSummary(*pending_meal_summary, now);
-                if (!speech.empty()) {
-                    LOG_INFO("[主动] {}", speech.c_str());
-                    const std::string sanitized = prosophor::nr::app::SanitizeForSpeech(
-                        speech, voice_cfg.speak_max_chars);
-                    if (!sanitized.empty()) voice.Speak(sanitized);
+                if (visitor_mode) {
+                    ++silence_skipped;
                     pending_meal_summary.reset();
+                } else {
+                    const std::string speech = announcer.PlanMealSummary(
+                        *pending_meal_summary, now,
+                        PickSalutation(active_diner_names, all_members));
+                    if (!speech.empty()) {
+                        LOG_INFO("[主动] {}", speech.c_str());
+                        const std::string sanitized = prosophor::nr::app::SanitizeForSpeech(
+                            speech, voice_cfg.speak_max_chars);
+                        if (!sanitized.empty()) voice.Speak(sanitized);
+                        pending_meal_summary.reset();
+                    }
                 }
             }
         }
@@ -1384,9 +1560,23 @@ int NutriBotApp::RunResident() {
                 faces_latest = !pkg.members.empty();
                 foods_latest = !pkg.foods.empty();
                 journal.Observe(pkg);   // 用餐中的账：菜品/热量/提醒累计
+                // 本餐在场成员认定（识别到谁记谁；开餐清空、跨轮累积）
+                for (const auto& member : pkg.members) {
+                    if (!member.name.empty()) active_diner_names.insert(member.name);
+                }
+                const bool visitor_now = prosophor::nr::app::VisitorSilence(pkg.members);
+                if (visitor_now != visitor_mode) {
+                    LOG_INFO("[在场] {}（本餐已识别：{}）", visitor_now ? "无注册成员，转静默" : "识别到家庭成员",
+                             active_diner_names.empty() ? "无" : JoinNames(active_diner_names).c_str());
+                    visitor_mode = visitor_now;
+                }
                 LOG_DEBUG("nutribot: 看菜 -> {} 道: {}", pkg.foods.size(),
                           JoinFoodNames(pkg.foods).c_str());
-                const std::string speech = announcer.PlanPerception(pkg, now);
+                // 访客静默：识别到谁都不认识的画面（客人/无人）时不主动开口；
+                // PlanPerception 照喂 —— 内部登记/去重状态要随感知推进
+                const std::string speech =
+                    visitor_mode ? std::string() : announcer.PlanPerception(pkg, now);
+                if (visitor_mode) ++silence_skipped;
                 if (!speech.empty()) {
                     LOG_INFO("[主动] {}", speech.c_str());
                     const std::string sanitized = prosophor::nr::app::SanitizeForSpeech(
@@ -1399,9 +1589,17 @@ int NutriBotApp::RunResident() {
         if (++tick_count % 300 == 0) {   // 每 30s 打点一次统计
             const auto stats = voice.stats();
             const auto ann = announcer.stats();
+            std::string member_label;
+            if (visitor_mode) {
+                member_label = "访客静默";
+            } else if (active_diner_names.empty()) {
+                member_label = "未识别";
+            } else {
+                member_label = JoinNames(active_diner_names);
+            }
             LOG_INFO("[统计] 帧={} 句={} 播报={} 丢弃(短/弱/忙)={}/{}/{} ASR空={} | "
                      "抓帧={} 看菜={} 提醒(播/挂)={}/{} 报菜名={} 饭点={} 小结={} 节流推迟={} | "
-                     "场景={} 转移={} 账本={}",
+                     "场景={} 转移={} 账本={} | 成员={} 静默跳过={}",
                      stats.feed_frames, stats.utterances, stats.spoken,
                      stats.dropped_short, stats.dropped_lowpeak, stats.dropped_busy,
                      stats.asr_empty, camera.frame_count(),
@@ -1411,7 +1609,8 @@ int NutriBotApp::RunResident() {
                      ann.suppressed_by_gap,
                      current_scene_label.empty() ? "未知" : current_scene_label.c_str(),
                      scene_monitor != nullptr ? scene_monitor->transitions() : 0,
-                     journal.active() ? "记账中" : "空闲");
+                     journal.active() ? "记账中" : "空闲",
+                     member_label.c_str(), silence_skipped);
         }
         next_tick += std::chrono::milliseconds(100);
         std::this_thread::sleep_until(next_tick);
@@ -1430,6 +1629,7 @@ int NutriBotApp::RunResident() {
     prosophor::AsrProviderRouter::GetInstance().DestroyProvider();
     prosophor::TtsProviderRouter::GetInstance().ReleaseProviders();
     playback.Close();
+    ClearLatchedMotion("退出");
     const auto stats = voice.stats();
     const auto ann = announcer.stats();
     LOG_INFO("nutribot: 统计 帧={} 句={} 播报={} 丢弃(短/弱/忙)={}/{}/{} ASR空={} | "

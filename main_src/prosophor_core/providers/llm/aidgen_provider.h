@@ -115,7 +115,7 @@ private:
     bool RunInference(const EncodedPrompt& encoded,
                       ChatResponse& response,
                       std::function<void(StreamEvent, std::string)>& callback);
-    void FinalizeResponse(ChatResponse& response) const;
+    void FinalizeResponse(ChatResponse& response, const ChatRequest& request) const;
 
     AidGenModelConfig cfg_;
 

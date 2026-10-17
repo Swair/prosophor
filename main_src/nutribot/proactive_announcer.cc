@@ -229,21 +229,26 @@ std::string ProactiveAnnouncer::PlanPerception(
 }
 
 std::string ProactiveAnnouncer::PlanMealSummary(const MealSummary& summary,
-                                                Clock::time_point now) {
+                                                Clock::time_point now,
+                                                const std::string& salutation) {
     // 与其它一般播报同一节流（10s 长窗）：刚回答完用户/刚报过菜时不抢麦
     if (!GapElapsed(now, tuning_.min_gap_ms)) {
         ++stats_.suppressed_by_gap;
         return {};
     }
-    const std::string text = ComposeMealSummary(summary);
+    std::string text = ComposeMealSummary(summary);
     if (text.empty()) return {};
+    if (!salutation.empty()) {
+        text = salutation + "，" + text;
+    }
     ++stats_.meal_summaries;
     NoteSpoken(now);
     return text;
 }
 
 std::string ProactiveAnnouncer::PlanMealEntry(const std::string& meal_name,
-                                              Clock::time_point now) {
+                                              Clock::time_point now,
+                                              const std::string& salutation) {
     if (meal_name.empty()) return {};
     if (!GapElapsed(now, tuning_.min_gap_ms)) {
         ++stats_.suppressed_by_gap;
@@ -251,7 +256,8 @@ std::string ProactiveAnnouncer::PlanMealEntry(const std::string& meal_name,
     }
     ++stats_.meal_announcements;
     NoteSpoken(now);
-    return "到" + meal_name + "时间啦，把菜端上桌，我帮你看看有没有要注意的。";
+    const std::string who = salutation.empty() ? std::string() : salutation + "，";
+    return who + "到" + meal_name + "时间啦，把菜端上桌，我帮你看看有没有要注意的。";
 }
 
 ProactiveAnnouncer::Stats ProactiveAnnouncer::stats() const {

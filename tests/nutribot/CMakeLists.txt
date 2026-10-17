@@ -45,6 +45,8 @@ add_executable(nr_tests
     test_dish_nutrition.cc
     test_proactive_announcer.cc
     test_vision_stub.cc
+    test_diner_context.cc
+    test_tool_call_protocol.cc
 )
 find_package(spdlog CONFIG QUIET)
 if(TARGET spdlog::spdlog)

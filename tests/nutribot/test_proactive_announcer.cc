@@ -308,3 +308,21 @@ TEST(announcer, meal_summary_throttled_then_retryable) {
     EXPECT_TRUE(Contains(announcer.PlanMealSummary(summary, At(11)), "这顿饭"));
     EXPECT_EQ(announcer.stats().meal_summaries, 1);
 }
+
+TEST(announcer, meal_entry_with_salutation_prepends_name) {
+    ProactiveAnnouncer announcer;
+    const std::string speech = announcer.PlanMealEntry("晚餐", At(0), "小明");
+    EXPECT_TRUE(Contains(speech, "小明，到晚餐时间啦"));
+}
+
+TEST(announcer, meal_entry_without_salutation_keeps_generic) {
+    ProactiveAnnouncer announcer;
+    EXPECT_TRUE(Contains(announcer.PlanMealEntry("晚餐", At(0)), "到晚餐时间啦"));
+}
+
+TEST(announcer, meal_summary_with_salutation_prepends_name) {
+    using prosophor::nr::app::MealSummary;
+    ProactiveAnnouncer announcer;
+    const std::string speech = announcer.PlanMealSummary(MakeSummary(), At(0), "小明");
+    EXPECT_TRUE(Contains(speech, "小明，这顿饭"));
+}

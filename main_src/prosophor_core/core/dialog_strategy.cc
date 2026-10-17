@@ -148,24 +148,32 @@ void DialogStrategy::CompactIfNeeded(AgentSession& session) const {
     if (!role) return;
     int ctx = role->context_window;
     int reserve = role->max_tokens > 0 ? role->max_tokens : 4096;
-    // Safety margin: reserve 90% of available space for the prompt,
-    // leaving 10% headroom for chat template tokens and estimate error
-    int limit = static_cast<int>((ctx - reserve) * 0.9);
+    // Safety margin: 75% of available space for the prompt. 真实分词比字符集估算
+    // 高约 20%（模板标记/工具 JSON），90% 的余量不够 —— cl2048 实测真实
+    // 1800 token 附近就退化，预算须按最坏误差留足
+    int limit = static_cast<int>((ctx - reserve) * 0.75);
     if (limit <= 0) return;
 
+    // 静态 system（含工具段）同样占上下文；不计入会让小上下文模型在压缩触发前
+    // 就溢出 —— 实测 cl2048 模型 system ~1000 token，历史涨到 2000+ 后直接 EOS
+    int static_tokens = 0;
+    for (const auto& block : session.GetSystemPrompt()) {
+        static_tokens += EstimateTextTokens(block.text);
+    }
+
     auto messages = session.GetMessages();
-    int estimated = EstimateTokens(messages);
+    int estimated = EstimateTokens(messages) + static_tokens;
     if (estimated <= limit) return;
 
     int keep = config_.keep_recent;
-    LOG_WARN("Context window limit: ~{} tokens > {} (ctx={}, reserve={}), truncating to last {} messages",
-             estimated, limit, ctx, reserve, keep);
+    LOG_WARN("Context window limit: ~{} tokens > {} (ctx={}, reserve={}, system={}), truncating to last {} messages",
+             estimated, limit, ctx, reserve, static_tokens, keep);
 
     // Binary search for the largest keep count that fits within limit
     int lo = 1, hi = keep;
     while (lo < hi) {
         int mid = (lo + hi + 1) / 2;
-        if (EstimateTokens(KeepRecentMessages(messages, mid)) <= limit)
+        if (EstimateTokens(KeepRecentMessages(messages, mid)) + static_tokens <= limit)
             lo = mid;
         else
             hi = mid - 1;
