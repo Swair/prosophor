@@ -108,9 +108,41 @@ std::string Trim(const std::string& s) {
     return s.substr(begin, end - begin + 1);
 }
 
+// 占位名：模型分不清时会回 "菜品1"、"菜2"、"食物3"、"dish 4" 这类占位标签
+// （实测 8B 分帧漂移，这些占位名被当真菜名播报出来："桌上现在有：菜品1、
+// 菜品2…"）。去掉尾部编号后若只剩泛称/类别词，视为无识别。
+bool IsPlaceholderDishName(const std::string& name) {
+    std::string core = name;
+    while (!core.empty()) {
+        const unsigned char c = core.back();
+        if ((c >= '0' && c <= '9') || c == ' ' || c == '.' || c == '_' || c == '#') {
+            core.pop_back();
+            continue;
+        }
+        bool trailing_cn_numeral = false;
+        for (const char* numeral : {"零", "一", "二", "三", "四", "五",
+                                    "六", "七", "八", "九", "十"}) {
+            const std::string_view sv(numeral);
+            if (core.size() >= sv.size() &&
+                core.compare(core.size() - sv.size(), sv.size(), sv) == 0) {
+                core.erase(core.size() - sv.size());
+                trailing_cn_numeral = true;
+                break;
+            }
+        }
+        if (!trailing_cn_numeral) break;
+    }
+    static const std::set<std::string> placeholders = {
+        "菜品", "菜", "菜肴", "食物", "食品", "菜名", "dish", "food",
+        "item", "unknown", "未知", "无", "none", "n/a",
+        "主菜", "配菜", "汤品", "主食", "甜点", "凉菜", "热菜"};
+    return placeholders.count(core) > 0;
+}
+
 // 菜名合理性：模型复述指令或描述画面时给出的串，喂给禁忌规则会造误报。
 // 中文菜名都短且无句读，按这两道闸门拦。
 bool PlausibleDishName(const std::string& name) {
+    if (IsPlaceholderDishName(name)) return false;
     if (name.size() > 30) return false;   // 30 字节 ≈ 10 个汉字
     for (const char* punct : {"，", "。", "；", "、", "！", "？", ",", ".", ";"}) {
         if (name.find(punct) != std::string::npos) return false;

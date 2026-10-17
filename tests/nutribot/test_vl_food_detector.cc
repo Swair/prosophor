@@ -154,6 +154,19 @@ TEST(food_detector, parse_object_items) {
     EXPECT_EQ(unknown_key[0].name, "白灼虾");
 }
 
+TEST(food_detector, parse_drops_placeholder_names) {
+    // 8B 实测会回 "菜品1"/"菜三"/"dish 4" 这类占位标签，不能当真菜名播报
+    const auto foods = parse_food_detect_response(
+        R"(["菜品1", "菜品2", "菜三", "食物", "dish 4", "白灼虾"])");
+    EXPECT_EQ(foods.size(), 1u);
+    EXPECT_EQ(foods[0].name, "白灼虾");
+}
+
+TEST(food_detector, parse_drops_category_only_names) {
+    const auto foods = parse_food_detect_response(R"(["主菜", "配菜", "主食", "汤品"])");
+    EXPECT_EQ(foods.size(), 0u);
+}
+
 TEST(food_detector, parse_dedup_and_trim) {
     const auto foods =
         parse_food_detect_response(R"([" 米饭 ", "米饭", "", "  ", "青菜"])");
