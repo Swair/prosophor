@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <ctime>
 #include <deque>
 #include <iostream>
@@ -1081,7 +1082,14 @@ int NutriBotApp::RunResident() {
     const prosophor::VoiceConfig& voice_cfg = config.voice;
 
     g_stop.store(false);
-    prosophor::Platform::SetConsoleSignalHandler([] { g_stop.store(true); });
+    // 第一次 Ctrl-C：置停止标志，等当前推理返回后优雅退出。
+    // 第二次 Ctrl-C：立即强退 —— 8B 的一次 VL 推理可能卡分钟级，等不起
+    //（实测：主线程卡在 NPU 推理里时，按多少次 Ctrl-C 都只是排队置标志）。
+    prosophor::Platform::SetConsoleSignalHandler([] {
+        static std::atomic<int> signal_count{0};
+        if (signal_count.fetch_add(1) + 1 >= 2) std::_Exit(130);
+        g_stop.store(true);
+    });
 
     // ── 音频 I/O：采集必须成功（没麦克风就不是语音回路）；播放首次播报时再开 ──
     prosophor::nr::infra::AudioCapture capture;
