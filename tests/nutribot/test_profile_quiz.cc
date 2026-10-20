@@ -4,7 +4,7 @@
 #include <vector>
 
 #include "micro_test.hpp"
-#include "profile_quiz.h"
+#include "conversation/profile_quiz.h"
 
 using namespace prosophor::nr::app;
 using prosophor::nr::domain::Member;

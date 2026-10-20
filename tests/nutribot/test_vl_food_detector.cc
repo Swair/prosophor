@@ -3,11 +3,11 @@
 #include <string>
 #include <vector>
 
-#include "meal_monitor.h"
+#include "meal/meal_monitor.h"
 #include "micro_test.hpp"
 #include "ports.h"
-#include "repositories.h"
-#include "vl_food_detector.h"
+#include "domain/repositories.h"
+#include "perception/vl_food_detector.h"
 
 using namespace prosophor::nr::app;
 using prosophor::nr::domain::FoodItem;
@@ -117,7 +117,9 @@ TEST(food_detector, prompt_contains_output_contract) {
 
 TEST(food_detector, prompt_has_no_empty_escape_hatch) {
     // 回归守卫：prompt 里不得出现 "[]" 这类"看不清就输出空"的逃生条款 ——
-    // 实测 3B 模型会把它当出口，对着真实菜照（一盘小龙虾）直接回 []
+    // 3B 实测会把它当出口，对着真实菜照（一盘小龙虾）直接回 []；8B 闭集
+    // A/B 也复现了召回下降（12 张单菜图 Top-1 3/12 -> 0/12）。稳定幻觉改用
+    // 独立的存在性二分类校验拦（FoodPresenceQuestion）。
     EXPECT_TRUE(build_food_detect_prompt().find("[]") == std::string::npos);
 }
 
@@ -343,11 +345,53 @@ TEST(vl_detector_closed, prompt_lists_candidates_and_asks_ranking) {
         EXPECT_TRUE(prompt.find(name) != std::string::npos);
     }
     EXPECT_TRUE(prompt.find("最多 5 个") != std::string::npos);
-    // 不给 JSON 示例、不给空数组提示（开放模式的实测教训同样适用）
+    // 不给 JSON 示例、不给空数组提示：空输出会伤召回（见上面的 A/B 注释），
+    // 稳定幻觉改由独立的存在性校验拦。
     EXPECT_TRUE(prompt.find("[]") == std::string::npos);
     EXPECT_TRUE(prompt.find("\"") == std::string::npos);   // prompt 里没有任何引号字面
     // 空候选 = 开放模式（回归）
     EXPECT_EQ(build_food_detect_prompt({}), build_food_detect_prompt());
+}
+
+TEST(vl_detector_closed, parse_empty_array_means_no_food) {
+    // 模型偶尔自己回 []：按"无菜品"处理，不得当成解析失败而沿用上一轮结果
+    EXPECT_EQ(parse_food_detect_response("[]", kCandidates).size(), 0u);
+    EXPECT_EQ(parse_food_detect_response(" ```json\n[]\n``` ", kCandidates).size(), 0u);
+}
+
+// ---- 存在性二分类校验（稳定幻觉的独立门控）----
+
+TEST(food_presence, question_does_not_presuppose_food) {
+    const std::string question = FoodPresenceQuestion();
+    EXPECT_TRUE(question.find("饭菜") != std::string::npos);
+    EXPECT_TRUE(question.find("有") != std::string::npos);
+    EXPECT_TRUE(question.find("没有") != std::string::npos);
+    // 不带候选列表，避免候选诱导"必须选一个"
+    EXPECT_TRUE(question.find("候选") == std::string::npos);
+}
+
+TEST(food_presence, parse_yes_no) {
+    const auto expect = [](const std::string& reply, bool expected) {
+        const auto verdict = ParseFoodPresenceReply(reply);
+        EXPECT_TRUE(verdict.has_value());
+        EXPECT_EQ(*verdict, expected);
+    };
+    expect("有", true);
+    expect("有。", true);
+    expect(" 有 ", true);
+    expect("没有", false);
+    expect("没有。", false);
+    expect("图中没有饭菜", false);
+    expect("无", false);
+    // 否定优先：没有 里含 有，不能被判成肯定
+    expect("没有餐桌上的饭菜", false);
+}
+
+TEST(food_presence, parse_english_and_unknown) {
+    EXPECT_TRUE(ParseFoodPresenceReply("Yes").value_or(false));
+    EXPECT_FALSE(ParseFoodPresenceReply("No").value_or(true));
+    EXPECT_FALSE(ParseFoodPresenceReply("").has_value());
+    EXPECT_FALSE(ParseFoodPresenceReply("可能吧").has_value());   // 调用方 fail-open
 }
 
 TEST(vl_detector_closed, parse_accepts_candidates_and_canonicalizes) {

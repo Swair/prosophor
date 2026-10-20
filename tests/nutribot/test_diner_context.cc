@@ -1,12 +1,12 @@
 // diner_context 单测：语气档路由、儿童直呼、提示块拼装、访客静默判据。
 // 全纯函数，直接喂档案构造——不碰仓储、不碰感知。
-#include "diner_context.h"
+#include "conversation/diner_context.h"
 
 #include <string>
 #include <vector>
 
-#include "events.h"
-#include "member.h"
+#include "domain/events.h"
+#include "domain/member.h"
 #include "micro_test.hpp"
 
 namespace {

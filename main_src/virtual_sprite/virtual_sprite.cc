@@ -12,7 +12,6 @@
 #include "config/config.h"
 #include "managers/token_tracker.h"
 
-#include "providers/provider_router/asr_provider_router.h"
 #include "platform/platform.h"
 #include "updater/update_checker.h"
 #include <memory>
@@ -112,14 +111,11 @@ void VirtualSprite::GlobalInit() {
         LOG_INFO("Central window created (primary)");
     }
 
-    // ── Initialize ASR if enabled ──────────────────────
+    // ── ASR 状态日志（provider 由 VoiceEngine 首次使用时创建） ──
     {
-        auto& asr_config = ProsophorConfig::GetInstance().asr;
+        const auto& asr_config = ProsophorConfig::GetInstance().asr;
         if (asr_config.enabled) {
-            auto& asr = AsrProviderRouter::GetInstance();
-            asr.SetServerUrl(asr_config.server_url);
-            asr.Initialize();
-            LOG_INFO("ASR initialized (server={})", asr_config.server_url);
+            LOG_INFO("ASR enabled (server={})", asr_config.server_url);
         } else {
             LOG_INFO("ASR disabled in config");
         }

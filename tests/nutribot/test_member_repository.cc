@@ -2,8 +2,8 @@
 #include <filesystem>
 #include <string>
 
-#include "member.h"
-#include "member_repository.h"
+#include "domain/member.h"
+#include "storage/member_repository.h"
 #include "micro_test.hpp"
 
 using namespace prosophor::nr::infra;

@@ -410,7 +410,7 @@ run_nutribot:
 	$(BUILD_DIR_NUTRIBOT)/main_src/prosophor
 .PHONY: run_nutribot
 
-# nutribot 单测（独立于主树构建，同源收集；33 用例）
+# nutribot 单测（独立于主树构建，同源收集；用例数见运行输出）
 test_nutribot:
 	mkdir -p $(BUILD_DIR_NUTRIBOT)/tests && \
 	cd $(BUILD_DIR_NUTRIBOT)/tests && \

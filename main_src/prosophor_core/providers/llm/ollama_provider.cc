@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 #include "common/log_wrapper.h"
 #include "common/string_utils.h"
+#include "platform/platform.h"
 #include "network/curl_client.h"
 #include "providers/llm/detail/ollama_stream_handler.h"
 
@@ -155,7 +156,7 @@ ChatResponse OllamaProvider::Deserialize(const std::string& json_str) const {
     nlohmann::json response_json;
 
     try {
-        std::string utf8_json = ConvertToUtf8(json_str);
+        std::string utf8_json = Platform::NativeToUtf8(json_str);
         response_json = nlohmann::json::parse(utf8_json);
 
         LOG_DEBUG("Ollama response: {}", response_json.dump(4));

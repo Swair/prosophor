@@ -10,9 +10,9 @@
 #include <string>
 #include <vector>
 
-#include "food.h"
-#include "repositories.h"
-#include "scene.h"
+#include "domain/food.h"
+#include "domain/repositories.h"
+#include "domain/scene.h"
 
 namespace prosophor::nr::app {
 

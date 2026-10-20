@@ -13,7 +13,7 @@
 //   PROSOPHOR_SDL_UI    -> 桌面精灵
 //   PROSOPHOR_AICODING  -> AI 编程助手（终端）
 #ifdef PROSOPHOR_NUTRIBOT
-#include "nutribot/nutribot_app.h"
+#include "nutribot/entry/nutribot_app.h"
 #elif defined(PROSOPHOR_SDL_UI)
 #include "virtual_sprite/virtual_sprite.h"
 #elif defined(PROSOPHOR_AICODING)
@@ -41,7 +41,7 @@ int main(int argc, char* argv[]) {
     int exit_code = 0;
     try {
 #ifdef PROSOPHOR_NUTRIBOT
-        // nutribot 形态透传 argv：--selftest 跑确定性自检，默认进常驻语音回路
+        // nutribot 形态：常驻语音/感知回路
         exit_code = prosophor::nr::nutribot::NutriBotApp::GetInstance().Run(argc, argv);
 #elif defined(PROSOPHOR_SDL_UI)
         exit_code = prosophor::VirtualSprite::GetInstance().Run();

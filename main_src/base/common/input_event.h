@@ -7,7 +7,6 @@
 #include <vector>
 #include <variant>
 #include <sstream>
-#include "platform/platform.h"
 
 namespace prosophor {
 

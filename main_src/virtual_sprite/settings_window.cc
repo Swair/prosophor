@@ -418,7 +418,7 @@ void SettingsWindow::RenderProvidersTab() {
             }
             media_engine::Layout::Dummy(0, 4);
             if (media_engine::ImGuiWidget::Button("+ Add Entry", 0, 0)) {
-                ProviderEntryConfig new_entry;
+                LlmProviderEntryConfig new_entry;
                 new_entry.timeout = 30;
                 prov.entries.push_back(std::move(new_entry));
             }

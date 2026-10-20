@@ -2,318 +2,104 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "virtual_sprite/voice_engine.h"
-#include "media_engine/media/audio/voice_channel.h"
-#include "rtc_wrapper/vad_processor.h"
-#include "rtc_wrapper/resampler.h"
+
+#include "config/config.h"
 #include "common/log_wrapper.h"
-#include "common/thread_pool.h"
-#include "common/time_wrapper.h"
-
-#include <cstdint>
-
-namespace {
-
-/// Clean TTS text: strip emoji, trim whitespace, compress consecutive whitespace.
-std::string CleanTtsText(const std::string& text) {
-    std::string out;
-    out.reserve(text.size());
-    bool prev_was_space = true;  // true = next non-space starts a new "word"
-    for (size_t i = 0; i < text.size();) {
-        auto c = static_cast<unsigned char>(text[i]);
-        // ASCII whitespace
-        if (c <= 0x20 && (c == ' ' || c == '\n' || c == '\r' || c == '\t')) {
-            prev_was_space = true;
-            ++i;
-            continue;
-        }
-        uint32_t cp;
-        size_t len;
-        if (c < 0x80)       { cp = c;           len = 1; }
-        else if (c < 0xE0)  { cp = c & 0x1F;    len = 2; }
-        else if (c < 0xF0)  { cp = c & 0x0F;    len = 3; }
-        else                { cp = c & 0x07;    len = 4; }
-        for (size_t j = 1; j < len && i + j < text.size(); ++j)
-            cp = (cp << 6) | (static_cast<unsigned char>(text[i + j]) & 0x3F);
-        // Skip emoji (SMP U+1F000+) and variation selectors (U+FE00-U+FE0F)
-        if (cp >= 0x1F000 || (cp >= 0xFE00 && cp <= 0xFE0F)) {
-            i += len;
-            continue;
-        }
-        // Collapse consecutive whitespace -> single space
-        if (prev_was_space && !out.empty())
-            out += ' ';
-        out.append(text.data() + i, len);
-        prev_was_space = false;
-        i += len;
-    }
-    return out;
-}
-
-}  // anonymous namespace
+#include "media/audio/voice_channel.h"
+#include "virtual_sprite/media_engine_audio_output.h"
+#include "voice_interaction/voice_interaction.h"
 
 namespace prosophor {
-
-// ══════════════════════════════════════════════════════════════════════════
-//  Construction / Destruction
-// ══════════════════════════════════════════════════════════════════════════
 
 VoiceEngine& VoiceEngine::GetInstance() {
     static VoiceEngine instance;
     return instance;
 }
 
-VoiceEngine::VoiceEngine()
-    : asr_(AsrProviderRouter::GetInstance()),
-      tts_(TtsProviderRouter::GetInstance()) {
-    vad_ = std::make_unique<VadProcessor>();
+VoiceEngine::VoiceEngine() {
+    const auto& config = ProsophorConfig::GetInstance();
+
+    voice::VoiceInteractionConfig interaction_config;
+    interaction_config.asr = config.asr;
+    interaction_config.tts = config.tts;
+    interaction_config.voice = config.voice;
+
+    // 保留虚精灵旧状态机参数：WebRTC VAD、20 帧收句、无最短句/峰值闸、
+    // 边说边出 interim、final 不因上一句在飞而丢弃
+    interaction_config.tuning.frame_samples = 480;
+    interaction_config.tuning.start_confirm_frames = 3;
+    interaction_config.tuning.end_silence_frames = 20;
+    interaction_config.tuning.max_utterance_frames = 0;
+    interaction_config.tuning.pre_roll_frames = 5;
+    interaction_config.tuning.min_utterance_frames = 0;
+    interaction_config.tuning.min_peak = 0;
+    interaction_config.tuning.drop_utterance_if_asr_busy = false;
+    interaction_config.tuning.emit_interim = true;
+    interaction_config.tuning.interim_voiced_frames = 10;
+    interaction_config.tuning.interim_silence_flush_frames = 3;
+    interaction_config.tuning.interim_max_silence_frames = 3;
+
+    interaction_config.warmup_providers = false;   // 桌面端不做模型预热
+    interaction_config.require_providers = false;
+    interaction_config.sanitize_tts_text = true;
+    interaction_config.default_webrtc_vad = true;   // auto -> WebRTC（桌面默认）
+    interaction_config.tts_cache_bytes = config.voice.tts_cache_bytes;
+
+    interaction_ = std::make_unique<voice::VoiceInteraction>();
+    std::string error;
+    if (!interaction_->Init(interaction_config, /*vad=*/nullptr,
+                            /*audio_input=*/nullptr,
+                            std::make_unique<voice::MediaEngineAudioOutput>(),
+                            error)) {
+        LOG_ERROR("[VoiceEngine] 初始化失败: {}", error.c_str());
+        interaction_.reset();
+        return;
+    }
+    interaction_->Start();
 }
 
 VoiceEngine::~VoiceEngine() {
+    if (interaction_) {
+        interaction_->Stop();
+    }
     media_engine::VoiceChannel::GetInstance().Stop();
 }
 
-// ── TTS text utilities ──
-
-std::string VoiceEngine::SanitizeTtsText(const std::string& text) {
-    std::string result;
-    result.reserve(text.size());
-    bool leading = true;        // still in leading whitespace
-    bool prev_space = false;    // last char written was a space
-    for (size_t i = 0; i < text.size(); ++i) {
-        unsigned char c = static_cast<unsigned char>(text[i]);
-
-        // Skip 4-byte UTF-8 (emoji and decorative symbols)
-        if ((c & 0xF0) == 0xF0) {
-            i += 3;
-            continue;
-        }
-
-        // Compress whitespace: skip leading, collapse consecutive
-        if (c == ' ' || c == '\n' || c == '\r' || c == '\t') {
-            prev_space = true;
-            continue;
-        }
-
-        if (c == '*' || c == '`' || c == '~' || c == '\\' || c == '|')
-            continue;
-        if (c == '#') {
-            if (i == 0 || (i > 0 && (static_cast<unsigned char>(text[i-1]) == ' ' ||
-                                      static_cast<unsigned char>(text[i-1]) == '\n')))
-                continue;
-        }
-        if (c == '_' && result.size() > 0 && result.back() == ' ') continue;
-
-        // Add a single space before this word if there was whitespace before it
-        if (prev_space && !leading)
-            result += ' ';
-        result += static_cast<char>(c);
-        leading = false;
-        prev_space = false;
+std::string VoiceEngine::PollAsrLatest() {
+    if (interaction_ == nullptr) {
+        return {};
     }
-    return result;
+    auto result = interaction_->PollAsrLatest();
+    return result.has_value() ? std::move(*result) : std::string{};
 }
-
-// ══════════════════════════════════════════════════════════════════════════
-//  ASR — VAD + accumulation
-// ══════════════════════════════════════════════════════════════════════════
-
-void VoiceEngine::FeedPCM(const int16_t* data, size_t samples) {
-    if (samples != 480) return;
-
-    bool speech = vad_->ProcessFrame(data, samples);
-
-    // Catchup ring buffer (always keeps last 5 frames)
-    std::array<int16_t, 480> buf;
-    std::copy(data, data + samples, buf.begin());
-    catchup_buf_.Push(buf);
-
-    // ── VAD state machine ──
-    if (!vad_speaking_) {
-        if (speech) {
-            vad_confirm_++;
-        } else {
-            vad_confirm_ = 0;
-            return;
-        }
-        if (vad_confirm_ < 3) return;
-
-        // Speech started: flush catchup buffer into stream buffer
-        auto catchup = catchup_buf_.ReadAll();
-        for (auto& f : catchup) {
-            stream_buf_.insert(stream_buf_.end(), f.begin(), f.end());
-        }
-        vad_speaking_ = true;
-        vad_silence_frames_ = 0;
-        flush_counter_ = 0;
-        return;
-    }
-
-    // Speaking: accumulate PCM
-    stream_buf_.insert(stream_buf_.end(), data, data + samples);
-
-    if (speech) {
-        vad_silence_frames_ = 0;
-        flush_counter_++;
-
-        if (flush_counter_ >= 10 && !asr_in_flight_.exchange(true)) {
-            flush_counter_ = 0;
-            FlushInterim();
-        }
-    } else {
-        vad_silence_frames_++;
-        flush_counter_++;
-
-        if (vad_silence_frames_ <= 3 && flush_counter_ >= 3 && !asr_in_flight_.exchange(true)) {
-            flush_counter_ = 0;
-            FlushInterim();
-        }
-
-        if (vad_silence_frames_ < 20) return;
-
-        vad_speaking_ = false;
-        vad_silence_frames_ = 0;
-        vad_confirm_ = 0;
-        flush_counter_ = 0;
-        FlushFinal();
-    }
-}
-
-void VoiceEngine::ResetVad() {
-    vad_confirm_ = 0;
-    vad_silence_frames_ = 0;
-    vad_speaking_ = false;
-    flush_counter_ = 0;
-    stream_buf_.clear();
-    catchup_buf_.Clear();
-    if (vad_) {
-        vad_->Reset();
-    }
-}
-
-void VoiceEngine::FlushInterim() {
-    if (stream_buf_.empty()) {
-        asr_in_flight_ = false;
-        return;
-    }
-
-    auto pcm = stream_buf_;
-    GetGlobalThreadPool().Submit([this, pcm = std::move(pcm), &asr = asr_]() {
-        auto t0 = SteadyClock::Now();
-        std::string text = asr.AsrProcess(pcm);
-        auto ms = SteadyClock::ElapsedMillis(t0);
-        if (!text.empty()) {
-            LOG_INFO("[ASR] interim: {} chars in {}ms", text.size(), ms);
-            std::lock_guard<std::mutex> lock(result_mtx_);
-            pending_result_ = std::move(text);
-            has_result_ = true;
-        } else {
-            LOG_DEBUG("[ASR] interim: empty result in {}ms", ms);
-        }
-        asr_in_flight_ = false;
-    });
-}
-
-void VoiceEngine::FlushFinal() {
-    if (stream_buf_.empty()) {
-        asr_in_flight_ = false;
-        return;
-    }
-
-    auto pcm = std::move(stream_buf_);
-    stream_buf_.clear();
-
-    GetGlobalThreadPool().Submit([this, pcm = std::move(pcm), &asr = asr_]() {
-        auto t0 = SteadyClock::Now();
-        std::string text = asr.AsrProcess(pcm);
-        auto ms = SteadyClock::ElapsedMillis(t0);
-        if (!text.empty()) {
-            LOG_INFO("[ASR] final: {} chars in {}ms", text.size(), ms);
-            std::lock_guard<std::mutex> lock(result_mtx_);
-            pending_result_ = std::move(text);
-            has_result_ = true;
-        } else {
-            LOG_DEBUG("[ASR] final: empty result in {}ms", ms);
-        }
-        asr_in_flight_ = false;
-    });
-}
-
-std::string VoiceEngine::PollResult() {
-    std::lock_guard<std::mutex> lock(result_mtx_);
-    if (!has_result_) return {};
-    has_result_ = false;
-    return std::move(pending_result_);
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-//  TTS — Full synthesis
-// ══════════════════════════════════════════════════════════════════════════
-
-TtsResponse VoiceEngine::Synthesize(const std::string& text,
-                                     const std::string& backend,
-                                     const std::string& voice) {
-    std::string clean = SanitizeTtsText(text);
-    LOG_INFO("[VoiceEngine] Synthesize text='{}', clean='{}', voice='{}'", text, clean, voice);
-    if (clean.empty()) {
-        return {false, "empty text after sanitization", {}, 0, 0};
-    }
-
-    auto provider = tts_.GetProvider();
-    if (!provider) {
-        LOG_ERROR("[VoiceEngine] no TTS provider available for backend='{}'", backend);
-        return {false, "no provider", {}, 0, 0};
-    }
-
-    THROTTLE_LOG(1000, "[VoiceEngine] text = {}, clean = {}", text, clean);
-    TtsRequest req{clean, voice};
-    auto result = provider->Synthesize(req);
-    if (!result.success) {
-        return {false, result.error_msg, {}, 0, 0};
-    }
-    return result;
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-//  Audio Capture — delegates to VoiceChannel
-// ══════════════════════════════════════════════════════════════════════════
 
 void VoiceEngine::StartCapture() {
-    ResetVad();
-    auto& vc = media_engine::VoiceChannel::GetInstance();
-    vc.InitCapture(
-        [this](const int16_t* data, size_t n) { FeedPCM(data, n); }
-    );
+    if (interaction_) {
+        interaction_->ResetUtterance();
+    }
+    media_engine::VoiceChannel::GetInstance().InitCapture(
+        [this](const int16_t* data, size_t n) {
+            if (n != 480 || interaction_ == nullptr) {
+                return;
+            }
+            // VoiceChannel 没有硬件闭麦；播报期直接丢帧，避免自听
+            if (!interaction_->IsSpeaking()) {
+                interaction_->FeedFrame(data, n);
+            }
+        });
 }
 
 void VoiceEngine::StopCapture() {
     media_engine::VoiceChannel::GetInstance().EnableCapture(false);
 }
 
-bool VoiceEngine::IsCapturing() {
-    return media_engine::VoiceChannel::GetInstance().IsRunning();
-}
-
 void VoiceEngine::Speak(const std::string& text,
                          const std::string& backend,
                          const std::string& voice) {
-    if (voice == "none") return;  // skip TTS for roles that don't need it
-
-    GetGlobalThreadPool().Submit([this, text, backend, voice]() {
-        auto clean = CleanTtsText(text);
-        LOG_INFO("[VoiceEngine::Speak] text='{}', clean='{}', backend='{}', voice='{}'", text, clean, backend, voice);
-
-        std::vector<int16_t> pcm;
-        {
-            std::lock_guard<std::mutex> lock(speak_mutex_);
-            tts_speaking_ = true;
-            auto result = Synthesize(clean, backend, voice);
-            if (result.success && !result.pcm.empty())
-                pcm = Resample24kTo16k(result.pcm);
-            tts_speaking_ = false;
-        }
-        if (!pcm.empty())
-            media_engine::VoiceChannel::GetInstance().PlayAudio(pcm);
-    });
+    if (voice == "none" || interaction_ == nullptr) {
+        return;  // skip TTS for roles that don't need it
+    }
+    interaction_->Speak(voice::SpeechRequest{text, voice, backend});
 }
 
 }  // namespace prosophor

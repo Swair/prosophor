@@ -1,5 +1,5 @@
 // meal_schedule 单测：时间串解析、窗口合法性、区间查询边界（含头不含尾）
-#include "meal_schedule.h"
+#include "meal/meal_schedule.h"
 
 #include <optional>
 #include <string>

@@ -131,6 +131,12 @@ bool DirExists(const std::string& path);
 /// @return true if file was deleted
 bool RemoveFile(const std::string& path);
 
+/// CopyFile - Copy a file, overwriting the destination if it exists
+/// @param from Source path
+/// @param to Destination path
+/// @return true if copied
+bool CopyFile(const std::string& from, const std::string& to);
+
 /// FileSize - Get file size in bytes
 /// @param path File path
 /// @return File size, or 0 if file doesn't exist or can't be read

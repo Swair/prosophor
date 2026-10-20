@@ -1,7 +1,7 @@
 // 状态机 + 投票窗单元测试（对照 Python domain 语义逐条移植）
 #include <ostream>
 
-#include "scene.h"
+#include "domain/scene.h"
 #include "micro_test.hpp"
 
 using namespace prosophor::nr::domain;

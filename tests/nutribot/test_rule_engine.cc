@@ -1,8 +1,8 @@
 // 规则引擎 + 成员禁忌语义单元测试
-#include "events.h"
-#include "food.h"
-#include "member.h"
-#include "rule_engine.h"
+#include "domain/events.h"
+#include "domain/food.h"
+#include "domain/member.h"
+#include "domain/rule_engine.h"
 #include "micro_test.hpp"
 
 using namespace prosophor::nr::domain;

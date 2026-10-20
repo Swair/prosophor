@@ -5,9 +5,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <iostream>
-
-#include "platform/platform.h"
 
 namespace prosophor {
 
@@ -41,14 +38,6 @@ bool IsUtf8(const std::string& input) {
         } else return false;
     }
     return true;
-}
-
-std::string ConvertToUtf8(const std::string& input) {
-    return Platform::NativeToUtf8(input);
-}
-
-std::string ReadLine() {
-    return Platform::ReadLine();
 }
 
 }  // namespace prosophor

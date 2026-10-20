@@ -12,6 +12,10 @@
 
 namespace prosophor {
 
+// 时长字面量的统一入口：业务代码不直接写 std::chrono::milliseconds/seconds
+using Milliseconds = std::chrono::milliseconds;
+using Seconds = std::chrono::seconds;
+
 // ============================================================================
 // SystemClock - 墙钟时间工具类（用于时间戳、日期显示）
 // ============================================================================

@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-#include "meal_monitor.h"
+#include "meal/meal_monitor.h"
 #include "ports.h"
 #include "micro_test.hpp"
 

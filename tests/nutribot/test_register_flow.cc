@@ -4,10 +4,10 @@
 #include <optional>
 #include <string>
 
-#include "member_repository.h"
+#include "storage/member_repository.h"
 #include "micro_test.hpp"
 #include "ports.h"
-#include "quiz_cli.h"
+#include "conversation/quiz_cli.h"
 
 using namespace prosophor::nr::app;
 using namespace prosophor::nr::infra;

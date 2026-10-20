@@ -37,10 +37,9 @@ endif()
 # ============================================================================
 file(GLOB_RECURSE CORE_SOURCES_ALL
     ${CMAKE_CURRENT_LIST_DIR}/base/common/*.cc
-    ${CMAKE_CURRENT_LIST_DIR}/base/rtc_wrapper/resampler.cc
-    ${CMAKE_CURRENT_LIST_DIR}/base/rtc_wrapper/vad_processor.cc
-    ${CMAKE_CURRENT_LIST_DIR}/base/rtc_wrapper/rtc/*.c
-    ${CMAKE_CURRENT_LIST_DIR}/base/rtc_wrapper/rtc/*.cc
+    ${CMAKE_CURRENT_LIST_DIR}/base/network/*.cc
+    ${CMAKE_CURRENT_LIST_DIR}/base/voice_interaction/*.cc
+    ${CMAKE_CURRENT_LIST_DIR}/base/voice_interaction/rtc_wrapper/rtc/*.c
     ${CMAKE_CURRENT_LIST_DIR}/prosophor_core/*.cc
 )
 
@@ -64,11 +63,17 @@ if(NOT PROSOPHOR_BUILD_LLAMA)
     list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "llamacpp_provider\\.cc$")
 endif()
 
-# rtc/media 栈只为桌面 SDL(音频会话)服务，且其 typedefs.h 不支持 arm64；
 # websocket_client 依赖 libcurl >= 7.86 实验性 websocket API —— 本地终端形态裁剪
 if(PROSOPHOR_NUTRIBOT OR PROSOPHOR_AICODING)
-    list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "rtc_wrapper")
     list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "websocket_client\\.cc$")
+    # edge-tts 依赖 WebSocketClient：与 websocket_client.cc 同进同出
+    list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "edge_tts_provider\\.cc$")
+    add_compile_definitions(PROSOPHOR_NO_EDGE_TTS)
+endif()
+
+# ALSA 是 nutribot 常驻回路的音频后端；其他形态由 media_engine 负责音频 I/O
+if(NOT PROSOPHOR_NUTRIBOT)
+    list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "voice_interaction/audio/alsa_audio_io\\.cc$")
 endif()
 
 # edge-tts provider 依赖 libcurl >= 7.86 实验性 websocket API（curl_ws_*）。
@@ -80,7 +85,6 @@ else()
     list(FILTER CORE_SOURCES_ALL EXCLUDE REGEX "edge_tts_provider\\.cc$")
     add_compile_definitions(PROSOPHOR_NO_EDGE_TTS)
 endif()
-
 
 # aidgen LLM provider 源在 core GLOB 内；仅 nutribot 形态使用。
 # aidgen_provider.cc 是仓库内唯一包含 aidgen.hpp / aidlite.hpp / opencv 的文件
@@ -100,7 +104,9 @@ target_include_directories(prosophor_core
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/prosophor_core>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/base>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/base/voice_interaction>
 )
+
 
 target_compile_definitions(prosophor_core PUBLIC
     NOMINMAX
@@ -321,7 +327,10 @@ if(PROSOPHOR_NUTRIBOT)
         ${NR_AIDLITE_LIB} ${NR_OPENCV_CORE} ${NR_OPENCV_IMGPROC} ${NR_OPENCV_IMGCODECS})
     message(STATUS "aidlite + opencv：已并入 prosophor_core（aidgen-vl 视觉链路）")
 
-    # 音频 I/O：ALSA 直连（nutribot/audio_io.cc；/usr/include 默认即系统包含路径）
+    # 音频 I/O：ALSA 直连（voice_interaction/audio/alsa_audio_io.cc）
+    find_package(ALSA REQUIRED)
+    add_compile_definitions(PROSOPHOR_HAS_ALSA)
+    target_link_libraries(prosophor_core PRIVATE ALSA::ALSA)
     target_link_libraries(prosophor PRIVATE prosophor_core asound)
 endif()
 

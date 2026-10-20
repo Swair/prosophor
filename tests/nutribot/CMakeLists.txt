@@ -20,7 +20,8 @@ file(GLOB_RECURSE NUTRIBOT_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/../../main_src/base/common/file_utils.cc
     ${CMAKE_CURRENT_LIST_DIR}/../../main_src/base/common/i18n.cc
 )
-list(FILTER NUTRIBOT_TEST_SOURCES EXCLUDE REGEX "nutribot_app\.cc$")
+list(FILTER NUTRIBOT_TEST_SOURCES EXCLUDE REGEX
+     "(nutribot_app|nutribot_selftest|nutribot_support|resident_session)\.cc$")
 list(FILTER NUTRIBOT_TEST_SOURCES EXCLUDE REGEX "camera_source\.cc$")
 list(FILTER NUTRIBOT_TEST_SOURCES EXCLUDE REGEX "scene_monitor\.cc$")
 add_library(nr_test_core STATIC ${NUTRIBOT_TEST_SOURCES})
@@ -39,7 +40,7 @@ add_executable(nr_tests
     test_scene_judger.cc
     test_vl_food_detector.cc
     test_register_flow.cc
-    test_voice_session.cc
+    test_speech_rules.cc
     test_meal_schedule.cc
     test_meal_journal.cc
     test_dish_nutrition.cc
@@ -52,9 +53,7 @@ find_package(spdlog CONFIG QUIET)
 if(TARGET spdlog::spdlog)
     target_link_libraries(nr_test_core PUBLIC spdlog::spdlog)
 endif()
-# asound：audio_io.cc（ALSA 直连）在 glob 源集合内 —— 测试仅编译不调用，
-# 链接期仍需 ALSA 符号可用
-target_link_libraries(nr_tests PRIVATE nr_test_core asound)
+target_link_libraries(nr_tests PRIVATE nr_test_core)
 target_include_directories(nr_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}                    # micro_test.hpp
     ${CMAKE_CURRENT_LIST_DIR}/../../main_src/prosophor_core   # providers/llm/prompt.h（仅头）

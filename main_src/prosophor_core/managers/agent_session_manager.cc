@@ -16,7 +16,7 @@
 #include "managers/permission_manager.h"
 #include "core/memory_manager.h"
 #include "core/session_key.h"
-#include "providers/provider_router/llm_provider_router.h"
+#include "providers/llm_provider_router.h"
 
 namespace prosophor {
 

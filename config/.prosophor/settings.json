@@ -226,7 +226,7 @@
         "perception_interval_ms": 3000,
         "idle_interval_ms": 15000,
         "timeout_ms": 8000,
-        "keep_frames": 3,
+        "keep_frames": 20,
         "motion_pixel_threshold": 12
     },
     "meal": {
@@ -252,7 +252,8 @@
     "nutribot": {
         "member_store_dir": "",
         "stub_member_name": "小明",
-        "nutrition_file": ""
+        "nutrition_file": "",
+        "inference_timeout_ms": 180000
     },
     "robot": {
         "control_enabled": true,

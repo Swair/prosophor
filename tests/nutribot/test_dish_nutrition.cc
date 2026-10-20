@@ -1,11 +1,11 @@
 // dish_nutrition 单测：加载/坏条目跳过/归一匹配/装饰器（夹具在 assets/）
-#include "dish_nutrition.h"
+#include "meal/dish_nutrition.h"
 
 #include <string>
 #include <vector>
 
 #include "common/file_utils.h"
-#include "food.h"
+#include "domain/food.h"
 #include "micro_test.hpp"
 #include "ports.h"
 

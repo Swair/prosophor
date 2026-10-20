@@ -50,16 +50,16 @@ LlamacppProvider::~LlamacppProvider() {
     Release();
 }
 
-bool LlamacppProvider::Load() {
+void LlamacppProvider::Load() {
     bool expected = false;
     if (!loading_.compare_exchange_strong(expected, true)) {
         LOG_WARN("[local] Load already in progress");
-        return false;
+        return;
     }
 
     if (loaded_) {
         loading_ = false;
-        return true;
+        return;
     }
 
     // 为了初始化不阻塞，异步加载模型。首次 Chat 时会等待加载完成。

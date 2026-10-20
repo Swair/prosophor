@@ -16,8 +16,7 @@
 #include "managers/active_trigger_manager.h"
 #include "command_registry.h"
 #include "tools/tool_registry.h"
-#include "providers/provider_router/llm_provider_router.h"
-#include "providers/provider_router/tts_provider_router.h"
+#include "providers/llm_provider_router.h"
 #include "services/lsp_manager.h"
 
 namespace prosophor {
@@ -63,8 +62,6 @@ void AgentEngine::InitializeComponents() {
 
     provider_router_ = &LlmProviderRouter::GetInstance();
     provider_router_->Initialize(config_);
-
-    TtsProviderRouter::GetInstance().Initialize(config_);
 
     auto& lsp_manager = prosophor::LspManager::GetInstance();
     lsp_manager.Initialize();

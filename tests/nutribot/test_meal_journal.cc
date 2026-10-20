@@ -1,12 +1,12 @@
 // meal_journal 单测：就餐会话累计（时长/菜品去重/热量只计命中/提醒回顾上限）
-#include "meal_journal.h"
+#include "meal/meal_journal.h"
 
 #include <chrono>
 #include <string>
 #include <vector>
 
-#include "events.h"
-#include "food.h"
+#include "domain/events.h"
+#include "domain/food.h"
 #include "micro_test.hpp"
 
 namespace {
@@ -17,9 +17,9 @@ using prosophor::nr::domain::FoodItem;
 using prosophor::nr::domain::ReminderEvent;
 using prosophor::nr::domain::ScenePackage;
 
-using SteadyClock = std::chrono::steady_clock;
-SteadyClock::time_point At(int seconds) {
-    return SteadyClock::time_point{} + std::chrono::seconds(seconds);
+using SteadyClock = prosophor::SteadyClock;
+SteadyClock::TimePoint At(int seconds) {
+    return SteadyClock::TimePoint{} + std::chrono::seconds(seconds);
 }
 
 FoodItem Dish(const std::string& name, double kcal = 0.0, bool has_nutrition = false) {

@@ -21,7 +21,7 @@ static std::string s_sel;
 static bool s_scan = true;
 static std::vector<std::string> s_order;
 
-void InitOrder(const std::unordered_map<std::string, ProviderConfig>& providers) {
+void InitOrder(const std::unordered_map<std::string, LlmProviderConfig>& providers) {
     s_order.clear();
     const std::vector<std::string> preferred = {
         "anthropic", "openai", "ollama", "llamacpp"
@@ -99,7 +99,7 @@ void ChatWindow::RenderProvidersView(int cont_x, int cont_y, int cont_w, int con
         media_engine::Layout::GetCursorScreenPos(nullptr, &add_entry_y);
         media_engine::Layout::SetCursorScreenPos(sv.right_x + sv.right_w - 140.0f - 8.0f, add_entry_y);
         if (media_engine::ImGuiWidget::Button(("+ Add Entry##" + s_sel).c_str(), 140.0f, 0)) {
-            ProviderEntryConfig ne;
+            LlmProviderEntryConfig ne;
             ne.timeout = 30;
             prov.entries.push_back(std::move(ne));
         }

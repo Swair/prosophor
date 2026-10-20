@@ -1,13 +1,13 @@
 // proactive_announcer 单测：播报规划的去重、节流挂起、稳定性防线、饭点问候。
 // 时间以固定基准注入（t0 + 秒），行为完全确定，不依赖真实时钟。
-#include "proactive_announcer.h"
+#include "conversation/proactive_announcer.h"
 
 #include <chrono>
 #include <string>
 #include <vector>
 
-#include "events.h"
-#include "food.h"
+#include "domain/events.h"
+#include "domain/food.h"
 #include "micro_test.hpp"
 
 namespace {
@@ -21,8 +21,8 @@ using prosophor::nr::domain::ReminderEvent;
 using prosophor::nr::domain::ScenePackage;
 
 // 固定时间基准（steady_clock 的起点值无所谓，只做差值）
-Clock::time_point At(int seconds) {
-    return Clock::time_point{} + std::chrono::seconds(seconds);
+Clock::TimePoint At(int seconds) {
+    return Clock::TimePoint{} + std::chrono::seconds(seconds);
 }
 
 ReminderEvent TabooEvent(const std::string& member, const std::string& food) {
@@ -87,6 +87,35 @@ TEST(announcer, food_set_change_reannounces_after_gap) {
         announcer.PlanPerception(MakePackage({"牛奶", "清炒时蔬"}), At(20));
     EXPECT_TRUE(Contains(speech, "清炒时蔬"));
     EXPECT_EQ(announcer.stats().food_announcements, 2);
+}
+
+TEST(announcer, idle_scene_suppresses_speech_but_keeps_settled_state) {
+    // 空桌待机：不做主动开口，但稳定判定照常推进 —— 场景恢复后直接补播，
+    // 不用再等两轮稳定（否则真上菜了还要多等一个感知节拍）
+    ProactiveAnnouncer announcer;
+    const auto pkg = MakePackage({"凉拌木耳"});
+    EXPECT_EQ(announcer.PlanPerception(pkg, At(0), /*allow_speech=*/false), std::string(""));
+    EXPECT_EQ(announcer.PlanPerception(pkg, At(3), /*allow_speech=*/false), std::string(""));
+    EXPECT_EQ(announcer.stats().food_announcements, 0);
+    EXPECT_EQ(announcer.stats().suppressed_by_scene, 1);   // 第二次起有话说但被压
+
+    const std::string speech = announcer.PlanPerception(pkg, At(4), /*allow_speech=*/true);
+    EXPECT_TRUE(Contains(speech, "凉拌木耳"));
+    EXPECT_EQ(announcer.stats().food_announcements, 1);
+}
+
+TEST(announcer, idle_scene_holds_reminder_until_allowed) {
+    // 访客/空桌静默期识别到的禁忌：挂起不丢，静默结束后补播
+    ProactiveAnnouncer announcer;
+    const auto pkg = MakePackage({"花生酱拌面"}, {TabooEvent("小明", "花生酱拌面")});
+    EXPECT_EQ(announcer.PlanPerception(pkg, At(0), /*allow_speech=*/false), std::string(""));
+    EXPECT_EQ(announcer.stats().pending_reminders, 1);
+    EXPECT_EQ(announcer.stats().reminders_spoken, 0);
+
+    const std::string speech = announcer.PlanPerception(pkg, At(3), /*allow_speech=*/true);
+    EXPECT_TRUE(Contains(speech, "花生酱拌面"));
+    EXPECT_EQ(announcer.stats().reminders_spoken, 1);
+    EXPECT_EQ(announcer.stats().pending_reminders, 0);
 }
 
 TEST(announcer, single_round_flicker_does_not_reannounce) {

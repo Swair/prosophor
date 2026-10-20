@@ -1,10 +1,10 @@
 // LlmSceneJudger 测试：prompt 构建 / 回复解析 / Fake 后端全链路
 #include <string>
 
-#include "llm_scene_judger.h"
+#include "perception/llm_scene_judger.h"
 #include "micro_test.hpp"
 #include "ports.h"
-#include "scene.h"
+#include "domain/scene.h"
 
 using namespace prosophor::nr::app;
 using prosophor::nr::domain::SceneState;

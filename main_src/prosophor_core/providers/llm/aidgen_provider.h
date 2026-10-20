@@ -57,19 +57,19 @@ public:
                             std::function<void(StreamEvent, std::string)> callback) override;
 
     /// 本地直跑对话（不走 HTTP 基类模板）
-    ChatResponse Chat(const ChatRequest& request);
+    ChatResponse Chat(const ChatRequest& request) override;
 
     // ── 生命周期（同 llamacpp：构造即异步装载） ──
-    void Load();
+    void Load() override;
     void Unload();
-    bool IsLoaded() const;
-    bool IsLoading() const;
-    std::string GetLoadError() const;
+    bool IsLoaded() const override;
+    bool IsLoading() const override;
+    std::string GetLoadError() const override;
     void ResetConversation();   // 清空 KV Cache / 对话状态
 
     /// 当前装配的模型配置是否含 vlm_model 段（即是否为多模态模型）。
     /// 与编码器是否装载成功无关 —— 后者失败原因见 GetLoadError()。
-    bool HasVisionConfig() const { return has_vision_config_; }
+    bool HasVisionConfig() const override { return has_vision_config_; }
 
 protected:
     // 本地无 HTTP：空实现

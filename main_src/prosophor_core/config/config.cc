@@ -81,16 +81,16 @@ const ModelConfig& ProsophorConfig::GetModelConfig() const {
     return fallback_model;
 }
 
-const ProviderConfig& ProsophorConfig::GetProvider(const std::string& name) const {
+const LlmProviderConfig& ProsophorConfig::GetProvider(const std::string& name) const {
     auto it = llm_providers.find(name);
     if (it != llm_providers.end()) {
         return it->second;
     }
-    static ProviderConfig default_provider;
+    static LlmProviderConfig default_provider;
     return default_provider;
 }
 
-const ModelConfig& ProviderConfig::GetDefaultModel() const {
+const ModelConfig& LlmProviderConfig::GetDefaultModel() const {
     if (model_configs.empty()) {
         static ModelConfig default_model;
         return default_model;
@@ -103,7 +103,7 @@ const ModelConfig& ProviderConfig::GetDefaultModel() const {
     return model_configs.begin()->second;
 }
 
-bool ProviderConfig::FindEntryForModel(const std::string& provider_name,
+bool LlmProviderConfig::FindEntryForModel(const std::string& provider_name,
                                         const std::string& model,
                                         std::string& out_base_url,
                                         std::string& out_api_key,
@@ -291,8 +291,8 @@ ModelDefinition ModelDefinition::FromJson(const nlohmann::json& json) {
     return m;
 }
 
-ProviderConfig ProviderConfig::FromJson(const nlohmann::json& json) {
-    ProviderConfig config;
+LlmProviderConfig LlmProviderConfig::FromJson(const nlohmann::json& json) {
+    LlmProviderConfig config;
     config.api_key = json.value("api_key", json.value("apiKey", ""));
     config.base_url = json.value("base_url", json.value("baseUrl", ""));
     config.timeout = json.value("timeout", kDefaultProviderTimeoutSec);
@@ -332,10 +332,10 @@ ProviderConfig ProviderConfig::FromJson(const nlohmann::json& json) {
 AidGenModelConfig AidGenModelConfig::FromJson(const nlohmann::json& json) {
     AidGenModelConfig config;
     // 兼容旧的散列键：aidgen_config / aidgen_vl_config / aidgen_vit_backend
-    config.config_file = Platform::NormalizePath(
-        json.value("config_file", json.value("aidgen_config", "")));
-    config.vl_config_file = Platform::NormalizePath(
-        json.value("vl_config_file", json.value("aidgen_vl_config", "")));
+    config.config_file = Platform::NormalizePath(ExpandHome(
+        json.value("config_file", json.value("aidgen_config", ""))));
+    config.vl_config_file = Platform::NormalizePath(ExpandHome(
+        json.value("vl_config_file", json.value("aidgen_vl_config", ""))));
     config.backend = json.value("backend", json.value("aidgen_backend", "auto"));
     config.vit_backend = json.value("vit_backend",
                                     json.value("aidgen_vit_backend", "auto"));
@@ -368,8 +368,8 @@ nlohmann::ordered_json AidGenModelConfig::ToJson() const {
 
 LlamacppModelConfig LlamacppModelConfig::FromJson(const nlohmann::json& json) {
     LlamacppModelConfig config;
-    config.model_path = Platform::NormalizePath(json.value("model_path", ""));
-    config.mmproj_path = Platform::NormalizePath(json.value("mmproj_path", ""));
+    config.model_path = Platform::NormalizePath(ExpandHome(json.value("model_path", "")));
+    config.mmproj_path = Platform::NormalizePath(ExpandHome(json.value("mmproj_path", "")));
     config.port = json.value("port", 8080);
     // Backward compat: gpu_enable=true → -1, gpu_enable=false → 0; else use n_gpu_layers directly
     if (json.contains("gpu_enable")) {
@@ -436,76 +436,6 @@ nlohmann::ordered_json LlamacppModelConfig::ToJson() const {
     return j;
 }
 
-TtsConfig TtsConfig::FromJson(const nlohmann::json& json) {
-    TtsConfig config;
-    config.enabled = json.value("enabled", true);
-
-    // Read from provider array (preferred) or flat fields (legacy)
-    if (json.contains("provider") && json["provider"].is_array() && !json["provider"].empty()) {
-        const auto& p = json["provider"][0];
-        config.backend = p.value("backend", "edge-tts");
-        config.gs_auto_start = p.value("auto_start", config.gs_auto_start);
-        if (p.contains("voice_list") && p["voice_list"].is_array()) {
-            for (const auto& v : p["voice_list"])
-                config.voice_list.push_back(v.get<std::string>());
-        }
-    } else {
-        config.backend = json.value("backend", "edge-tts");
-        config.voice = json.value("voice", "zh-CN-XiaoxiaoNeural");
-        if (json.contains("voice_list") && json["voice_list"].is_array()) {
-            for (const auto& v : json["voice_list"])
-                config.voice_list.push_back(v.get<std::string>());
-        }
-    }
-    // Always include "none" option to disable TTS per role
-    config.voice_list.push_back("none");
-    config.gs_url = json.value("gs_url", json.value("gsUrl", "http://127.0.0.1:9880"));
-    config.gs_install_path = json.value("gs_install_path", json.value("gsInstallPath", ""));
-    config.gs_auto_start = json.value("gs_auto_start", json.value("gsAutoStart", true));
-    config.gs_port = json.value("gs_port", json.value("gsPort", 9880));
-    config.gs_ref_audio_path = json.value("gs_ref_audio_path", json.value("gsRefAudioPath", ""));
-    config.gs_ref_audio_text = json.value("gs_ref_audio_text", json.value("gsRefAudioText", ""));
-    config.gs_ref_audio_lang = json.value("gs_ref_audio_lang", json.value("gsRefAudioLang", "zh"));
-    config.gs_text_lang = json.value("gs_text_lang", json.value("gsTextLang", "zh"));
-    // sherpa-onnx TTS
-    config.sherpa_model_dir  = json.value("sherpa_model_dir",  "");
-    config.sherpa_speaker_id = json.value("sherpa_speaker_id", 0);
-    config.sherpa_speed      = json.value("sherpa_speed",       1.0f);
-    // aidvoice (MeloTTS) 本地 NPU 后端
-    config.aidvoice_model_dir = json.value("aidvoice_model_dir", std::string(""));
-    config.aidvoice_speed     = json.value("aidvoice_speed", 1.0);
-    return config;
-}
-
-AsrConfig AsrConfig::FromJson(const nlohmann::json& json) {
-    AsrConfig config;
-    config.enabled        = json.value("enabled",        false);
-    config.push_to_talk   = json.value("push_to_talk",   true);
-    config.backend        = json.value("backend",        std::string("http"));
-    config.server_url     = json.value("server_url",     std::string("http://127.0.0.1:9100"));
-    // aidvoice 本地后端（settings.json 的历史键名 model_path 一并兼容）
-    config.model_dir      = json.value("model_dir", json.value("model_path", std::string("")));
-    config.echo_ms        = json.value("echo_ms", 15000);
-    config.timeout_ms     = json.value("timeout_ms", 20000);
-    config.reuse_instance = json.value("reuse_instance", true);
-    return config;
-}
-
-VoiceConfig VoiceConfig::FromJson(const nlohmann::json& json) {
-    VoiceConfig config;
-    config.capture_device  = json.value("capture_device", config.capture_device);
-    config.playback_device = json.value("playback_device", config.playback_device);
-    config.vad_rms_dbfs    = json.value("vad_rms_dbfs", config.vad_rms_dbfs);
-    config.start_confirm_frames = json.value("start_confirm_frames", config.start_confirm_frames);
-    config.end_silence_ms  = json.value("end_silence_ms", config.end_silence_ms);
-    config.max_utterance_ms = json.value("max_utterance_ms", config.max_utterance_ms);
-    config.pre_roll_frames = json.value("pre_roll_frames", config.pre_roll_frames);
-    config.warmup_discard_frames = json.value("warmup_discard_frames", config.warmup_discard_frames);
-    config.speak_max_chars = json.value("speak_max_chars", config.speak_max_chars);
-    config.speak_min_gap_ms = json.value("speak_min_gap_ms", config.speak_min_gap_ms);
-    return config;
-}
-
 CameraConfig CameraConfig::FromJson(const nlohmann::json& json) {
     CameraConfig config;
     config.device      = json.value("device", config.device);
@@ -545,6 +475,8 @@ NutribotConfig NutribotConfig::FromJson(const nlohmann::json& json) {
     config.member_store_dir = json.value("member_store_dir", config.member_store_dir);
     config.stub_member_name = json.value("stub_member_name", config.stub_member_name);
     config.nutrition_file   = json.value("nutrition_file", config.nutrition_file);
+    config.inference_timeout_ms =
+        json.value("inference_timeout_ms", config.inference_timeout_ms);
     return config;
 }
 
@@ -636,10 +568,10 @@ ProsophorConfig ProsophorConfig::FromJson(const nlohmann::json& json) {
         for (const auto& [key, value] : expanded["llm_providers"].items()) {
             if (value.is_array()) {
                 // Array format: keep all entries, key models by provider_name/model_name
-                ProviderConfig merged_config;
+                LlmProviderConfig merged_config;
                 bool first = true;
                 for (const auto& entry : value) {
-                    ProviderConfig entry_config = ProviderConfig::FromJson(entry);
+                    LlmProviderConfig entry_config = LlmProviderConfig::FromJson(entry);
 
                     if (first) {
                         merged_config = entry_config;
@@ -663,7 +595,7 @@ ProsophorConfig ProsophorConfig::FromJson(const nlohmann::json& json) {
                     }
 
                     // Store entry for lookup by FindEntryForModel
-                    ProviderEntryConfig e;
+                    LlmProviderEntryConfig e;
                     e.api_key = entry_config.api_key;
                     e.base_url = entry_config.base_url;
                     e.timeout = entry_config.timeout;
@@ -682,7 +614,7 @@ ProsophorConfig ProsophorConfig::FromJson(const nlohmann::json& json) {
                 config.llm_providers[key] = merged_config;
             } else {
                 // Object format: use directly
-                config.llm_providers[key] = ProviderConfig::FromJson(value);
+                config.llm_providers[key] = LlmProviderConfig::FromJson(value);
             }
         }
     }

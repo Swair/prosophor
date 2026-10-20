@@ -1,12 +1,12 @@
 // vision_stub 单测：常在场桩的命中/未命中/档案动态生效（内存 Fake 仓储，零 I/O）
-#include "vision_stub.h"
+#include "perception/vision_stub.h"
 
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-#include "member.h"
+#include "domain/member.h"
 #include "micro_test.hpp"
 
 namespace {

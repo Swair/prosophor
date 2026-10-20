@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 #include "common/log_wrapper.h"
 #include "common/string_utils.h"
+#include "platform/platform.h"
 
 #include "network/curl_client.h"
 #include "providers/llm/llm_provider.h"
@@ -288,7 +289,7 @@ ChatResponse AnthropicProvider::Deserialize(const std::string& json_str) const {
 
     try {
         // Convert to UTF-8 if necessary
-        std::string utf8_json = ConvertToUtf8(json_str);
+        std::string utf8_json = Platform::NativeToUtf8(json_str);
         response_json = nlohmann::json::parse(utf8_json);
 	
         LOG_DEBUG(" response body: {}", response_json.dump(4));

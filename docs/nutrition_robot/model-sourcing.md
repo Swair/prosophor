@@ -20,6 +20,15 @@
 2. **保留接口，不保留实现**：`MemberRepository::find_match` 接口照常移植，实现留空并注释"待 Model Farm 上架 face-embedding 模型"
 3. **若身份识别是硬需求**：等待 Model Farm 上架，或用官方 AI 模型转换工具链（AidLux AI 模型转换 Python SDK，官方）自研转换——不作为当前依赖
 
+## 当前过渡实现（2026-10-18）
+
+人脸在场检测仍用"常在场"桩。尝试过 OpenCV Haar（正脸 + 侧脸级联）做门控，
+但 `opencv_objdetect → opencv_dnn → libprotobuf` 与本机 AidGen/AidLite 链接后
+进程在 protobuf 静态初始化段错误（`call_init`），已回退。
+
+下一步应走官方 `Lightweight-Face-Detection`（aidlite 加载，不再引入
+OpenCV objdetect/protobuf）；身份识别仍等官方 face-embedding 模型。
+
 ## 官方模型完整映射（C++ 版规划）
 
 | 能力 | 模型 | 获取 |

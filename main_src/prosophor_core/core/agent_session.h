@@ -16,7 +16,7 @@
 #include "core/agent_role.h"
 #include "core/messages_schema.h"
 #include "providers/llm/llm_provider.h"
-#include "providers/provider_router/llm_provider_router.h"
+#include "providers/llm_provider_router.h"
 #include "common/list_buffer.h"
 #include "common/time_wrapper.h"
 #include "core/agent_types.h"

@@ -144,6 +144,14 @@ bool RemoveFile(const std::string& path) {
     return std::filesystem::remove(path, ec);
 }
 
+bool CopyFile(const std::string& from, const std::string& to) {
+    std::error_code ec;
+    return std::filesystem::copy_file(from, to,
+                                      std::filesystem::copy_options::overwrite_existing,
+                                      ec) &&
+           !ec;
+}
+
 uintmax_t FileSize(const std::string& path) {
     std::error_code ec;
     auto size = std::filesystem::file_size(path, ec);

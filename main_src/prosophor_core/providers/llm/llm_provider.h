@@ -149,7 +149,7 @@ class LLMProvider {
  public:
     virtual ~LLMProvider() = default;
 
-    ChatResponse Chat(const ChatRequest& request);
+    virtual ChatResponse Chat(const ChatRequest& request);
 
     /// Streaming chat - returns accumulated ChatResponse after stream completes
     virtual ChatResponse ChatStream(const ChatRequest& request,
@@ -158,6 +158,15 @@ class LLMProvider {
     virtual std::string GetProviderName() const = 0;
 
     virtual std::vector<std::string> GetSupportedModels() const = 0;
+
+    /// 本地后端生命周期：远程 provider 默认无操作/已就绪。
+    virtual void Load() {}
+    virtual bool IsLoaded() const { return true; }
+    virtual bool IsLoading() const { return false; }
+    virtual std::string GetLoadError() const { return {}; }
+
+    /// 当前装配是否为多模态模型（默认纯文本）。
+    virtual bool HasVisionConfig() const { return false; }
 
     virtual std::string Serialize(const ChatRequest& request) const = 0;
 

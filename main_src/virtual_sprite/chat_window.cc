@@ -71,7 +71,7 @@ bool ChatWindow::Create(int width, int height) {
             .Then(media_engine::Color::Slot::Border, media_engine::Colors::Gray63);
         Render();
         if (d_) {
-            std::string text = VoiceEngine::GetInstance().PollResult();
+            std::string text = VoiceEngine::GetInstance().PollAsrLatest();
             if (!text.empty()) d_->input_panel->SetText(text);
         }
     });

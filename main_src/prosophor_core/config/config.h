@@ -9,13 +9,15 @@
 
 #include <nlohmann/json.hpp>
 
+#include "voice_interaction/voice_config.h"
+
 namespace prosophor {
 
 // Forward declarations
 struct ModelConfig;
 struct ModelCost;
 struct ModelDefinition;
-struct ProviderConfig;
+struct LlmProviderConfig;
 struct ToolConfig;
 struct SkillEntryConfig;
 struct SkillsLoadConfig;
@@ -70,7 +72,7 @@ struct ModelConfig {
 };
 
 /// Configuration for a single provider entry (each array item keeps its own api_key/base_url)
-struct ProviderEntryConfig {
+struct LlmProviderEntryConfig {
     std::string api_key;
     std::string base_url;
     int timeout = 30;
@@ -148,7 +150,7 @@ struct LlamacppModelConfig {
 
 /// Configuration for an LLM provider
 /// models key format: "{provider_name}/{model_name}" → model params
-struct ProviderConfig {
+struct LlmProviderConfig {
     std::string api_key;
     std::string base_url;
     int timeout = 30;
@@ -159,16 +161,16 @@ struct ProviderConfig {
     std::vector<ModelDefinition> models;
 
     // llamacpp-specific config (model_path, gpu_enable, etc.) — only valid
-    // when this ProviderConfig is for the "llamacpp" provider type.
+    // when this LlmProviderConfig is for the "llamacpp" provider type.
     LlamacppModelConfig llamacpp_cfg;
 
     // aidgen(NPU) 专用配置 — only valid when provider type is "aidgen"/"aidgen-vl"
     AidGenModelConfig aidgen_cfg;
 
     // All entries from the config array (each keeps its own api_key/base_url)
-    std::vector<ProviderEntryConfig> entries;
+    std::vector<LlmProviderEntryConfig> entries;
 
-    static ProviderConfig FromJson(const nlohmann::json& json);
+    static LlmProviderConfig FromJson(const nlohmann::json& json);
 
     // Get default model config
     const ModelConfig& GetDefaultModel() const;
@@ -231,70 +233,6 @@ struct SecurityConfig {
     }
 };
 
-/// Configuration for TTS (Text-to-Speech)
-struct TtsConfig {
-    bool enabled = true;
-    std::string backend = "edge-tts";  // "edge-tts" | "gpt-sovits" | "sherpa-onnx"
-    std::string voice = "zh-CN-XiaoxiaoNeural";
-
-    // GPT-SoVITS settings
-    std::string gs_url = "http://127.0.0.1:9880";
-    std::string gs_install_path;
-    bool gs_auto_start = true;
-    int gs_port = 9880;
-    std::string gs_ref_audio_path;
-    std::string gs_ref_audio_text;
-    std::string gs_ref_audio_lang = "zh";
-    std::string gs_text_lang = "zh";
-
-    // sherpa-onnx VITS settings
-    std::string sherpa_model_dir;   // dir with model.onnx + tokens.txt [+ lexicon.txt]
-    int   sherpa_speaker_id = 0;
-    float sherpa_speed      = 1.0f;
-
-    // aidvoice (MeloTTS) 本地 NPU 后端：backend == "aidvoice" 时生效。
-    // SDK 1.5.0 无发音人参数，只有语速可调
-    std::string aidvoice_model_dir;   // 模型目录（config.json 的 type 决定中/英）
-    double aidvoice_speed = 1.0;      // 语速倍率（1.0 = 模型原生）
-
-    // edge-tts voice list
-    std::vector<std::string> voice_list;
-
-    static TtsConfig FromJson(const nlohmann::json& json);
-};
-
-/// Configuration for ASR (Automatic Speech Recognition)
-struct AsrConfig {
-    bool enabled = false;
-    bool push_to_talk = true;         // true: hold M to talk; false: VAD full-duplex always-on
-    std::string backend = "http";     // "http"（whisper server）| "aidvoice"（本地 NPU，nutribot 形态）
-    std::string server_url = "http://127.0.0.1:9100";  // whisper server endpoint
-
-    // aidvoice 本地后端：backend == "aidvoice" 时生效
-    std::string model_dir;            // 模型目录（含 config.json 与 *.aidem）
-    int echo_ms = 15000;              // 单轮推理窗口；SenseVoice 上限 15000
-    int timeout_ms = 20000;           // 单句等待 FINAL 上限（超时回空串）
-    bool reuse_instance = true;       // false = 每句重建实例（1.6s/句 退路开关）
-
-    static AsrConfig FromJson(const nlohmann::json& json);
-};
-
-/// Configuration for the resident voice loop（nutribot 常驻语音回路）
-struct VoiceConfig {
-    std::string capture_device = "plughw:CARD=PowerConf,DEV=0";
-    std::string playback_device = "plughw:0,0";
-    double vad_rms_dbfs = -38.0;      // 能量 VAD 门限（dBFS）
-    int start_confirm_frames = 3;     // 起判确认帧数（90ms）
-    int end_silence_ms = 700;         // 句尾静音判定
-    int max_utterance_ms = 12000;     // 单句上限（须 < asr.echo_ms）
-    int pre_roll_frames = 5;          // 起始回捞帧数（150ms）
-    int warmup_discard_frames = 8;    // 开流后丢弃帧数（设备唤醒期可能是数字静音）
-    int speak_max_chars = 120;        // 单次播报截断（按字符）
-    int speak_min_gap_ms = 10000;     // 主动播报最小间隔
-
-    static VoiceConfig FromJson(const nlohmann::json& json);
-};
-
 /// 摄像头抓帧配置（nutribot 常驻形态：ffmpeg 定期单帧抓拍落盘，供 VL 看菜）
 struct CameraConfig {
     std::string device = "/dev/video2";                          // v4l2 节点（Astra Pro 板上为 video2）
@@ -336,6 +274,9 @@ struct NutribotConfig {
     std::string member_store_dir;            // 空 = <BaseDir>/nutribot_members
     std::string stub_member_name = "小明";    // 桩人脸常驻成员名（须在档案库中）
     std::string nutrition_file;              // 菜品营养库；空 = <BaseDir>/nutribot_dishes.json
+    // 单次推理卡死阈值：VL/LLM 调用超过该时长无心跳 -> watchdog 强退进程
+    //（8B/QNN 实测会卡在 fastrpc 数分钟且没有取消 API；宁可有界重启）
+    int inference_timeout_ms = 180000;
 
     static NutribotConfig FromJson(const nlohmann::json& json);
 };
@@ -384,7 +325,7 @@ struct ProsophorConfig {
     float font_scale = kFontScaleLarge;      // 当前字体缩放倍率
 
     SecurityConfig security;
-    std::unordered_map<std::string, ProviderConfig> llm_providers;
+    std::unordered_map<std::string, LlmProviderConfig> llm_providers;
     ToolConfig tools;
     SkillsConfig skills;
     TtsConfig tts;
@@ -404,7 +345,7 @@ struct ProsophorConfig {
     const ModelConfig& GetModelConfig() const;
 
     /// Get provider config
-    const ProviderConfig& GetProvider(const std::string& name = "anthropic") const;
+    const LlmProviderConfig& GetProvider(const std::string& name = "anthropic") const;
 
     /// Load config from file
     static ProsophorConfig FromJson(const nlohmann::json& json);
