@@ -1,6 +1,6 @@
 #include "virtual_sprite/chat_window.h"
 #include "virtual_sprite/panels/panel_helpers.h"
-#include "config/config.h"
+#include "prosophor_core/public/config.h"
 #include "media_engine/media_engine.h"
 #include "common/i18n.h"
 

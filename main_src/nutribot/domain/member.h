@@ -25,30 +25,26 @@ struct HealthProfile {
     std::vector<std::string> preferences;         // 如 ["清淡","甜食"]
 };
 
-// 成员实体：身份 + 健康档案 + 人脸特征（512-d 多张）
+// 成员实体：身份 + 健康档案
 struct Member {
     std::string member_id;                        // 唯一标识（内部主键）
     std::string name;                             // 姓名（显示/识别输出）
     HealthProfile profile;                        // 健康档案（值对象）
-    std::vector<std::vector<float>> face_embeddings;  // 512-d，可多张
     std::string registered_at;                    // 注册时间 ISO 字符串
 
-    // 判断该成员是否禁忌某食物（禁忌 + 过敏原合并比对）。
-    //
-    // 中文食物名用包含关系匹配：禁忌「花生」可命中菜品「花生酱」；
-    // 精确匹配同样成立（禁忌「牛奶」命中「牛奶」）。
+    /// 禁忌/过敏匹配：精确或包含（"白灼虾" 命中过敏原 "虾"）
     bool has_taboo(const std::string& food_name) const {
-        const auto& terms = profile.taboo_foods;
-        const auto& allergies = profile.allergies;
-        for (const auto& t : terms) {
-            if (food_name == t || (!t.empty() && food_name.find(t) != std::string::npos))
-                return true;
-        }
-        for (const auto& a : allergies) {
-            if (food_name == a || (!a.empty() && food_name.find(a) != std::string::npos))
-                return true;
-        }
-        return false;
+        const auto matches = [&food_name](const std::vector<std::string>& terms) {
+            for (const auto& term : terms) {
+                if (term.empty()) continue;
+                if (food_name == term ||
+                    food_name.find(term) != std::string::npos) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        return matches(profile.taboo_foods) || matches(profile.allergies);
     }
 };
 

@@ -127,26 +127,53 @@ void VoiceInteraction::Start() {
     }
 }
 
-std::optional<std::string> VoiceInteraction::PollAsrResult(int timeout_ms) {
-    return pipeline_ ? pipeline_->PollAsrResult(timeout_ms) : std::nullopt;
+bool VoiceInteraction::PollAsrResult(std::string& out, int timeout_ms) {
+    if (pipeline_ == nullptr) {
+        out.clear();
+        return false;
+    }
+    return pipeline_->PollAsrResult(out, timeout_ms);
 }
 
-std::optional<std::string> VoiceInteraction::PollAsrLatest() {
-    return pipeline_ ? pipeline_->PollAsrLatest() : std::nullopt;
+bool VoiceInteraction::PollAsrLatest(std::string& out) {
+    if (pipeline_ == nullptr) {
+        out.clear();
+        return false;
+    }
+    return pipeline_->PollAsrLatest(out);
+}
+
+size_t VoiceInteraction::PollAllAsrResults(std::vector<std::string>& out) {
+    if (pipeline_ == nullptr) {
+        out.clear();
+        return 0;
+    }
+    return pipeline_->PollAllAsrResults(out);
+}
+
+bool VoiceInteraction::IsSpeechActive() const {
+    return pipeline_ != nullptr && pipeline_->IsSpeechActive();
+}
+
+bool VoiceInteraction::HasPendingAsr() const {
+    return pipeline_ != nullptr && pipeline_->HasPendingAsr();
 }
 
 // TTS 三个入口各司其职：
 //   Speak()         —— 入队，非阻塞（主循环/主动播报）
 //   Synthesize()    —— 文本→PCM（同步、带缓存；worker 内部用）
 //   SpeakBlocking() —— worker 专用：合成 + 播放 + 闭麦
-void VoiceInteraction::Speak(SpeechRequest request) {
-    if (request.text.empty() || request.voice == "none" || !config_.tts.enabled) {
-        return;
+bool VoiceInteraction::Speak(SpeechRequest request) {
+    if (request.text.empty() || request.voice == "none" ||
+        !config_.tts.enabled || pipeline_ == nullptr) {
+        return false;
     }
     // 净化/默认 voice/backend 统一在 Synthesize() 里做一次
-    if (pipeline_) {
-        pipeline_->EnqueueSpeech(std::move(request));
-    }
+    return pipeline_->EnqueueSpeech(std::move(request));
+}
+
+bool VoiceInteraction::WarmSpeech(const std::string& text) {
+    return Synthesize(SpeechRequest{text, {}, {}}).success;
 }
 
 bool VoiceInteraction::IsSpeaking() const {
@@ -155,6 +182,44 @@ bool VoiceInteraction::IsSpeaking() const {
     }
     // 拉取式输出：TTS worker 已写完但传输层还没拉完，仍算播报中
     return audio_out_ != nullptr && audio_out_->QueuedSamples() > 0;
+}
+
+size_t VoiceInteraction::DropPendingSpeech() {
+    return pipeline_ != nullptr ? pipeline_->DropPendingSpeech() : 0;
+}
+
+void VoiceInteraction::SetPlaybackHold(bool hold) {
+    playback_hold_.store(hold);
+}
+
+void VoiceInteraction::BridgeSilence(int sample_rate, int channels) {
+    if (audio_out_ == nullptr || sample_rate <= 0 || channels <= 0) return;
+    constexpr int chunk_ms = 20;
+    // 本地 8B 首句要 5~8s，桥接窗口必须覆盖整个思考期，否则中途 drain
+    // 又会出现"关一下再开"的开关声
+    constexpr int max_bridge_ms = 12000;
+    const size_t chunk_samples = static_cast<size_t>(sample_rate) * chunk_ms / 1000 *
+                                 static_cast<size_t>(channels);
+    if (chunk_samples == 0) return;
+    const std::vector<int16_t> silence(chunk_samples, 0);
+    // Write 在环形缓冲满后自然按实时节奏阻塞，这里只负责持续供静音；
+    // 有新句子入队或 hold 清除立即退出，交给下一句接上同一路流。
+    for (int waited = 0; waited < max_bridge_ms; waited += chunk_ms) {
+        if (!playback_hold_.load()) return;
+        if (pipeline_ != nullptr && pipeline_->HasPendingSpeech()) return;
+        if (!audio_out_->Write(silence.data(), silence.size())) return;
+    }
+}
+
+void VoiceInteraction::SetMicMuted(bool muted) {
+    mic_held_muted_.store(muted);
+    if (audio_in_ != nullptr) {
+        audio_in_->Mute(muted);
+    }
+    // 闭麦期间 VAD 冻结；开麦时丢弃冻结前可能残留的半句
+    if (!muted && pipeline_ != nullptr) {
+        pipeline_->ResetUtterance();
+    }
 }
 
 VoicePipeline::Stats VoiceInteraction::stats() const {
@@ -228,16 +293,22 @@ TtsResponse VoiceInteraction::Synthesize(const SpeechRequest& request) {
         return {false, "empty text after sanitization", {}, 0, 0};
     }
 
-    std::lock_guard<std::mutex> lock(tts_mutex_);
-    if (!tts_) {
-        return {false, "no provider", {}, 0, 0};
-    }
-
     const TtsRequest provider_request{normalized.text, normalized.voice};
     const TtsCacheKey key{provider_request.text, provider_request.voice,
                           normalized.backend, provider_request.sample_rate,
                           provider_request.channels};
+    // 缓存查询放在 tts_mutex_ 之前：主线程在播报间隙预合成下一句时会长时间持锁，
+    // worker 取已缓存的句子不能排在它后面（否则缓存命中也要等整段合成，句间留缝）。
     TtsResponse cached;
+    if (cache_.Get(key, cached)) {
+        return cached;
+    }
+
+    std::lock_guard<std::mutex> lock(tts_mutex_);
+    if (!tts_) {
+        return {false, "no provider", {}, 0, 0};
+    }
+    // 双检：两个线程并发预合成同一句时，后到者直接复用先到者的结果
     if (cache_.Get(key, cached)) {
         return cached;
     }
@@ -255,8 +326,11 @@ bool VoiceInteraction::SpeakBlocking(const SpeechRequest& request) {
         audio_in_->Mute(true);
     }
 
+    const auto synth_started = prosophor::SteadyClock::Now();
     const TtsResponse response = Synthesize(request);
+    const int64_t synth_ms = prosophor::SteadyClock::ElapsedMillis(synth_started);
     bool ok = false;
+    int64_t play_ms = 0;
     if (response.success && !response.pcm.empty()) {
         if (audio_out_ == nullptr) {
             LOG_ERROR("[VoiceInteraction] 无播放输出适配器");
@@ -265,15 +339,31 @@ bool VoiceInteraction::SpeakBlocking(const SpeechRequest& request) {
             if (!audio_out_->EnsureOpen(response.sample_rate, response.channels, error)) {
                 LOG_ERROR("[VoiceInteraction] {}", error.c_str());
             } else {
-                ok = audio_out_->Write(response.pcm.data(), response.pcm.size()) &&
-                     audio_out_->Drain();
+                const auto play_started = prosophor::SteadyClock::Now();
+                ok = audio_out_->Write(response.pcm.data(), response.pcm.size());
+                // 连续播报只在整轮最后一句 drain。每句都 drain 会停流再重启，
+                // 扬声器在句间发出"开关"声（实机：逐句播报明显卡顿）。
+                if (ok && (pipeline_ == nullptr || !pipeline_->HasPendingSpeech()) &&
+                    playback_hold_.load()) {
+                    // 填充语播完、回复首句还没到时不断流：用静音垫着
+                    BridgeSilence(response.sample_rate, response.channels);
+                }
+                if (ok && (pipeline_ == nullptr || !pipeline_->HasPendingSpeech())) {
+                    ok = audio_out_->Drain();
+                }
+                play_ms = prosophor::SteadyClock::ElapsedMillis(play_started);
             }
         }
     } else {
         LOG_ERROR("[VoiceInteraction] TTS 合成失败: {}", response.error_msg.c_str());
     }
+    LOG_INFO("[时延] TTS 合成 {}ms + 播放 {}ms（{} 字，{}）",
+             synth_ms, play_ms, request.text.size(),
+             response.success ? "ok" : response.error_msg.c_str());
 
-    if (audio_in_) {
+    // 外部要求闭麦时保持静音：多句连播的合成间隙不能开麦，
+    // 否则会把自己的尾音/环境音当用户话轮。
+    if (audio_in_ && !mic_held_muted_.load()) {
         audio_in_->Mute(false);
     }
     if (pipeline_) {

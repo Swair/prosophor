@@ -5,7 +5,7 @@
 #include <cstdlib>
 
 #include "common/log_wrapper.h"
-#include "config/config.h"
+#include "prosophor_core/public/config.h"
 #include "platform/platform.h"
 
 // 产品形态选择（同一入口，编译宏决定形态；宏由 CMake 对应开关定义）:
@@ -31,7 +31,13 @@ int main(int argc, char* argv[]) {
 
     if (prosophor::Platform::IsAlreadyRunning()) {
         fprintf(stderr, "Prosophor is already running.\n");
+#ifdef PROSOPHOR_NUTRIBOT
+        // 与正常退出同理：QNN/fastrpc teardown 与全局单例析构时序竞争会段错误
+        std::fflush(nullptr);
+        std::_Exit(1);
+#else
         return 1;
+#endif
     }
 
     const auto& config = prosophor::ProsophorConfig::GetInstance();

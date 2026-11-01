@@ -298,6 +298,7 @@
     },
     {
       "name": "炸鸡翅",
+      "aliases": ["炸鸡块", "鸡米花", "炸鸡", "炸鸡柳"],
       "per_serving": {
         "energy_kcal": 320.0,
         "protein_g": 20.0,

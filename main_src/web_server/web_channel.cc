@@ -6,7 +6,7 @@
 #include <algorithm>
 
 #include "common/log_wrapper.h"
-#include "config/config.h"
+#include "prosophor_core/public/config.h"
 
 namespace prosophor {
 

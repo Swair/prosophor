@@ -16,10 +16,10 @@
 
 #include <atomic>
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -71,11 +71,32 @@ public:
     void Start();
 
     // ── 主循环接口 ──
-    std::optional<std::string> PollAsrResult(int timeout_ms = 0);
-    std::optional<std::string> PollAsrLatest();
-    void Speak(SpeechRequest request);
-    void Speak(std::string text) { Speak(SpeechRequest{std::move(text), {}, {}}); }
+    /// 无结果时 out 清空并返回 false
+    bool PollAsrResult(std::string& out, int timeout_ms = 0);
+    bool PollAsrLatest(std::string& out);
+    /// 取走当前所有 final（非阻塞）；返回条数，out 清空后按入队顺序填入
+    size_t PollAllAsrResults(std::vector<std::string>& out);
+    /// 用户是否还在说（VAD 正在累积当前句）
+    bool IsSpeechActive() const;
+    /// 是否还有语音待处理（识别中，或 final 尚未被主循环取走）
+    bool HasPendingAsr() const;
+    /// 入队播报；返回是否真正入队（TTS 关闭/文本为空/队列已关闭时为 false）
+    bool Speak(SpeechRequest request);
+    bool Speak(std::string text) {
+        return Speak(SpeechRequest{std::move(text), {}, {}});
+    }
+    /// 预合成并写入 TTS 缓存（不播放）；用于唤醒应答等固定短语
+    bool WarmSpeech(const std::string& text);
+    /// 正在播报（已入队未开播也算，见 VoicePipeline::IsSpeaking）
     bool IsSpeaking() const;
+    /// 丢弃尚未开播的播报（如思考填充语）；返回丢弃条数
+    size_t DropPendingSpeech();
+    /// 手动闭麦/开麦（思考期闭麦）；开麦时顺带重置 VAD。
+    /// 闭麦期间 TTS worker 播完单句不再自行开麦（多句连播不留听音缝隙）。
+    void SetMicMuted(bool muted);
+    /// 轮内等待后续句子（思考填充语 → LLM 首句）：播完最后一句后不立刻停流，
+    /// 用静音垫着，避免停流/重启的"开关"声。首句入队后由调用方清除。
+    void SetPlaybackHold(bool hold);
     VoicePipeline::Stats stats() const;
 
     // ── 采集线程 / SDL 回调调用 ──
@@ -101,6 +122,8 @@ private:
     TtsResponse Synthesize(const SpeechRequest& request);
     /// TTS worker 专用：合成 + 播放 + 播报期闭麦
     bool SpeakBlocking(const SpeechRequest& request);
+    /// 队列空但轮次未结束：写静音维持 PCM 流，直到新句子入队或 hold 清除
+    void BridgeSilence(int sample_rate, int channels);
 
     void CaptureLoop();
     void NormalizeRequest(SpeechRequest& request) const;
@@ -117,6 +140,10 @@ private:
 
     mutable std::mutex asr_mutex_;
     mutable std::mutex tts_mutex_;
+    /// 外部（话轮侧）要求持续闭麦：worker 播完一句不得自行开麦
+    std::atomic<bool> mic_held_muted_{false};
+    /// 轮内等待后续句子：播完当前句后不断流，用静音维持
+    std::atomic<bool> playback_hold_{false};
 
     std::thread capture_thread_;
     std::atomic<bool> capture_running_{false};

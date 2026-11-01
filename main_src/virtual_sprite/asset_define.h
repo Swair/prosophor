@@ -1,7 +1,7 @@
 #ifndef ASSET_DEFINE_H
 #define ASSET_DEFINE_H
 
-#include "config/config.h"
+#include "prosophor_core/public/config.h"
 #include <string>
 
 inline std::string AssetBase() {

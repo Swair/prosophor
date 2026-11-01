@@ -11,8 +11,7 @@
 #include <vector>
 
 #include "common/noncopyable.h"
-#include "core/agent_types.h"
-#include "core/messages_schema.h"
+#include "prosophor_core/public/core_types.h"
 #include "web_server/channel.h"
 
 namespace prosophor {

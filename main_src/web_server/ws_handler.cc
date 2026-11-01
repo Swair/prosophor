@@ -9,7 +9,7 @@
 
 #include "common/crypto_utils.h"
 #include "common/log_wrapper.h"
-#include "config/config.h"
+#include "prosophor_core/public/config.h"
 #include "web_server/web_gateway.h"
 #include "web_server/web_channel.h"
 

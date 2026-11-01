@@ -15,3 +15,6 @@ web/dist/
 # Editor / IDE
 .vscode/
 .clangd
+
+# nutribot 调试帧副本（运行时生成）
+nutribot_llm_input.jpg

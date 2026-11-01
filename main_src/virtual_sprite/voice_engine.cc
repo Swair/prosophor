@@ -3,7 +3,7 @@
 
 #include "virtual_sprite/voice_engine.h"
 
-#include "config/config.h"
+#include "prosophor_core/public/config.h"
 #include "common/log_wrapper.h"
 #include "media/audio/voice_channel.h"
 #include "virtual_sprite/media_engine_audio_output.h"
@@ -66,11 +66,11 @@ VoiceEngine::~VoiceEngine() {
 }
 
 std::string VoiceEngine::PollAsrLatest() {
-    if (interaction_ == nullptr) {
-        return {};
+    std::string latest;
+    if (interaction_ != nullptr) {
+        interaction_->PollAsrLatest(latest);
     }
-    auto result = interaction_->PollAsrLatest();
-    return result.has_value() ? std::move(*result) : std::string{};
+    return latest;
 }
 
 void VoiceEngine::StartCapture() {

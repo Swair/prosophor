@@ -1,7 +1,6 @@
 // JsonMemberRepository 实现 —— 对照 Python infrastructure/member_repository.py
 #include "storage/member_repository.h"
 
-#include <cmath>
 #include <random>
 
 #include <nlohmann/json.hpp>
@@ -35,7 +34,6 @@ json to_json_obj(const Member& m) {
     j["dri_overrides"] = m.profile.dri_overrides;
     j["eating_habits"] = m.profile.eating_habits;
     j["preferences"] = m.profile.preferences;
-    j["face_embeddings"] = m.face_embeddings;
     j["registered_at"] = m.registered_at;
     return j;
 }
@@ -67,9 +65,6 @@ Member from_json_obj(const json& j) {
         p.eating_habits = j["eating_habits"].get<std::vector<std::string>>();
     if (j.contains("preferences"))
         p.preferences = j["preferences"].get<std::vector<std::string>>();
-    if (j.contains("face_embeddings"))
-        m.face_embeddings =
-            j["face_embeddings"].get<std::vector<std::vector<float>>>();
     m.registered_at = j.value("registered_at", "");
     return m;
 }
@@ -84,18 +79,6 @@ std::string gen_id() {   // 8 位随机 id（Python uuid4()[:8] 近似）
     std::string s;
     for (int i = 0; i < 8; ++i) s.push_back(hex_digits[rng() % 16]);
     return s;
-}
-
-double cosine(const std::vector<float>& a, const std::vector<float>& b) {
-    if (a.empty() || a.size() != b.size()) return 0.0;
-    double dot = 0.0, na = 0.0, nb = 0.0;
-    for (size_t i = 0; i < a.size(); ++i) {
-        dot += a[i] * b[i];
-        na += a[i] * a[i];
-        nb += b[i] * b[i];
-    }
-    if (na <= 0.0 || nb <= 0.0) return 0.0;
-    return dot / (std::sqrt(na) * std::sqrt(nb));
 }
 
 }  // namespace
@@ -135,28 +118,6 @@ std::vector<Member> JsonMemberRepository::list_members() {
     return out;
 }
 
-std::optional<nr::domain::MemberMatch> JsonMemberRepository::find_match(
-    const std::vector<float>& query_emb, double threshold) {
-    Member best{};
-    double best_sim = 0.0;
-    bool hit = false;
-    for (const auto& m : list_members()) {
-        for (const auto& emb : m.face_embeddings) {
-            const double sim = cosine(query_emb, emb);
-            if (sim >= threshold && sim > best_sim) {
-                best = m;
-                best_sim = sim;
-                hit = true;
-            }
-        }
-    }
-    if (!hit) return std::nullopt;
-    nr::domain::MemberMatch match;
-    match.member = std::move(best);
-    match.similarity = best_sim;
-    return match;
-}
-
 void JsonMemberRepository::add_member(const Member& member) {
     Member m = member;
     if (m.member_id.empty()) m.member_id = gen_id();
@@ -166,18 +127,6 @@ void JsonMemberRepository::add_member(const Member& member) {
 
 void JsonMemberRepository::delete_member(const std::string& name) {
     prosophor::RemoveFile(path_of(name));
-}
-
-Member JsonMemberRepository::merge_face(
-    const std::string& name,
-    std::vector<std::vector<float>> embeddings) {
-    Member m = get_member(name).value_or(Member{});
-    if (m.name.empty()) m.name = name;   // 新成员以 name 建档
-    if (m.member_id.empty()) m.member_id = gen_id();
-    if (m.registered_at.empty()) m.registered_at = now_iso();
-    m.face_embeddings = std::move(embeddings);   // Python 语义：整组替换
-    prosophor::WriteJson(path_of(m.name), to_json_obj(m));
-    return m;
 }
 
 }  // namespace prosophor::nr::infra

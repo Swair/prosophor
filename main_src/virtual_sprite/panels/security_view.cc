@@ -2,8 +2,8 @@
 #include "virtual_sprite/panels/panel_helpers.h"
 #include "media_engine/media_engine.h"
 #include "common/i18n.h"
-#include "prosophor_core/config/config.h"
-#include "prosophor_core/managers/permission_manager.h"
+#include "prosophor_core/public/config.h"
+#include "prosophor_core/public/security.h"
 
 namespace prosophor {
 

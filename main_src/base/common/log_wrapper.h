@@ -29,7 +29,6 @@ inline void InitLog(const std::string& level = "info") {
         {"debug", spdlog::level::debug},
         {"info", spdlog::level::info},
         {"warn", spdlog::level::warn},
-        {"warning", spdlog::level::warn},
         {"error", spdlog::level::err},
         {"critical", spdlog::level::critical}
     };
@@ -58,7 +57,9 @@ inline void InitLog(const std::string& level = "info") {
 
     auto logger = std::make_shared<spdlog::logger>("prosophor", sinks.begin(), sinks.end());
     logger->set_level(log_level);
-    logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%t] [%l] %v [%s(%#)]");
+    // %L = 级别首字母（大写 T/D/I/W/E/C）
+    // logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e|%l|%t][%3#|%-16s] %v");
+    logger->set_pattern("[%H:%M:%S.%e|%L|%t][%3#|%-16s] %v");
     spdlog::flush_every(std::chrono::seconds(30));  // flush to disk every 30s
     spdlog::set_default_logger(logger);
 }

@@ -1,46 +1,50 @@
 // nutribot_support 实现。
 #include "entry/nutribot_support.h"
 
-#include <utility>
+#include <ctime>
+#include <thread>
 
 #include "common/file_utils.h"
 #include "common/log_wrapper.h"
 #include "common/time_wrapper.h"
-#include "core/messages_schema.h"
-#include "providers/llm/llm_provider.h"
+#include "prosophor_core/public/agent_engine.h"
 
 namespace prosophor::nr::nutribot {
 
-std::atomic<int64_t> g_inference_heartbeat_ms{0};
-std::atomic<int> g_inference_in_flight{0};
+namespace {
 
-int64_t SteadyNowMs() {
-    return prosophor::SteadyClock::ToMillis(
-        prosophor::SteadyClock::Now().time_since_epoch());
-}
+constexpr int vision_poll_interval_ms = 200;
+constexpr int vision_wait_timeout_ms = 180000;
+constexpr int vision_log_interval_ms = 10000;
 
-ScriptedDialoguePort::ScriptedDialoguePort(std::vector<std::string> answers)
-    : answers_(answers.begin(), answers.end()) {}
+}  // namespace
 
-std::optional<std::string> ScriptedDialoguePort::ask(const std::string& question) {
-    LOG_INFO("    [问] {}", question.c_str());
-    if (answers_.empty()) {
-        LOG_INFO("    [答] (无回应)");
-        return std::nullopt;
+VisionWaitResult WaitForAidgenVision(prosophor::AgentEngine& engine,
+                                     const std::function<bool()>& abort,
+                                     const std::string& log_tag) {
+    VisionWaitResult result;
+    auto status = engine.GetProviderStatus("aidgen");
+    while (status.loading && result.waited_ms < vision_wait_timeout_ms) {
+        if (abort && abort()) {
+            result.aborted = true;
+            return result;
+        }
+        if (result.waited_ms % vision_log_interval_ms == 0) {
+            LOG_INFO("{}: 等待 aidgen 模型装载…（{}s）", log_tag,
+                     result.waited_ms / 1000);
+        }
+        std::this_thread::sleep_for(Milliseconds(vision_poll_interval_ms));
+        result.waited_ms += vision_poll_interval_ms;
+        status = engine.GetProviderStatus("aidgen");
     }
-    std::string answer = std::move(answers_.front());
-    answers_.pop_front();
-    LOG_INFO("    [答] {}", answer.c_str());
-    return answer;
-}
 
-std::string JoinNames(const std::set<std::string>& names) {
-    std::string out;
-    for (const auto& n : names) {
-        if (!out.empty()) out += "、";
-        out += n;
+    if (!status.loaded || !status.has_vision) {
+        result.error = status.loaded ? "无视觉配置" : "装载失败/超时";
+        if (!status.error.empty()) result.error += "：" + status.error;
+        return result;
     }
-    return out;
+    result.ready = true;
+    return result;
 }
 
 std::string JoinFoodNames(const std::vector<prosophor::nr::domain::FoodItem>& foods) {
@@ -62,30 +66,11 @@ std::string ResolveNutritionFile(const prosophor::NutribotConfig& cfg) {
     return "config/.prosophor/nutribot_dishes.json";
 }
 
-prosophor::nr::app::VisionQueryBackend MakeAidgenVisionBackend(
-    std::shared_ptr<prosophor::LLMProvider> vl, int* model_calls, std::string* last_reply) {
-    return [vl, model_calls, last_reply](const std::string& image_path,
-                                         const std::string& question)
-               -> std::optional<std::string> {
-        prosophor::ChatRequest req;
-        prosophor::MessageSchema user("user", question);
-        user.AddImageContent(image_path);
-        req.messages.push_back(std::move(user));
-        req.max_tokens = 128;   // 识别输出只是短 JSON 数组：限尾防小模型放飞（默认 8192）
-        if (model_calls != nullptr) ++*model_calls;
-        if (last_reply != nullptr) last_reply->clear();   // 失败时不留上一轮的旧原话
-        // 心跳只包 SDK 调用：prompt 组装不含推理耗时
-        const auto resp = [&req, vl] {
-            InferenceHeartbeatGuard heartbeat;
-            return vl->Chat(req);
-        }();
-        if (!resp.error_msg.empty()) {
-            LOG_INFO("  [后端错误] {}", resp.error_msg.c_str());
-            return std::nullopt;
-        }
-        if (last_reply != nullptr) *last_reply = resp.content_text;
-        return resp.content_text;
-    };
+int LocalMinutesOfDay() {
+    const std::time_t wallclock = std::time(nullptr);
+    std::tm local{};
+    localtime_r(&wallclock, &local);
+    return local.tm_hour * 60 + local.tm_min;
 }
 
 }  // namespace prosophor::nr::nutribot

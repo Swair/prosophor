@@ -85,6 +85,7 @@ void VoicePipeline::Stop() {
     if (tts_thread_.joinable()) {
         tts_thread_.join();
     }
+    speaking_.store(false);
     LOG_INFO("VoicePipeline: workers 已停止");
 }
 
@@ -194,31 +195,65 @@ void VoicePipeline::FeedFrame(const int16_t* pcm, size_t samples) {
     }
 
     BumpCounter(&Stats::utterances);
+    // 16 样本 = 1ms @16k；收句时延从这里起算（ASR 入队 → final 被主循环取走）
+    LOG_INFO("[时延] VAD 收句 {}ms → ASR 入队（seq={}）",
+             static_cast<int>(formed.size() / 16), current_seq_);
     EnqueueAsrJob(AsrJobKind::kFinal, std::move(formed), current_seq_);
 }
 
-std::optional<std::string> VoicePipeline::PollAsrResult(int timeout_ms) {
-    std::string text;
-    if (!text_queue_.Pop(text, timeout_ms)) {
-        return std::nullopt;
+bool VoicePipeline::PollAsrResult(std::string& out, int timeout_ms) {
+    FinalText item;
+    if (!text_queue_.Pop(item, timeout_ms)) {
+        out.clear();
+        return false;
     }
-    return text;
+    LOG_INFO("[时延] ASR final 排队 {}ms 后被主循环取走",
+             SteadyClock::ElapsedMillis(item.enqueued_at));
+    out = std::move(item.text);
+    return true;
 }
 
-std::optional<std::string> VoicePipeline::PollAsrLatest() {
+size_t VoicePipeline::PollAllAsrResults(std::vector<std::string>& out) {
+    std::vector<FinalText> items;
+    const size_t count = text_queue_.Drain(items);
+    out.clear();
+    out.reserve(items.size());
+    for (auto& item : items) {
+        LOG_INFO("[时延] ASR final 排队 {}ms 后被主循环取走",
+                 SteadyClock::ElapsedMillis(item.enqueued_at));
+        out.push_back(std::move(item.text));
+    }
+    return count;
+}
+
+bool VoicePipeline::PollAsrLatest(std::string& out) {
     std::lock_guard<std::mutex> lock(result_mutex_);
     if (!has_latest_result_) {
-        return std::nullopt;
+        out.clear();
+        return false;
     }
     has_latest_result_ = false;
-    return std::move(latest_result_);
+    out = std::move(latest_result_);
+    return true;
 }
 
-void VoicePipeline::EnqueueSpeech(SpeechRequest request) {
+bool VoicePipeline::EnqueueSpeech(SpeechRequest request) {
     if (request.text.empty()) {
-        return;
+        return false;
     }
-    speech_queue_.Push(std::move(request));   // 满队列丢最旧
+    // 入队即视为"播报中"：覆盖 worker 尚未 Pop 的空窗，调用方据此判忙
+    speaking_.store(true);
+    LOG_INFO("[时延] TTS 入队（{} 字）", request.text.size());
+    if (!speech_queue_.Push(QueuedSpeech{std::move(request), SteadyClock::Now()})) {
+        speaking_.store(false);   // 队列已关闭
+        return false;
+    }
+    return true;
+}
+
+size_t VoicePipeline::DropPendingSpeech() {
+    std::vector<QueuedSpeech> dropped;
+    return speech_queue_.Drain(dropped);
 }
 
 void VoicePipeline::PublishResult(const std::string& text, uint64_t seq, bool is_final) {
@@ -243,6 +278,7 @@ void VoicePipeline::AsrWorker() {
     AsrJob job;
     while (asr_queue_.Pop(job)) {
         std::string text;
+        const auto transcribe_started = SteadyClock::Now();
         try {
             if (transcribe_fn_) {
                 text = transcribe_fn_(job.pcm);
@@ -250,16 +286,22 @@ void VoicePipeline::AsrWorker() {
         } catch (...) {
             text.clear();   // 异常不出 worker（按空结果处理）
         }
+        const int64_t transcribe_ms = SteadyClock::ElapsedMillis(transcribe_started);
         asr_in_flight_.fetch_sub(1);
 
         if (text.empty()) {
             BumpCounter(&Stats::asr_empty);
+            LOG_INFO("[时延] ASR 识别 {}ms 空结果（{} 样本，seq={}）",
+                     transcribe_ms, job.pcm.size(), job.seq);
             continue;
         }
         if (job.kind != AsrJobKind::kInterim) {
+            LOG_INFO("[时延] ASR 识别 {}ms（{} 样本，seq={}）",
+                     transcribe_ms, job.pcm.size(), job.seq);
             PublishResult(text, job.seq, /*is_final=*/true);
-            text_queue_.Push(std::move(text));
+            text_queue_.Push(FinalText{std::move(text), SteadyClock::Now()});
         } else {
+            LOG_DEBUG("[时延] ASR interim {}ms（{} 样本）", transcribe_ms, job.pcm.size());
             BumpCounter(&Stats::interim_results);
             PublishResult(text, job.seq, /*is_final=*/false);
         }
@@ -267,18 +309,23 @@ void VoicePipeline::AsrWorker() {
 }
 
 void VoicePipeline::TtsWorker() {
-    SpeechRequest request;
-    while (speech_queue_.Pop(request)) {
+    QueuedSpeech item;
+    while (speech_queue_.Pop(item)) {
+        LOG_INFO("[时延] TTS 出队（入队后排队 {}ms）",
+                 SteadyClock::ElapsedMillis(item.enqueued_at));
         speaking_.store(true);
         bool ok = false;
         if (speak_fn_) {
             try {
-                ok = speak_fn_(request);
+                ok = speak_fn_(item.request);
             } catch (...) {
                 ok = false;   // 异常不出 worker
             }
         }
-        speaking_.store(false);
+        // 还有待播句时不落"播报中"：连续句之间不能被主循环当成播完
+        if (speech_queue_.Empty()) {
+            speaking_.store(false);
+        }
         if (ok) {
             BumpCounter(&Stats::spoken);
         }

@@ -3,12 +3,11 @@
 
 #include "providers/llm_provider_router.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <shared_mutex>
 
-#include "common/file_utils.h"
 #include "common/log_wrapper.h"
-#include "managers/agent_role_loader.h"
 #include "providers/provider_factory.h"
 
 namespace prosophor {
@@ -25,6 +24,10 @@ void LlmProviderRouter::Initialize(const ProsophorConfig& config) {
 
     // Create providers based on config
     for (const auto& [name, provider_config] : config.llm_providers) {
+        if (!provider_config.enabled) {
+            LOG_INFO("Skipped provider '{}' (enabled=false)", name);
+            continue;
+        }
         try {
             auto provider = LlmProviderFactory::CreateProvider(name, provider_config);
             if (!provider) {
@@ -38,32 +41,15 @@ void LlmProviderRouter::Initialize(const ProsophorConfig& config) {
         }
     }
 
-    // Set default provider based on default_role
-    // Load the default role to get its provider_name
-    std::string primary_role = config.default_role.empty() ? "default" : config.default_role[0];
-    std::string role_path = "config/.prosophor/roles/" + primary_role + ".json";
-    if (FileExists(role_path)) {
-        auto& loader = AgentRoleLoader::GetInstance();
-        try {
-            AgentRole role = loader.LoadRole(role_path);
-            if (!role.provider_prot.empty()) {
-                auto it = providers_.find(role.provider_prot);
-                if (it != providers_.end()) {
-                    default_provider_ = it->second;
-                    default_provider_name_ = role.provider_prot;
-                    LOG_DEBUG("Default provider '{}' set from default_role '{}'", default_provider_name_, primary_role);
-                }
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to load default role '{}', using first provider: {}", primary_role, e.what());
-        }
-    }
-
-    // If no default set, use first available
-    if (!default_provider_ && !providers_.empty()) {
-        default_provider_ = providers_.begin()->second;
-        default_provider_name_ = providers_.begin()->first;
-        LOG_DEBUG("Using first available provider as default: {}", default_provider_name_);
+    // Deterministic fallback: smallest provider name. AgentEngine 随后会用
+    // default_role[0] 的 provider_prot 调 SetDefaultProvider 覆盖。
+    if (!providers_.empty()) {
+        auto it = std::min_element(
+            providers_.begin(), providers_.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+        default_provider_ = it->second;
+        default_provider_name_ = it->first;
+        LOG_DEBUG("Fallback default provider: '{}'", default_provider_name_);
     }
 
 #ifdef PROSOPHOR_HAS_LOCAL_MODEL
@@ -97,10 +83,24 @@ std::shared_ptr<LLMProvider> LlmProviderRouter::GetDefaultProvider() {
     return default_provider_;
 }
 
-std::string LlmProviderRouter::GetProviderName(const std::string& /*role_id*/) {
-    // TODO: Support role-specific provider mapping
+std::shared_ptr<LLMProvider> LlmProviderRouter::GetProviderByNameExact(
+    const std::string& provider_name) const {
     std::shared_lock<std::shared_mutex> lock(mutex_);
-    return default_provider_name_;
+    auto it = providers_.find(provider_name);
+    return it == providers_.end() ? nullptr : it->second;
+}
+
+void LlmProviderRouter::SetDefaultProvider(const std::string& provider_name) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    auto it = providers_.find(provider_name);
+    if (it == providers_.end()) {
+        LOG_WARN("Default provider '{}' is not configured; keeping '{}'",
+                 provider_name, default_provider_name_);
+        return;
+    }
+    default_provider_ = it->second;
+    default_provider_name_ = provider_name;
+    LOG_DEBUG("Default provider set to '{}'", default_provider_name_);
 }
 
 }  // namespace prosophor

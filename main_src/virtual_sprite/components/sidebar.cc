@@ -3,7 +3,7 @@
 
 #include "virtual_sprite/components/sidebar.h"
 #include "virtual_sprite/layout_config.h"
-#include "config/config.h"
+#include "prosophor_core/public/config.h"
 #include "common/i18n.h"
 #include "media_engine/media_engine.h"
 #include "platform/platform.h"

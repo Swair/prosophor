@@ -2,7 +2,7 @@
 #include "virtual_sprite/panels/panel_helpers.h"
 #include "virtual_sprite/components/panel_kit.h"
 #include "common/i18n.h"
-#include "prosophor_core/mcp/mcp_client.h"
+#include "prosophor_core/public/mcp.h"
 
 namespace prosophor {
 

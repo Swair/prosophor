@@ -13,7 +13,7 @@
 
 #include "common/file_utils.h"
 #include "common/log_wrapper.h"
-#include "core/session_key.h"
+#include "prosophor_core/public/core_types.h"
 
 namespace prosophor {
 
@@ -135,6 +135,7 @@ std::vector<std::pair<std::string, int64_t>> SessionHistory::ListOwners() const 
         for (const auto& owner_entry : std::filesystem::directory_iterator(role_dir, ec)) {
             if (!owner_entry.is_directory()) continue;
             std::string owner = owner_entry.path().filename().string();
+            if (IsActiveOwner(owner)) continue;   // 主动触发会话不是用户会话
             auto files = ListDir(owner_entry.path().string(), ".jsonl");
             if (files.empty()) continue;  // 目录已建但尚未落盘
             // ListDir 升序 → 最后一个 = 最新日期文件
@@ -172,7 +173,7 @@ std::vector<std::pair<std::string, int64_t>> SessionHistory::ListOwners() const 
                 try {
                     auto json = nlohmann::json::parse(line);
                     std::string owner = json.value("owner", std::string());
-                    if (owner.empty()) continue;
+                    if (owner.empty() || IsActiveOwner(owner)) continue;
                     int64_t ts = parse_ts(json.value("ts", std::string()));
                     last_by_owner[owner] = std::max(last_by_owner[owner], ts);
                 } catch (...) {

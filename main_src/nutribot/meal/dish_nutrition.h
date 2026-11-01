@@ -2,15 +2,15 @@
 //
 // 数据是**手编演示表**（config/.prosophor/nutribot_dishes.json）：以菜品识别
 // 基准的 59 个人工标注菜名为主键起点，按《食物成分表》常用值 + 家常做法折算
-// 每份六项；文件级 disclaimer + 条目级 source 双标注，话术一律冠"约"。
+// 每份六项；文件级 disclaimer 标注来源，话术一律冠"约"。
 //
 // 归一匹配：VL 菜名会抖动（实测严格同名基线 26%），精确（规范名/别名）查不到
 // 时退到**最长包含匹配**（两侧都要 ≥2 个字符，防"汤"这类单字乱配）；仍不中则
 // 保持 has_nutrition=false —— 上下游都诚实处理"没查到"（播报计数"另有 N 道
 // 我没见过"，绝不把它当 0 千卡）。
 //
-// 接入方式：装饰器包住真实检测器（VlFoodDetector），MealMonitor 与规则引擎
-// 拿到的就是带营养的菜品 —— Python 1:1 的编排文件零改动。
+// 接入方式：ResidentSession 在周期感知 JSON 解析时按菜名查表，
+// 给 agent 上报的菜挂上每份营养；prompt/餐账拿到的就是带营养的菜品。
 #pragma once
 
 #include <optional>
@@ -18,7 +18,6 @@
 #include <vector>
 
 #include "domain/food.h"
-#include "ports.h"
 
 namespace prosophor::nr::app {
 
@@ -27,8 +26,6 @@ struct DishNutrition {
     std::string name;                              // 规范名（主键）
     std::vector<std::string> aliases;              // 别名（VL 抖动/同义词）
     prosophor::nr::domain::Nutrition per_serving;  // 每份六项
-    std::vector<std::string> tags;                 // 分类标签（高钠/高糖/高脂）
-    std::string source;                            // 条目级数据来源（空 = 用文件级）
 };
 
 class DishNutritionTable {
@@ -49,24 +46,6 @@ public:
 private:
     std::vector<DishNutrition> dishes_;
     int skipped_entries_ = 0;
-};
-
-// 端口装饰器：给检测器报出的每道菜挂上营养（未命中保持 has_nutrition=false）
-class NutritionEnrichingDetector final : public FoodDetectorPort {
-public:
-    // inner/table 非拥有；生命周期由装配处保证（inner 必须非空，table 可为空 =
-    // 纯透传，等价于没接营养库）
-    NutritionEnrichingDetector(FoodDetectorPort* inner, const DishNutritionTable* table);
-
-    std::vector<prosophor::nr::domain::FoodItem> detect_domain(FrameRef frame) override;
-
-    // 上一轮未命中知识库的菜数（诊断/日志）
-    int unmatched_last() const { return unmatched_last_; }
-
-private:
-    FoodDetectorPort* inner_;
-    const DishNutritionTable* table_;
-    int unmatched_last_ = 0;
 };
 
 }  // namespace prosophor::nr::app

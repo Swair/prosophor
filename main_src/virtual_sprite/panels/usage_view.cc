@@ -5,7 +5,7 @@
 #include "virtual_sprite/panels/panel_helpers.h"
 #include "media_engine/media_engine.h"
 #include "common/i18n.h"
-#include "managers/token_tracker.h"
+#include "prosophor_core/public/token_tracker.h"
 
 #include <sstream>
 #include <iomanip>

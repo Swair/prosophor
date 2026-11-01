@@ -9,14 +9,14 @@ void MealJournal::BeginMeal(prosophor::SteadyClock::TimePoint now) {
     started_at_ = now;
     summary_ = MealSummary{};
     seen_dishes_.clear();
-    seen_reminder_keys_.clear();
 }
 
-void MealJournal::Observe(const prosophor::nr::domain::ScenePackage& pkg) {
+void MealJournal::ObserveFoods(
+    const std::vector<prosophor::nr::domain::FoodItem>& foods) {
     if (!active_) return;
     ++summary_.perception_rounds;
 
-    for (const auto& food : pkg.foods) {
+    for (const auto& food : foods) {
         if (!seen_dishes_.insert(food.name).second) continue;   // 去重：取首次营养值
         summary_.dishes.push_back(food.name);
         if (food.has_nutrition) {
@@ -27,13 +27,6 @@ void MealJournal::Observe(const prosophor::nr::domain::ScenePackage& pkg) {
         }
     }
 
-    for (const auto& event : pkg.events) {
-        const std::string key = event.member_name + "|" + event.kind + "|" + event.food;
-        if (!seen_reminder_keys_.insert(key).second) continue;
-        if (summary_.reminders.size() < max_reminders) {
-            summary_.reminders.push_back(event);
-        }
-    }
 }
 
 std::optional<MealSummary> MealJournal::EndMeal(
@@ -47,7 +40,6 @@ std::optional<MealSummary> MealJournal::EndMeal(
     MealSummary finished = std::move(summary_);
     summary_ = MealSummary{};
     seen_dishes_.clear();
-    seen_reminder_keys_.clear();
     return finished;
 }
 

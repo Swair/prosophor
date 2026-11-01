@@ -28,7 +28,7 @@
 #include "common/log_wrapper.h"
 #include "common/string_utils.h"
 #include "common/thread_pool.h"
-#include "providers/llm/tool_call_protocol.h"
+#include "providers/llm/aidgen_tool_call_protocol.h"
 
 namespace prosophor {
 
@@ -858,6 +858,9 @@ ChatResponse AidGenProvider::ChatStream(
         response = ChatResponse{};
         RunInference(encoded, response, callback);
     }
+    LOG_INFO("[aidgen] 原始回复（{}字，{} 个工具调用）:\n{}",
+             response.content_text.size(), response.tool_calls.size(),
+             response.content_text.c_str());
     FinalizeResponse(response, request);
     return response;
 }
@@ -885,7 +888,7 @@ std::string AidGenProvider::BuildPrompt(const ChatRequest& request) const {
         if (!system_text.empty()) system_text += "\n";
         system_text += block.text;
     }
-    system_text += BuildToolsPrompt(request.tools);   // 无工具 → 空段，提示词零变化
+    system_text += BuildToolsPrompt(request.tools, request.agent_chat);   // 无工具 → 空段，提示词零变化
 
     std::string prompt;
     if (!system_text.empty()) {
@@ -1044,9 +1047,9 @@ bool AidGenProvider::RunInference(
     const EncodedPrompt& encoded,
     ChatResponse& response,
     std::function<void(StreamEvent, std::string)>& callback) {
-    // 提示词全文（debug 级）：模型行为异常时的最终证据 —— 没有它只能猜
+    // 提示词全文：模型行为异常时的最终证据 —— 没有它只能猜
     // "注入没进去"还是"模型跑偏"（同 VL 解析为空回看原话的教训）
-    LOG_DEBUG("[aidgen] Prompt:\n{}", encoded.text.c_str());
+    LOG_INFO("[aidgen] Prompt:\n{}", encoded.text.c_str());
 
     std::shared_ptr<AidGenCore> core;
     {
@@ -1142,7 +1145,7 @@ bool AidGenProvider::RunInference(
 }
 
 // 步骤 5：补齐停止原因 —— SDK 未发 END 时兜底
-// 步骤 5b：生成文本 → 工具调用（协议与解析见 tool_call_protocol.h）。
+// 步骤 5b：生成文本 → 工具调用（协议与解析见 aidgen_tool_call_protocol.h）。
 // 工具调用从正文剥出后不再回给用户，正文变空即视为纯调用轮。
 void AidGenProvider::FinalizeResponse(ChatResponse& response,
                                       const ChatRequest& request) const {

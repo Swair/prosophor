@@ -44,8 +44,15 @@ class ToolRegistry {
 
     explicit ToolRegistry();
 
+    /// 是否保留通用内建工具（bash/file/web…）。false 时清空，需在注册产品
+    /// 自己的工具之前调用（NutriBot 在 InitEngineSession 开头调用）。
+    void SetUseDefaultTools(bool enabled);
+
     /// Register built-in tools
     void RegisterBuiltinTools();
+
+    /// 清空已注册工具
+    void ClearTools();
 
     /// Register a tool with its executor function
     void RegisterTool(const std::string& name, const std::string& description,
@@ -125,6 +132,9 @@ private:
         tools_;
     std::vector<ToolsSchema> tool_schemas_;
     std::string workspace_path_;
+
+    // 构造时是否注册通用内建工具（首次 GetInstance() 参数）
+    bool use_default_tools_ = true;
 };
 
 }  // namespace prosophor

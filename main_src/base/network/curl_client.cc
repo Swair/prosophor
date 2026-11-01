@@ -172,7 +172,11 @@ HttpResponse HttpClient::Get(const HttpRequest& request) {
     curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, request.headers);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    if (request.connect_timeout_ms > 0) {
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, request.connect_timeout_ms);
+    } else {
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    }
 
     // Default: collect body (blocking mode)
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
@@ -186,7 +190,11 @@ HttpResponse HttpClient::Get(const HttpRequest& request) {
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, StreamWriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, request.write_data);
     } else {
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, request.timeout_seconds);
+        if (request.timeout_ms > 0) {
+            curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, request.timeout_ms);
+        } else {
+            curl_easy_setopt(curl, CURLOPT_TIMEOUT, request.timeout_seconds);
+        }
         // Header collection only needed for blocking mode
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, HeaderCallback);
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, &res_header);
@@ -259,7 +267,11 @@ HttpResponse HttpClient::PerformBodyRequest(const HttpRequest& request, bool is_
     curl_easy_setopt(curl, CURLOPT_URL, request.url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, request.headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request.body.c_str());
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    if (request.connect_timeout_ms > 0) {
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, request.connect_timeout_ms);
+    } else {
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    }
 
     // Default: collect body (blocking mode)
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
@@ -273,7 +285,11 @@ HttpResponse HttpClient::PerformBodyRequest(const HttpRequest& request, bool is_
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, StreamWriteCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, request.write_data);
     } else {
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, request.timeout_seconds);
+        if (request.timeout_ms > 0) {
+            curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, request.timeout_ms);
+        } else {
+            curl_easy_setopt(curl, CURLOPT_TIMEOUT, request.timeout_seconds);
+        }
         // Header collection only needed for blocking mode
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, HeaderCallback);
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, &res_header);

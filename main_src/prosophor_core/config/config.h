@@ -151,6 +151,7 @@ struct LlamacppModelConfig {
 /// Configuration for an LLM provider
 /// models key format: "{provider_name}/{model_name}" → model params
 struct LlmProviderConfig {
+    bool enabled = true;   // false = 保留配置但不创建/装载 provider
     std::string api_key;
     std::string base_url;
     int timeout = 30;
@@ -236,16 +237,12 @@ struct SecurityConfig {
 /// 摄像头抓帧配置（nutribot 常驻形态：ffmpeg 定期单帧抓拍落盘，供 VL 看菜）
 struct CameraConfig {
     std::string device = "/dev/video2";                          // v4l2 节点（Astra Pro 板上为 video2）
-    std::string output_dir = "/tmp/prosophor/nutribot_camera";   // 帧落盘目录
+    std::string output_dir = "~/.prosophor/nutribot_camera";   // 帧落盘目录（~ 启动时展开）
     int interval_ms = 1500;                                      // 抓帧节拍（帧新鲜度；抓拍本身 ~1.2s）
-    int scene_interval_ms = 3000;                                // 场景判定节拍（FSM 的时间基准）
     int perception_interval_ms = 3000;                           // 看菜（VL）节拍（用餐/备餐态）
     int idle_interval_ms = 15000;                                // 空闲/餐后态的看菜（VL）节拍
     int timeout_ms = 8000;                                       // 单次抓拍超时（含设备唤醒）
     int keep_frames = 3;                                         // 落盘保留帧数（防 VL 读时被删）
-    // 场景帧差的像素差二值化阈值（0-255）：静态画面噪声高（过曝/自动曝光泵动）
-    // 时会误判"运动"，板上标定优先调它（见 scene_monitor.h）
-    int motion_pixel_threshold = 12;
 
     static CameraConfig FromJson(const nlohmann::json& json);
 };
@@ -269,14 +266,22 @@ struct MealConfig {
     static MealConfig FromJson(const nlohmann::json& json);
 };
 
-/// nutribot 特有装配：成员档案目录与"常在场"桩成员（人脸识别接入前的演示链路）
+/// nutribot 特有装配：成员档案目录与菜品营养库
 struct NutribotConfig {
     std::string member_store_dir;            // 空 = <BaseDir>/nutribot_members
-    std::string stub_member_name = "小明";    // 桩人脸常驻成员名（须在档案库中）
     std::string nutrition_file;              // 菜品营养库；空 = <BaseDir>/nutribot_dishes.json
-    // 单次推理卡死阈值：VL/LLM 调用超过该时长无心跳 -> watchdog 强退进程
-    //（8B/QNN 实测会卡在 fastrpc 数分钟且没有取消 API；宁可有界重启）
-    int inference_timeout_ms = 180000;
+
+    // 唤醒词：整句归一化匹配；应答后进入聆听窗口，窗口内可直接追问
+    std::vector<std::string> wake_words = {"你好瓦力"};
+    std::string wake_ack_text = "我在";
+    int awake_window_ms = 8000;
+
+    // 思考填充语：语音派发后、LLM 首句到手前先播的固定话术（空 = 关闭）。
+    // vision_fillers 用于看菜类问题；两组各自轮转，只进 TTS，不进对话历史。
+    std::vector<std::string> thinking_fillers = {
+        "嗯……我想想", "让我想想啊", "嗯，我看看"};
+    std::vector<std::string> vision_fillers = {
+        "让我看看桌上有什么", "我瞅瞅这盘菜", "嗯，我瞧瞧"};
 
     static NutribotConfig FromJson(const nlohmann::json& json);
 };
@@ -309,6 +314,13 @@ struct WebConfig {
     static WebConfig FromJson(const nlohmann::json& json);
 };
 
+/// Configuration for active triggers (plugins under ~/.prosophor/active)
+struct ActiveTriggerConfig {
+    std::string role;   // 缺省角色；空 = default_role[0]，插件 trigger_mode.cfg 可覆盖
+
+    static ActiveTriggerConfig FromJson(const nlohmann::json& json);
+};
+
 /// Top-level Prosophor configuration
 struct ProsophorConfig {
     std::string log_level = "info";
@@ -336,6 +348,7 @@ struct ProsophorConfig {
     NutribotConfig nutribot;
     RobotControlConfig robot;
     WebConfig web;
+    ActiveTriggerConfig active_trigger;
     std::vector<LlamacppModelConfig> llamacpp_models;
 
     /// Get singleton instance

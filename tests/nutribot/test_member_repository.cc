@@ -1,4 +1,4 @@
-// JsonMemberRepository 测试：临时目录 CRUD / 序列化 / 特征匹配
+// JsonMemberRepository 测试：临时目录 CRUD / 序列化
 #include <filesystem>
 #include <string>
 
@@ -77,46 +77,6 @@ TEST(repo, get_missing_returns_nullopt) {
     const std::string dir = make_tmp_dir();
     JsonMemberRepository repo(dir);
     EXPECT_FALSE(repo.get_member("不存在").has_value());
-    std::filesystem::remove_all(dir);
-}
-
-TEST(repo, merge_face_replaces_embeddings) {
-    const std::string dir = make_tmp_dir();
-    JsonMemberRepository repo(dir);
-
-    Member m = make_zh_member("小明");
-    m.face_embeddings = {{0.1f, 0.2f}};
-    repo.add_member(m);
-
-    const auto merged = repo.merge_face(
-        "小明", {{0.3f, 0.4f, 0.5f}, {0.6f, 0.7f, 0.8f}});
-    EXPECT_EQ(merged.face_embeddings.size(), 2u);
-    // 画像字段保留
-    EXPECT_EQ(merged.profile.taboo_foods.size(), 2u);
-    const auto reloaded = repo.get_member("小明");
-    EXPECT_TRUE(reloaded.has_value());
-    EXPECT_EQ(reloaded->face_embeddings.size(), 2u);
-    std::filesystem::remove_all(dir);
-}
-
-TEST(repo, find_match_cosine_threshold) {
-    const std::string dir = make_tmp_dir();
-    JsonMemberRepository repo(dir);
-
-    Member a = make_zh_member("张三");
-    a.face_embeddings = {{1.0f, 0.0f, 0.0f}};
-    Member b = make_zh_member("李四");
-    b.face_embeddings = {{0.0f, 1.0f, 0.0f}};
-    repo.add_member(a);
-    repo.add_member(b);
-
-    const auto hit = repo.find_match({1.0f, 0.0f, 0.0f}, 0.8);
-    EXPECT_TRUE(hit.has_value());
-    EXPECT_EQ(hit->member.name, "张三");
-    EXPECT_NEAR(hit->similarity, 1.0, 1e-6);
-
-    const auto miss = repo.find_match({0.0f, 0.0f, 1.0f}, 0.8);
-    EXPECT_FALSE(miss.has_value());
     std::filesystem::remove_all(dir);
 }
 

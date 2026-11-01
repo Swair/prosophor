@@ -9,6 +9,7 @@
 #include <fstream>
 #include <regex>
 #include <stdexcept>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -293,6 +294,7 @@ ModelDefinition ModelDefinition::FromJson(const nlohmann::json& json) {
 
 LlmProviderConfig LlmProviderConfig::FromJson(const nlohmann::json& json) {
     LlmProviderConfig config;
+    config.enabled = json.value("enabled", true);
     config.api_key = json.value("api_key", json.value("apiKey", ""));
     config.base_url = json.value("base_url", json.value("baseUrl", ""));
     config.timeout = json.value("timeout", kDefaultProviderTimeoutSec);
@@ -439,17 +441,13 @@ nlohmann::ordered_json LlamacppModelConfig::ToJson() const {
 CameraConfig CameraConfig::FromJson(const nlohmann::json& json) {
     CameraConfig config;
     config.device      = json.value("device", config.device);
-    config.output_dir  = json.value("output_dir", config.output_dir);
+    config.output_dir  = ExpandHome(json.value("output_dir", config.output_dir));
     config.interval_ms = json.value("interval_ms", config.interval_ms);
-    config.scene_interval_ms =
-        json.value("scene_interval_ms", config.scene_interval_ms);
     config.perception_interval_ms =
         json.value("perception_interval_ms", config.perception_interval_ms);
     config.idle_interval_ms = json.value("idle_interval_ms", config.idle_interval_ms);
     config.timeout_ms  = json.value("timeout_ms", config.timeout_ms);
     config.keep_frames = json.value("keep_frames", config.keep_frames);
-    config.motion_pixel_threshold =
-        json.value("motion_pixel_threshold", config.motion_pixel_threshold);
     return config;
 }
 
@@ -470,13 +468,32 @@ MealConfig MealConfig::FromJson(const nlohmann::json& json) {
     return config;
 }
 
+namespace {
+
+// 读取字符串数组：非法/空项跳过；字段缺失或全空时保留默认值。
+void ReadStringList(const nlohmann::json& json, const char* key,
+                    std::vector<std::string>& out) {
+    if (!json.contains(key) || !json[key].is_array()) return;
+    std::vector<std::string> values;
+    for (const auto& item : json[key]) {
+        if (!item.is_string()) continue;
+        std::string value = item.get<std::string>();
+        if (!value.empty()) values.push_back(std::move(value));
+    }
+    if (!values.empty()) out = std::move(values);
+}
+
+}  // namespace
+
 NutribotConfig NutribotConfig::FromJson(const nlohmann::json& json) {
     NutribotConfig config;
     config.member_store_dir = json.value("member_store_dir", config.member_store_dir);
-    config.stub_member_name = json.value("stub_member_name", config.stub_member_name);
     config.nutrition_file   = json.value("nutrition_file", config.nutrition_file);
-    config.inference_timeout_ms =
-        json.value("inference_timeout_ms", config.inference_timeout_ms);
+    ReadStringList(json, "wake_words", config.wake_words);
+    config.wake_ack_text = json.value("wake_ack_text", config.wake_ack_text);
+    config.awake_window_ms = json.value("awake_window_ms", config.awake_window_ms);
+    ReadStringList(json, "thinking_fillers", config.thinking_fillers);
+    ReadStringList(json, "vision_fillers", config.vision_fillers);
     return config;
 }
 
@@ -499,6 +516,12 @@ WebConfig WebConfig::FromJson(const nlohmann::json& json) {
     config.role           = json.value("role", "default");
     config.data_dir       = json.value("data_dir", "");
     config.token_ttl_hours = json.value("token_ttl_hours", 168);
+    return config;
+}
+
+ActiveTriggerConfig ActiveTriggerConfig::FromJson(const nlohmann::json& json) {
+    ActiveTriggerConfig config;
+    config.role = json.value("role", "");
     return config;
 }
 
@@ -650,6 +673,9 @@ ProsophorConfig ProsophorConfig::FromJson(const nlohmann::json& json) {
     }
     if (expanded.contains("web") && expanded["web"].is_object()) {
         config.web = WebConfig::FromJson(expanded["web"]);
+    }
+    if (expanded.contains("active_trigger") && expanded["active_trigger"].is_object()) {
+        config.active_trigger = ActiveTriggerConfig::FromJson(expanded["active_trigger"]);
     }
     return config;
 }
@@ -837,6 +863,11 @@ void ProsophorConfig::CreateDefaultConfig(const std::string& filepath) {
     "role": "default",
     "data_dir": "",
     "token_ttl_hours": 168
+  },
+
+  // Active triggers (plugins under active/; role empty = default_role[0])
+  "active_trigger": {
+    "role": ""
   }
 }
 )";
@@ -988,6 +1019,11 @@ nlohmann::ordered_json ProsophorConfig::ToJson() const {
     web_json["data_dir"] = web.data_dir;
     web_json["token_ttl_hours"] = web.token_ttl_hours;
     json["web"] = web_json;
+
+    // Serialize active_trigger (role only; owner is a reserved constant)
+    nlohmann::ordered_json active_trigger_json;
+    active_trigger_json["role"] = active_trigger.role;
+    json["active_trigger"] = active_trigger_json;
 
     // Note: tools and asr sections intentionally omitted from settings output
 

@@ -8,9 +8,9 @@
 #include "media_engine/media_engine.h"
 #include "common/log_wrapper.h"
 #include "common/i18n.h"
-#include "agent_engine.h"
-#include "config/config.h"
-#include "managers/token_tracker.h"
+#include "prosophor_core/public/agent_engine.h"
+#include "prosophor_core/public/config.h"
+#include "prosophor_core/public/token_tracker.h"
 
 #include "platform/platform.h"
 #include "updater/update_checker.h"
@@ -123,11 +123,11 @@ void VirtualSprite::GlobalInit() {
 
     // Route session state changes to the matching sprite
     AgentEngine::GetInstance().SetOutputCallback(
-        [](const std::string& session_id, const std::string& /*role_id*/,
+        [](const std::string& session_id, const std::string& role_id,
                AgentRuntimeState state, const std::string& state_msg,
-               const std::optional<MessageSchema>& /*reply*/, const std::string& /*delta*/) {
+               const std::optional<MessageSchema>& /*reply*/, const std::string& delta) {
             if (auto* s = SpriteManager::GetInstance().FindBySessionId(session_id)) {
-                s->SetAgentState(state, state_msg);
+                s->HandleAgentOutput(state, role_id, state_msg, delta);
             }
         });
 

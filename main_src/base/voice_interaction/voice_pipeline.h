@@ -12,7 +12,7 @@
 //   - 纯逻辑 + 线程骨架，不碰音频设备与 SDK：ASR/TTS 以 std::function 注入，
 //     VAD 以 IVad 注入（nutribot=EnergyVad，SDL=WebRTC VAD 适配器），单测注 Fake
 //   - 三道闸防误触：最短句长、峰值自检（数字静音坑）、单飞（上一句还在 ASR 中就丢弃）
-//   - TTS 队列有界（默认 10）丢旧保新：宁可漏报，不播"5 分钟前的提醒"
+//   - TTS 队列有界（默认 32）丢旧保新：宁可漏报，不播"5 分钟前的提醒"
 //   - SDL 需要边说边出 interim：emit_interim=true，interim 只进 PollAsrLatest，
 //     不进 PollAsrResult（final-only）
 //   - 播报期闭麦由调用方（采集线程用 AudioInput::Mute / SDL 丢帧）负责；
@@ -25,12 +25,12 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include "common/blocking_queue.h"
+#include "common/buffers.h"
+#include "common/time_wrapper.h"
 #include "vad/vad.h"
 #include "voice_interaction/voice_config.h"
 
@@ -58,7 +58,7 @@ struct VoiceTuning {
     int pre_roll_frames = 5;          // 起始回捞帧数（150ms，防首字被切）
     int min_utterance_frames = 10;    // 最短句（约 300ms；0 = 关闭该闸）
     int min_peak = 16;                // 峰值闸：低于此值视为数字静音（0 = 关闭）
-    size_t max_pending_speech = 10;   // TTS 待播队列上限（1 = 只保留最新）
+    size_t max_pending_speech = 32;   // TTS 待播队列上限（1 = 只保留最新）
     size_t max_pending_texts = 4;     // final 文本队列上限（防主循环卡住堆积）
     size_t max_pending_asr_jobs = 8;  // ASR 队列上限（满时拒绝新句，保留旧句）
 
@@ -93,17 +93,36 @@ public:
 
     // ── 主循环调用 ──
 
-    /// 取一句已识别的文本（仅 final）；timeout_ms=0 为非阻塞
-    std::optional<std::string> PollAsrResult(int timeout_ms = 0);
-    /// 取最新识别结果（interim 或 final）；SDL 输入框实时显示用
-    std::optional<std::string> PollAsrLatest();
-    /// 入队播报（有界队列，满时丢最旧；空文本忽略）；实际播放在 TTS worker
-    void EnqueueSpeech(SpeechRequest request);
-    void EnqueueSpeech(std::string text) {
-        EnqueueSpeech(SpeechRequest{std::move(text), {}, {}});
+    /// 取一句已识别的文本（仅 final）；timeout_ms=0 为非阻塞。
+    /// 返回 false = 超时/已停止（out 清空）
+    bool PollAsrResult(std::string& out, int timeout_ms = 0);
+    /// 取最新识别结果（interim 或 final）；SDL 输入框实时显示用。
+    /// 返回 false = 自上次取走后没有新结果（out 清空）
+    bool PollAsrLatest(std::string& out);
+    /// 取走当前所有 final（非阻塞）；返回条数，out 清空后按入队顺序填入。
+    /// 主循环一次取尽、连说并句用。
+    size_t PollAllAsrResults(std::vector<std::string>& out);
+    /// 用户是否还在说（VAD 正在累积当前句）。主循环据此延迟派发，
+    /// 给"连说几句"留并句窗口；采集线程写、主循环只读。
+    bool IsSpeechActive() const { return in_speech_.load(); }
+    /// 是否还有语音待处理（识别中，或 final 尚未被主循环取走）。
+    /// 感知侧据此让路：先让主循环把话取走，再发起秒级 VL。
+    bool HasPendingAsr() const {
+        return asr_in_flight_.load() > 0 || !text_queue_.Empty();
     }
-    /// 是否正在播报（主循环据此跳过会话轮/感知派发）
+    /// 入队播报（有界队列，满时丢最旧；空文本忽略）；返回是否真正入队。
+    /// 实际播放在 TTS worker。
+    bool EnqueueSpeech(SpeechRequest request);
+    bool EnqueueSpeech(std::string text) {
+        return EnqueueSpeech(SpeechRequest{std::move(text), {}, {}});
+    }
+    /// 是否正在播报（含已入队未开播；主循环据此跳过会话轮/感知派发）
     bool IsSpeaking() const { return speaking_.load(); }
+    /// 丢弃尚未开播的播报条目（正在播放/合成的那条不受影响）；返回丢弃条数。
+    /// 用于回复就绪时丢掉多余的思考填充语。
+    size_t DropPendingSpeech();
+    /// 队列里是否还有待播条目（worker 用它决定本句结束后是否停流）
+    bool HasPendingSpeech() const { return !speech_queue_.Empty(); }
 
     struct Stats {
         int feed_frames = 0;       // 送入帧数
@@ -127,6 +146,17 @@ private:
         AsrJobKind kind = AsrJobKind::kFinal;
         std::vector<int16_t> pcm;
         uint64_t seq = 0;
+    };
+
+    // 入队时间随条目走：主循环/worker 取走时直接算出排队时延
+    struct FinalText {
+        std::string text;
+        SteadyClock::TimePoint enqueued_at;
+    };
+
+    struct QueuedSpeech {
+        SpeechRequest request;
+        SteadyClock::TimePoint enqueued_at;
     };
 
     void AsrWorker();
@@ -164,11 +194,11 @@ private:
     uint64_t last_published_seq_ = 0;
 
     // ── 文本队列（ASR worker → 主循环，仅 final）──
-    BlockingQueue<std::string> text_queue_;
+    BlockingQueue<FinalText> text_queue_;
 
     // ── TTS 队列（主循环 → TTS worker；有界，满时丢最旧）──
-    BlockingQueue<SpeechRequest> speech_queue_;
-    std::atomic<bool> speaking_{false};
+    BlockingQueue<QueuedSpeech> speech_queue_;
+    std::atomic<bool> speaking_{false};   // 入队即置真；播完置假
 
     std::atomic<bool> running_{false};
     std::thread asr_thread_;

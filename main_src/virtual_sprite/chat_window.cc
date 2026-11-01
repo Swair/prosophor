@@ -6,17 +6,17 @@
 #include "virtual_sprite/sprite_manager.h"
 #include "virtual_sprite/layout_config.h"
 
-#include "agent_engine.h"
-#include "config/config.h"
+#include "prosophor_core/public/agent_engine.h"
+#include "prosophor_core/public/config.h"
 #include "virtual_sprite/components/chat_panel.h"
 #include "media_engine/ui_component/input_panel.h"
 #include "media_engine/media_engine.h"
 #include "common/log_wrapper.h"
 #include "common/i18n.h"
 #include "virtual_sprite/voice_engine.h"
-#include "managers/active_trigger_manager.h"
 #include "virtual_sprite/panels/panel_helpers.h"
 
+#include <chrono>
 #include <cstring>
 #include <unordered_map>
 #include <future>
@@ -181,8 +181,15 @@ void ChatWindow::RenderActiveTriggersView(int cont_x, int cont_y, int cont_w, in
     PanelContainer f(cont_x, cont_y, cont_w, cont_h, L.Get("nav_active_triggers").c_str());
     float sm = Spacing();
 
-    auto& triggers = ActiveTriggerManager::GetInstance();
-    auto plugins = triggers.ListPlugins();
+    // 插件状态 1s 刷新一次，避免每帧复制两遍插件列表
+    static std::vector<ActiveTriggerInfo> cached_plugins;
+    static auto next_plugins_refresh = std::chrono::steady_clock::time_point{};
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= next_plugins_refresh) {
+        cached_plugins = AgentEngine::GetInstance().ListActiveTriggerPlugins();
+        next_plugins_refresh = now + std::chrono::seconds(1);
+    }
+    const auto& plugins = cached_plugins;
 
     float iy = f.a.y + 8.0f * sm;
     if (plugins.empty()) {

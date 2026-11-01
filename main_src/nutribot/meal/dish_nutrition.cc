@@ -1,4 +1,4 @@
-// DishNutritionTable / NutritionEnrichingDetector 实现（详见头注释）
+// DishNutritionTable 实现（详见头注释）
 #include "meal/dish_nutrition.h"
 
 #include <algorithm>
@@ -98,12 +98,6 @@ std::optional<DishNutritionTable> DishNutritionTable::LoadFromFile(
             ++table.skipped_entries_;
             continue;
         }
-        if (item.contains("tags") && item["tags"].is_array()) {
-            for (const auto& tag : item["tags"]) {
-                if (tag.is_string()) dish.tags.push_back(tag.get<std::string>());
-            }
-        }
-        dish.source = item.value("source", std::string(""));
         table.dishes_.push_back(std::move(dish));
     }
     return table;
@@ -136,32 +130,6 @@ std::optional<DishNutrition> DishNutritionTable::Match(
     }
     if (best == nullptr) return std::nullopt;
     return *best;
-}
-
-NutritionEnrichingDetector::NutritionEnrichingDetector(FoodDetectorPort* inner,
-                                                       const DishNutritionTable* table)
-    : inner_(inner), table_(table) {}
-
-std::vector<prosophor::nr::domain::FoodItem> NutritionEnrichingDetector::detect_domain(
-    FrameRef frame) {
-    std::vector<prosophor::nr::domain::FoodItem> foods = inner_->detect_domain(frame);
-    unmatched_last_ = 0;
-    if (table_ == nullptr) return foods;   // 没接知识库：纯透传
-
-    for (auto& food : foods) {
-        const auto match = table_->Match(food.name);
-        if (!match.has_value()) {
-            ++unmatched_last_;
-            LOG_DEBUG("nutribot: 营养库未见过的菜「{}」", food.name.c_str());
-            continue;   // has_nutrition 保持 false：未知 ≠ 0 千卡
-        }
-        // 命中即归一为规范名：VL 的抖动变体（"炒生菜"/别名"煎蛋"）归到库内主键，
-        // 下游的营养命中、禁忌比对、餐账去重都以同一口径工作
-        food.name = match->name;
-        food.nutrition = match->per_serving;
-        food.has_nutrition = true;
-    }
-    return foods;
 }
 
 }  // namespace prosophor::nr::app

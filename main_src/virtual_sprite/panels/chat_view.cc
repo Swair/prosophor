@@ -6,7 +6,7 @@
 #include "virtual_sprite/sprite.h"
 #include "virtual_sprite/sprite_manager.h"
 #include "virtual_sprite/layout_config.h"
-#include "agent_engine.h"
+#include "prosophor_core/public/agent_engine.h"
 #include "virtual_sprite/components/chat_panel.h"
 #include "media_engine/ui_component/input_panel.h"
 #include "media_engine/media_engine.h"

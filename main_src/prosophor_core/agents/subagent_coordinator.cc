@@ -125,9 +125,13 @@ void SubagentCoordinator::RunSubagent(Subagent& agent) {
         session.SetSystemPrompt(sp_vec);
 
         // Run the agent - using static Loop method
-        // 结果取 Loop 的返回值：消息列表末条在失败/打断路径下会退回上一轮的
-        // 助手消息，按 role 过滤也挡不住（它同样是 "assistant"）
-        agent.result = AgentCore::Loop(agent.task, session);
+        // 只有非 STATE_ERROR 才读最后一条 assistant；失败轮次不碰消息
+        AgentCore::Loop(agent.task, session);
+        const auto snap = session.GetSnapshot();
+        if (snap.state != AgentRuntimeState::STATE_ERROR &&
+            !snap.messages.empty() && snap.messages.back().role == "assistant") {
+            agent.result = snap.messages.back().reply_text();
+        }
         agent.messages = session.GetMessages();
 
         agent.status = SubagentStatus::Completed;

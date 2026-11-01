@@ -298,8 +298,6 @@ if(PROSOPHOR_NUTRIBOT)
         ${CMAKE_CURRENT_SOURCE_DIR}/nutribot
         ${CMAKE_CURRENT_SOURCE_DIR}/prosophor_core
         ${CMAKE_CURRENT_SOURCE_DIR}/base
-        # scene_monitor.cc（帧差运动）编译期需要 opencv 头（见下方 opencv 段）
-        ${NR_OPENCV_INCLUDE}
     )
     # aidgen LLM provider：随 prosophor_core 链接（nutribot 形态硬依赖，NPU 本地推理；
     # 缺 SDK 直接配置失败；源过滤见 core 收集段）
@@ -331,7 +329,8 @@ if(PROSOPHOR_NUTRIBOT)
     find_package(ALSA REQUIRED)
     add_compile_definitions(PROSOPHOR_HAS_ALSA)
     target_link_libraries(prosophor_core PRIVATE ALSA::ALSA)
-    target_link_libraries(prosophor PRIVATE prosophor_core asound)
+    # robot 控制工具走 base HttpClient；curl 随 core 传播，这里显式写一份
+    target_link_libraries(prosophor PRIVATE prosophor_core CURL::libcurl asound)
 endif()
 
 # ---- 主形态 prosophor 安装（置于文件尾：nutribot 形态的 prosophor 在此才定义；

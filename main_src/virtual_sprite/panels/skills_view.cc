@@ -4,10 +4,10 @@
 #include "virtual_sprite/components/item_list.h"
 #include "virtual_sprite/layout_config.h"
 #include "common/i18n.h"
-#include "prosophor_core/managers/skill_loader.h"
-#include "prosophor_core/agent_engine.h"
-#include "prosophor_core/core/agent_types.h"
-#include "prosophor_core/config/config.h"
+#include "prosophor_core/public/skill.h"
+#include "prosophor_core/public/agent_engine.h"
+#include "prosophor_core/public/core_types.h"
+#include "prosophor_core/public/config.h"
 #include <filesystem>
 #include <fstream>
 

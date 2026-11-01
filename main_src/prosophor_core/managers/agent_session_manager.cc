@@ -53,8 +53,16 @@ void AgentSessionManager::Initialize(ToolExecutorCallback tool_executor) {
     }
 }
 
-void AgentSessionManager::SetToolExecutor(ToolExecutorCallback tool_executor) {
-    tool_executor_ = tool_executor;
+void AgentSessionManager::ReloadRoles() {
+    auto install_roles = prosophor::ProsophorConfig::InstallConfigDir() / "roles";
+    if (DirExists(install_roles.string())) {
+        LoadRolesFromDirectory(install_roles.string());
+    }
+    auto user_roles = prosophor::ProsophorConfig::BaseDir() / "roles";
+    if (DirExists(user_roles.string())) {
+        LoadRolesFromDirectory(user_roles.string());
+    }
+    LOG_INFO("AgentSessionManager: roles reloaded (tools re-resolved)");
 }
 
 void AgentSessionManager::SetOutputCallback(SessionOutputCallback callback) {
@@ -94,6 +102,20 @@ void AgentSessionManager::LoadRolesFromDirectory(const std::string& roles_dir) {
 const AgentRole* AgentSessionManager::GetRole(const std::string& role_id) const {
     auto it = roles_.find(role_id);
     return it != roles_.end() ? &it->second : nullptr;
+}
+
+std::optional<std::pair<std::string, std::string>>
+AgentSessionManager::GetRoleTtsConfig(const std::string& role_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = roles_.find(role_id);
+    if (it == roles_.end()) return std::nullopt;
+    return std::make_pair(it->second.tts_backend, it->second.tts_voice);
+}
+
+std::string AgentSessionManager::GetRoleProviderName(const std::string& role_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = roles_.find(role_id);
+    return it == roles_.end() ? std::string() : it->second.provider_prot;
 }
 
 std::vector<std::string> AgentSessionManager::ListRoles() const {
@@ -271,36 +293,38 @@ std::string AgentSessionManager::CreateSession(const std::string& role_id,
     return session_id;
 }
 
-std::string AgentSessionManager::SendToSession(const std::string& session_id,
-                                               const std::string& message,
-                                               const std::string& sender_id,
-                                               const std::string& sender_name) {
-    return SendToSession(session_id, message, std::vector<std::string>{}, sender_id, sender_name);
+void AgentSessionManager::SendToSession(const std::string& session_id,
+                                        const std::string& message,
+                                        const std::string& sender_id,
+                                        const std::string& sender_name) {
+    SendToSession(session_id, message, std::vector<std::string>{}, sender_id, sender_name);
 }
 
-std::string AgentSessionManager::SendToSession(const std::string& session_id,
-                                               const std::string& message,
-                                               const std::vector<std::string>& image_paths,
-                                               const std::string& sender_id,
-                                               const std::string& sender_name) {
+void AgentSessionManager::SendToSession(const std::string& session_id,
+                                        const std::string& message,
+                                        const std::vector<std::string>& image_paths,
+                                        const std::string& sender_id,
+                                        const std::string& sender_name) {
     auto session = GetSessionShared(session_id);
     if (!session) {
         throw std::runtime_error("Session not found: " + session_id);
     }
 
     session->UpdateLastActive();
-    std::string reply;
     {
         auto lock = session->ScopedLock();
         session->SetCurrentSender(sender_id, sender_name);
         // 与 Loop 同锁设置附件：分两次加锁会留下"设图"与"取图"之间的竞态窗口
         session->SetNextImages(image_paths);
-        reply = AgentCore::Loop(message, *session);
+        AgentCore::Loop(message, *session);
+        if (session->IsStateless()) {
+            // 无状态会话：历史/图片一律不跨轮，避免 prompt 膨胀和旧结论锚定
+            session->CompactHistory({}, {});
+        } else if (clear_images_after_turn_) {
+            // 图片只服务当轮：清掉后历史里只保留文本
+            session->ClearHistoryImages();
+        }
     }
-
-    // 回复由 Loop 直接交出：消息列表末条在失败路径下会退回上一轮的回复，
-    // 不能用来反推本轮结果
-    return reply;
 }
 
 void AgentSessionManager::SendToSessionAsync(const std::string& session_id,
@@ -472,6 +496,7 @@ std::vector<const AgentSession*> AgentSessionManager::GetSessionsByRole(const st
 }
 
 std::vector<AgentSession*> AgentSessionManager::GetActiveSessions(int minutes) {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto now = SteadyClock::Now();
     auto threshold = std::chrono::minutes(minutes);
 
@@ -511,7 +536,7 @@ void AgentSessionManager::CloseSession(const std::string& session_id) {
             session.FlushToDisk();
 
             if (auto* role = session.GetRole()) {
-                if (role->memory_strategy) {
+                if (role->memory_strategy && !session.IsStateless()) {
                     role->memory_strategy->TryExitConsolidation(session);
                 }
             }
@@ -528,9 +553,11 @@ void AgentSessionManager::CloseSession(const std::string& session_id) {
 }
 
 std::vector<std::string> AgentSessionManager::ListSessions() const {
+    std::lock_guard<std::mutex> lock(mutex_);
     std::vector<std::string> session_ids;
     for (const auto& [id, session] : sessions_) {
-        if (session->IsActive()) {
+        // 主动触发会话不属于用户会话列表
+        if (session->IsActive() && !IsActiveOwner(session->GetOwnerId())) {
             session_ids.push_back(id);
         }
     }
@@ -542,7 +569,8 @@ std::string AgentSessionManager::GetLastSessionId() const {
 
     std::string last_id;
     for (const auto& [id, session] : sessions_) {
-        if (session->IsActive()) {
+        // 主动触发会话常驻活跃，不能顶替"当前聚焦会话"
+        if (session->IsActive() && !IsActiveOwner(session->GetOwnerId())) {
             last_id = id;
         }
     }

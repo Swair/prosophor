@@ -19,7 +19,6 @@
 #include "managers/permission_manager.h"
 #include "mcp/mcp_client.h"
 #include "tools/command_tools/background_run_tool.h"
-#include "tools/robot_control_tools.h"
 
 namespace prosophor {
 
@@ -57,8 +56,22 @@ ToolRegistry::ToolRegistry()
     auto& perm_manager = PermissionManager::GetInstance();
     perm_manager.Initialize();
 
-    // Register built-in tools - ensures GetInstance() singleton has all tools
     RegisterBuiltinTools();
+}
+
+void ToolRegistry::SetUseDefaultTools(bool enabled) {
+    use_default_tools_ = enabled;
+    if (enabled) {
+        RegisterBuiltinTools();
+        return;
+    }
+    ClearTools();
+    LOG_INFO("ToolRegistry: 通用内建工具已清空（产品自注册模式）");
+}
+
+void ToolRegistry::ClearTools() {
+    tools_.clear();
+    tool_schemas_.clear();
 }
 
 void ToolRegistry::RegisterBuiltinTools() {
@@ -248,8 +261,8 @@ void ToolRegistry::RegisterBuiltinTools() {
     // Register MCP tools dynamically
     // RegisterMcpTools();
 
-    // 机器人控制工具（robot.control_enabled=false 时不注册）
-    RegisterRobotControlTools(*this);
+    // 机器人控制工具由 NutriBot 形态通过 AgentEngine::RegisterTool 注册，
+    // core 不再内置设备动作。
 
     LOG_DEBUG("Registered built-in tools", tool_schemas_.size());
 }
@@ -264,20 +277,39 @@ void ToolRegistry::RegisterTool(
     schema.name = name;
     schema.description = description;
 
-    // Wrap parameters in OpenAI-compatible function schema format
-    nlohmann::json wrapped_schema = nlohmann::json::object();
-    wrapped_schema["type"] = "object";
-    wrapped_schema["properties"] = std::move(parameters);
+    // 两种入参形态：
+    //   1) 内建工具习惯传 properties 映射 —— 由这里补 type/properties/required；
+    //   2) 外部注册（AgentEngine::RegisterTool）传完整 object schema —— 原样使用，
+    //      保留调用方给出的 required（不能让可选字段被强制必填）。
+    nlohmann::json wrapped_schema;
+    if (parameters.is_object() && parameters.contains("type") &&
+        parameters["type"] == "object" && parameters.contains("properties")) {
+        wrapped_schema = std::move(parameters);
+    } else {
+        wrapped_schema = nlohmann::json::object();
+        wrapped_schema["type"] = "object";
+        wrapped_schema["properties"] = std::move(parameters);
 
-    // Extract required fields (all defined properties are required by default)
-    nlohmann::json required = nlohmann::json::array();
-    for (const auto& [key, value] : wrapped_schema["properties"].items()) {
-        required.push_back(key);
+        // 内建工具默认所有属性必填（沿用旧行为）
+        nlohmann::json required = nlohmann::json::array();
+        for (const auto& [key, value] : wrapped_schema["properties"].items()) {
+            required.push_back(key);
+        }
+        wrapped_schema["required"] = required;
     }
-    wrapped_schema["required"] = required;
 
     schema.input_schema = std::move(wrapped_schema);
-    tool_schemas_.push_back(schema);
+
+    // 同名重复注册时替换 schema，避免工具列表里出现重复项
+    bool replaced = false;
+    for (auto& existing : tool_schemas_) {
+        if (existing.name == name) {
+            existing = std::move(schema);
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced) tool_schemas_.push_back(std::move(schema));
 
     LOG_DEBUG("Registered tool: {}", name);
 }

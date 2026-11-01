@@ -2,7 +2,7 @@
 
 #include <string>
 #include <unordered_map>
-#include "config/config.h"
+#include "prosophor_core/public/config.h"
 #include "media_engine/media_engine.h"
 
 namespace prosophor {

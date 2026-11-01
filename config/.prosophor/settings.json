@@ -21,7 +21,7 @@
                 ]
             },
             {
-                "api_key": "sk-198786439e234d0abc2ffexxxxxxxx",
+                "api_key": "sk-efc784f28553467bb4e5b29abd30901c",
                 "base_url": "https://api.deepseek.com/anthropic/v1/messages",
                 "timeout": 60,
                 "models": [
@@ -36,6 +36,12 @@
                         "temperature": 0.1,
                         "max_tokens": 1024,
                         "context_window": 128000
+                    },
+                    {
+                        "model": "deepseek-v4-flash[1m]",
+                        "temperature": 0.1,
+                        "max_tokens": 1024,
+                        "context_window": 1000000
                     }
                 ]
             }
@@ -131,6 +137,7 @@
             }
         ],
         "aidgen": {
+            "enabled": false,
             "api_key": "local",
             "base_url": "local",
             "config_file": "/home/aidlux/models/qwen3vl_8b/qnn248_qcs8550_cl4096/aidgen_config.json",
@@ -140,7 +147,7 @@
                 {
                     "model": "Qwen3-VL-8B-Instruct",
                     "temperature": 0.3,
-                    "max_tokens": 256,
+                    "max_tokens": 512,
                     "context_window": 4096
                 }
             ]
@@ -216,18 +223,18 @@
         "pre_roll_frames": 5,
         "warmup_discard_frames": 8,
         "speak_max_chars": 120,
-        "speak_min_gap_ms": 10000
+        "speak_min_gap_ms": 10000,
+        "max_pending_speech": 32,
+        "tts_cache_bytes": 33554432
     },
     "camera": {
         "device": "/dev/video2",
-        "output_dir": "/tmp/prosophor/nutribot_camera",
+        "output_dir": "~/.prosophor/nutribot_camera",
         "interval_ms": 1500,
-        "scene_interval_ms": 3000,
-        "perception_interval_ms": 3000,
-        "idle_interval_ms": 15000,
+        "perception_interval_ms": 10000,
+        "idle_interval_ms": 30000,
         "timeout_ms": 8000,
-        "keep_frames": 20,
-        "motion_pixel_threshold": 12
+        "keep_frames": 20
     },
     "meal": {
         "announce": true,
@@ -235,25 +242,38 @@
             {
                 "name": "早餐",
                 "start": "07:00",
-                "end": "09:00"
+                "end": "08:00"
             },
             {
                 "name": "午餐",
-                "start": "11:30",
-                "end": "13:30"
+                "start": "12:00",
+                "end": "13:00"
             },
             {
                 "name": "晚餐",
-                "start": "17:30",
-                "end": "19:30"
+                "start": "18:00",
+                "end": "19:00"
             }
         ]
     },
     "nutribot": {
         "member_store_dir": "",
-        "stub_member_name": "小明",
         "nutrition_file": "",
-        "inference_timeout_ms": 180000
+        "wake_words": [
+            "你好大白"
+        ],
+        "wake_ack_text": "我在",
+        "awake_window_ms": 8000,
+        "thinking_fillers": [
+            "嗯……我想想",
+            "让我想想啊",
+            "嗯，我看看"
+        ],
+        "vision_fillers": [
+            "让我看看桌上有什么",
+            "我瞅瞅这盘菜",
+            "嗯，我瞧瞧"
+        ]
     },
     "robot": {
         "control_enabled": true,

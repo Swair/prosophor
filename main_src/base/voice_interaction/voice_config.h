@@ -96,7 +96,7 @@ struct VoiceConfig {
     int warmup_discard_frames = 8;    // 开流后丢弃帧数（设备唤醒期可能是数字静音）
     int speak_max_chars = 120;        // 单次播报截断（按字符）
     int speak_min_gap_ms = 10000;     // 主动播报最小间隔
-    size_t max_pending_speech = 10;   // TTS 待播队列上限（1 = 只保留最新）
+    size_t max_pending_speech = 32;   // TTS 待播队列上限（1 = 只保留最新）
     size_t max_pending_asr_jobs = 8;  // ASR 队列上限（满时拒绝新句）
     size_t tts_cache_bytes = 8 * 1024 * 1024;  // TTS 音频缓存上限；0 = 关闭
 

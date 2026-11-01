@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "members": [
+    {
+      "member_id": "demo-xiaoming",
+      "name": "小明",
+      "age": 6,
+      "gender": "男",
+      "taboo_foods": ["牛奶", "花生"],
+      "allergies": ["虾"],
+      "eating_habits": ["少盐"],
+      "preferences": ["清淡", "甜食"],
+      "health_tags": ["儿童", "乳糖不耐受"]
+    },
+    {
+      "member_id": "demo-wangnainai",
+      "name": "王奶奶",
+      "age": 68,
+      "gender": "女",
+      "taboo_foods": ["蛋糕", "肥肉", "红烧肉"],
+      "eating_habits": ["低糖", "少盐"],
+      "preferences": ["软烂", "清淡"],
+      "health_tags": ["2型糖尿病", "老年人"]
+    }
+  ]
+}

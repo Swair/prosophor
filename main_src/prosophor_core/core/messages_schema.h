@@ -32,8 +32,9 @@ struct MessageSchema {
     std::string role;
     std::vector<ContentSchema> content;
     std::string summary;  // Running summary carried across requests (updated by LLM on each turn)
-    std::string sender_id;    // IM 发送者 ID(飞书 open_id);群聊必填,私聊可空(空按 owner 兜底)
-    std::string sender_name;  // 展示名,可空
+    std::string sender_id;    // 本条消息的发言成员用户 ID(群聊=发言的群成员,非群 ID;飞书 open_id);
+                              // 群聊必填,私聊/本地可空(空=未提供 IM 身份,记忆按 owner 兜底)
+    std::string sender_name;  // 发言成员展示名,可空(当前不写入 prompt/JSONL)
 
     MessageSchema() = default;
     MessageSchema(std::string r, std::string text) : role(std::move(r)) {
@@ -55,6 +56,17 @@ struct MessageSchema {
         std::string r;
         for (const auto& b : content) {
             if (b.type != "text" && b.type != "thinking") continue;
+            if (!r.empty()) r += "\n\n";
+            r += b.text;
+        }
+        return r;
+    }
+
+    /// 仅正文 text 块（不含 thinking），用于把回复交给调用方/TTS。
+    std::string reply_text() const {
+        std::string r;
+        for (const auto& b : content) {
+            if (b.type != "text" || b.text.empty()) continue;
             if (!r.empty()) r += "\n\n";
             r += b.text;
         }

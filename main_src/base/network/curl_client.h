@@ -36,8 +36,10 @@ struct HttpRequest {
     std::string body;
     struct curl_slist* headers = nullptr;
     long timeout_seconds = 30;
-    long low_speed_limit = 0;  // bytes/sec, 0 = disabled
-    long low_speed_time = 0;   // seconds
+    long timeout_ms = 0;          // >0 时优先于 timeout_seconds（设备控制等毫秒级场景）
+    long connect_timeout_ms = 0;  // >0 时覆盖默认 10s 连接超时
+    long low_speed_limit = 0;     // bytes/sec, 0 = disabled
+    long low_speed_time = 0;      // seconds
     std::string user_agent;
 
     // Streaming callback: called for each chunk of data received

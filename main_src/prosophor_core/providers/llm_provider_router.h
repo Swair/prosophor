@@ -21,14 +21,17 @@ public:
     /// 初始化（从 config 加载 providers）
     void Initialize(const ProsophorConfig& config);
 
-    /// 根据 provider_name 获取 provider
+    /// 根据 provider_name 获取 provider（不存在时回退默认，会话路径使用）
     std::shared_ptr<LLMProvider> GetProviderByName(const std::string& provider_name);
+
+    /// 严格按名查找（不存在返回 nullptr，一次性调用/状态查询使用）
+    std::shared_ptr<LLMProvider> GetProviderByNameExact(const std::string& provider_name) const;
 
     /// 获取默认 provider
     std::shared_ptr<LLMProvider> GetDefaultProvider();
 
-    /// 获取 provider_name
-    std::string GetProviderName(const std::string& role_id);
+    /// 由 AgentEngine 用已加载角色的 provider_prot 覆盖默认 provider
+    void SetDefaultProvider(const std::string& provider_name);
 
 private:
     LlmProviderRouter() = default;

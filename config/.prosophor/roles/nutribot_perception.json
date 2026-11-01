@@ -1,0 +1,20 @@
+{
+    "id": "nutribot_perception",
+    "role_name": "NutriBot 周期感知",
+    "description": "周期看菜专用角色：无工具、保留文字上下文，只做严格 JSON 提取",
+    "soul": "你只做图像内容提取。只依据当前图片判断画面内容；历史轮次只有文字，可用来保持前后一致，但不要把旧菜名当成当前画面。严格按用户要求输出 JSON，不寒暄、不解释、不补充任何 JSON 之外的文字。",
+    "llm": {
+        "protocal": "anthropic",
+        "model": "deepseek-v4-flash[1m]",
+        "skills_white_list": [],
+        "tools_white_list": [],
+        "enable_streaming": false,
+        "enable_agent_chat": false,
+        "thinking": false,
+        "thinking_budget_tokens": 0,
+        "reasoning_effort": "low",
+        "max_iterations": 1,
+        "auto_confirm_tools": false,
+        "enable_tools": false
+    }
+}

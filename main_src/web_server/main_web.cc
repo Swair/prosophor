@@ -5,9 +5,9 @@
 #include <chrono>
 #include <thread>
 
-#include "agent_engine.h"
+#include "prosophor_core/public/agent_engine.h"
 #include "common/log_wrapper.h"
-#include "config/config.h"
+#include "prosophor_core/public/config.h"
 #include "web_server/web_gateway.h"
 #include "platform/platform.h"
 #include "web_server/web_server_app.h"

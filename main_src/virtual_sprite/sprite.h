@@ -5,13 +5,14 @@
 
 #include "common/noncopyable.h"
 #include "common/time_wrapper.h"
-#include "core/agent_types.h"
+#include "prosophor_core/public/core_types.h"
 #include "virtual_sprite/components/spritesheet.h"
 #include "virtual_sprite/voice_engine.h"
 #include "media_engine/media/texture/imgui_widget.h"
 #include "media_engine/ui_component/widget.h"
 #include "media_engine/ui_component/label.h"
 #include "media_engine/ui_component/nav_bar.h"
+#include "voice_interaction/tts_chunker.h"
 
 #include <string>
 #include <memory>
@@ -53,6 +54,9 @@ class Sprite : public Noncopyable {
 
     /// Agent state → pet animation
     void SetAgentState(AgentRuntimeState state, const std::string& details = "");
+    /// Agent 输出回调入口：更新动画状态，并把流式正文喂给本 sprite 的分句器 → TTS
+    void HandleAgentOutput(AgentRuntimeState state, const std::string& role_id,
+                           const std::string& details, const std::string& delta);
     void UpdateAnimation(float delta_time);
 
     /// Drag/hover overrides
@@ -156,6 +160,7 @@ class Sprite : public Noncopyable {
     std::unique_ptr<SpeechBubble> speech_bubble_;
 
     // ── TTS ──
+    prosophor::voice::TtsChunker tts_chunker_;
     std::string role_tts_backend_ = "edge-tts";
     std::string role_tts_voice_ = "zh-CN-XiaoxiaoNeural";
 
