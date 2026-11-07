@@ -125,16 +125,14 @@ void SubagentCoordinator::RunSubagent(Subagent& agent) {
         session.SetSystemPrompt(sp_vec);
 
         // Run the agent - using static Loop method
+        // 只有非 STATE_ERROR 才读最后一条 assistant；失败轮次不碰消息
         AgentCore::Loop(agent.task, session);
-        agent.messages = session.GetMessages();
-
-        // Extract result from final message
-        if (!agent.messages.empty()) {
-            const auto& last_msg = agent.messages.back();
-            if (last_msg.role == "assistant") {
-                agent.result = last_msg.text();
-            }
+        const auto snap = session.GetSnapshot();
+        if (snap.state != AgentRuntimeState::STATE_ERROR &&
+            !snap.messages.empty() && snap.messages.back().role == "assistant") {
+            agent.result = snap.messages.back().reply_text();
         }
+        agent.messages = session.GetMessages();
 
         agent.status = SubagentStatus::Completed;
         agent.completed_at = SystemClock::GetCurrentTimestamp();

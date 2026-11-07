@@ -1,5 +1,42 @@
 # Changelog
 
+## [Unreleased] — 2026-11-07 本地语音（MeloTTS + SenseVoice）+ NutriBot 形态 + 自动更新 + 语音模块下沉
+
+本期重点：语音子系统整体下沉为 `base/voice_interaction`（ASR/TTS/VAD/音频 I/O 统一管线，NutriBot 与 SDL 共用）；Windows SDL 新增 sherpa-onnx 本地语音（MeloTTS + SenseVoice，离线、可选 fp32）；新增 NutriBot（高通 QCS8550）形态；SDL 增加自动更新；构建系统统一目标名并改为能力探测选择 GPU 后端。
+
+### 本地语音（Windows SDL，sherpa-onnx）
+- **SherpaTtsProvider**（`base/voice_interaction/providers/tts/sherpa_tts_provider.*`）：MeloTTS VITS，44.1kHz 单声道，模型懒加载、进程内复用，输出 int16 PCM 交给既有缓存/播放链路
+- **SherpaAsrProvider**（`providers/asr/sherpa_asr_provider.*`）：SenseVoice 一句话识别，优先 `model.int8.onnx`，可用 `sherpa_prefer_fp32` 切到 fp32
+- **显式后端选择**：`TtsProviderFactory` / `AsrProviderFactory` 按配置原样选择；移除自动回退，后端不可用即报错返回 nullptr（NutriBot 板端需显式配置 `backend: aidvoice`）
+- **移除 HTTP ASR 后端**（`http_asr_provider`）：ASR 仅保留 sherpa-onnx（Windows）与 aidvoice（NutriBot）
+- 配置新增：`sherpa_model_dir` / `sherpa_speaker_id` / `sherpa_speed` / `sherpa_num_threads` / `sherpa_prefer_fp32`；设置面板增加后端、模型目录、语言、线程、fp32 开关（重启生效提示）
+- 本地 ASR 自动关闭 interim（避免整句重复推理）；SDL 发送改为 `SendUserMessageAsync`，LLM 回合不再阻塞渲染（sprite 不卡）
+
+### NutriBot（新增形态）
+- `main_src/nutribot/`：高通 QCS8550 常驻语音营养助手（28 个文件）
+  - 常驻回路：唤醒词、VAD 断句、ASR 并句、TTS 分句流式播报、用餐窗口、视觉感知、成员/菜品存储、机器人控制工具
+  - LLM 走 aidgen NPU 本地推理；语音走 aidvoice（SenseVoice + MeloTTS）
+- CMake：`PROSOPHOR_NUTRIBOT` 形态链接 aidgen/aidvoice/aidlite/opencv/ALSA，入口复用 `main.cc` 形态分支
+
+### 语音模块下沉（base/voice_interaction）
+- 从 SDL/core 抽取统一语音闭环：`VoiceInteraction`（provider 生命周期、预热、闭麦/两阶段退出）、`VoicePipeline`（VAD 状态机 + ASR/TTS worker + 有界队列）、`vad/`（WebRTC/能量）、`audio/`（ALSA、FrameQueue、重采样）、`rtc_wrapper/`（WebRTC VAD C 算法）
+- ASR/TTS provider 迁入 `base/voice_interaction/providers/`；LLM provider 重组到 `prosophor_core/providers/llm/`；网络层下沉 `base/network/`
+- `virtual_sprite/voice_engine.*` 缩为 SDL 门面，TTS 音频 LRU 缓存、分句器、播报净化由两个形态共用
+
+### 自动更新（SDL）
+- `virtual_sprite/update_handler.*`：启动异步检查 Gitee → GitHub Releases，弹窗展示版本与更新说明（SDL GUI 独有）
+
+### 构建与配置
+- Makefile：目标名统一（`build_tui` / `build_sdl` / `build_web` / `build_nutribot`），平台实现内部自适应；修复嵌套构建目录（`build/<variant>`）源码路径；恢复 `BUILD_DIR` 根变量派生变体目录
+- GPU 后端改为能力探测：CUDA → Vulkan → CPU（`check_language(CUDA)` + `find_package(Vulkan)`），不再按平台写死
+- 顶层 `project(... LANGUAGES C CXX)`：SDL 子工程首次 configure 需要 C
+- 新增 `PROSOPHOR_BUILD_SHERPA_VOICE`（Windows SDL 默认 ON）：下载 sherpa-onnx v2.0.1 预编译运行时（shared-MT），安装 `sherpa-onnx-c-api.dll` / `onnxruntime*.dll`，NSIS 安装包同步收录
+- `settings.json` 统一 UTF-8；`ProsophorConfig::ToJson` 完整序列化 `tts` / `asr` / `voice`（设置面板保存不再丢段）；仓库配置显式设置 `backend: sherpa-onnx` 与模型目录
+
+### 其他
+- 多用户 Web 服务端与前端仅做少量 include/接口适配（随目录重组）
+- 文档：`docs/配置说明.md` 更新 TTS/ASR 后端、模型准备与 fp32 选项；README 中英文语音能力说明同步
+
 ## [Unreleased] — 2026-08-30 IM 多用户 Web 服务端 + React 前端 + 核心多用户改造 + base 目录重组
 
 本期重点：新增独立多用户 Web 服务端 `prosophor_web`（HTTP + WebSocket，cpp-httplib），配套 Vite + React 聊天前端；核心层完成 IM 多用户改造——会话归属（owner/group/sender）、按用户/群分层记忆注入与提取、JSONL 按归属分目录；流式输出回调重构为增量 delta 传递 + 多前端广播；源码目录大重组——`common`/`media_engine`/`platform`/`voice` 归入 `base/`，`components/` 并入 `virtual_sprite/`。净变化 +5,349 行。

@@ -5,7 +5,7 @@
 #include <optional>
 #include <string>
 
-#include "core/agent_types.h"
+#include "prosophor_core/public/core_types.h"
 
 namespace prosophor {
 

@@ -39,6 +39,9 @@ struct AgentRole {
     int max_tokens = 8192;
     int context_window = 128000;
     bool enable_streaming = true;      // 是否启用流式输出
+    // AgentChat：单轮带工具对话（不是 ReAct 多轮）。一次 LLM 响应里的
+    // tool_calls 执行完即结束，结果不回灌；同轮文字直接作为最终回复。
+    bool enable_agent_chat = false;
     bool enable_summary = false;       // 是否启用对话摘要（system prompt 指令 + 摘要提取循环）
     bool thinking = false;
     int thinking_budget_tokens = 4096;

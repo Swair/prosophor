@@ -19,8 +19,6 @@
 #include "common/chat.h"
 #pragma GCC diagnostic pop
 
-struct common_chat_tool;
-
 namespace prosophor {
 
 class LlamacppProvider : public LLMProvider {
@@ -28,11 +26,11 @@ public:
     explicit LlamacppProvider(const LlamacppModelConfig& cfg);
     ~LlamacppProvider() override;
 
-    bool Load();
+    void Load() override;
     void Unload();
-    bool IsLoaded() const;
-    bool IsLoading() const;
-    std::string GetLoadError() const;
+    bool IsLoaded() const override;
+    bool IsLoading() const override;
+    std::string GetLoadError() const override;
 
     std::string GetProviderName() const override { return "llamacpp"; }
     std::vector<std::string> GetSupportedModels() const override;
@@ -41,7 +39,7 @@ public:
     ChatResponse ChatStream(const ChatRequest& request,
         std::function<void(StreamEvent, std::string)> callback) override;
 
-    ChatResponse Chat(const ChatRequest& request);
+    ChatResponse Chat(const ChatRequest& request) override;
 
     /// Parse call:name{...} format from tool_text and add to response.
     void ParseToolCalls(ChatResponse& response, const std::string& tool_text);
@@ -75,12 +73,6 @@ private:
     HeaderList CreateHeaders(const ChatRequest& request) const override;
     void PrintRequestLog(const ChatRequest& request) const override;
     common_chat_params BuildChatParams(const ChatRequest& request) const;
-    void BuildSystemPrompt(std::vector<common_chat_msg>& out,
-                           const std::vector<SystemSchema>& system) const;
-    void BuildMessagePrompt(std::vector<common_chat_msg>& out,
-                            const std::vector<MessageSchema>& messages) const;
-    void BuildToolsPrompt(std::vector<common_chat_tool>& out,
-                          const std::vector<ToolsSchema>& tools) const;
     std::string BuildFallbackPrompt(
         const std::vector<common_chat_msg>& messages) const;
     bool TokenizePrompt(const std::string& prompt, int max_tokens,

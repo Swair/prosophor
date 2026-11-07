@@ -9,6 +9,7 @@
 #include <fstream>
 #include <regex>
 #include <stdexcept>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -81,16 +82,16 @@ const ModelConfig& ProsophorConfig::GetModelConfig() const {
     return fallback_model;
 }
 
-const ProviderConfig& ProsophorConfig::GetProvider(const std::string& name) const {
+const LlmProviderConfig& ProsophorConfig::GetProvider(const std::string& name) const {
     auto it = llm_providers.find(name);
     if (it != llm_providers.end()) {
         return it->second;
     }
-    static ProviderConfig default_provider;
+    static LlmProviderConfig default_provider;
     return default_provider;
 }
 
-const ModelConfig& ProviderConfig::GetDefaultModel() const {
+const ModelConfig& LlmProviderConfig::GetDefaultModel() const {
     if (model_configs.empty()) {
         static ModelConfig default_model;
         return default_model;
@@ -103,7 +104,7 @@ const ModelConfig& ProviderConfig::GetDefaultModel() const {
     return model_configs.begin()->second;
 }
 
-bool ProviderConfig::FindEntryForModel(const std::string& provider_name,
+bool LlmProviderConfig::FindEntryForModel(const std::string& provider_name,
                                         const std::string& model,
                                         std::string& out_base_url,
                                         std::string& out_api_key,
@@ -291,11 +292,13 @@ ModelDefinition ModelDefinition::FromJson(const nlohmann::json& json) {
     return m;
 }
 
-ProviderConfig ProviderConfig::FromJson(const nlohmann::json& json) {
-    ProviderConfig config;
+LlmProviderConfig LlmProviderConfig::FromJson(const nlohmann::json& json) {
+    LlmProviderConfig config;
+    config.enabled = json.value("enabled", true);
     config.api_key = json.value("api_key", json.value("apiKey", ""));
     config.base_url = json.value("base_url", json.value("baseUrl", ""));
     config.timeout = json.value("timeout", kDefaultProviderTimeoutSec);
+    config.aidgen_cfg = AidGenModelConfig::FromJson(json);
 
     // Parse models — supports array (preferred) and object (legacy) formats
     const auto& models_json_key = json.contains("models") ? "models" : "model";
@@ -328,10 +331,47 @@ ProviderConfig ProviderConfig::FromJson(const nlohmann::json& json) {
     return config;
 }
 
+AidGenModelConfig AidGenModelConfig::FromJson(const nlohmann::json& json) {
+    AidGenModelConfig config;
+    // 兼容旧的散列键：aidgen_config / aidgen_vl_config / aidgen_vit_backend
+    config.config_file = Platform::NormalizePath(ExpandHome(
+        json.value("config_file", json.value("aidgen_config", ""))));
+    config.vl_config_file = Platform::NormalizePath(ExpandHome(
+        json.value("vl_config_file", json.value("aidgen_vl_config", ""))));
+    config.backend = json.value("backend", json.value("aidgen_backend", "auto"));
+    config.vit_backend = json.value("vit_backend",
+                                    json.value("aidgen_vit_backend", "auto"));
+    config.auto_start = json.value("auto_start", true);
+
+    // 提示词标记：模型定制时在此覆盖，缺省为 ChatML + Qwen-VL 视觉界标
+    if (json.contains("chat_markers") && json["chat_markers"].is_object()) {
+        const auto& markers = json["chat_markers"];
+        config.im_start     = markers.value("im_start",     config.im_start);
+        config.im_end       = markers.value("im_end",       config.im_end);
+        config.vision_start = markers.value("vision_start", config.vision_start);
+        config.vision_end   = markers.value("vision_end",   config.vision_end);
+    }
+    return config;
+}
+
+nlohmann::ordered_json AidGenModelConfig::ToJson() const {
+    nlohmann::ordered_json j;
+    j["config_file"] = config_file;
+    j["backend"] = backend;
+    j["auto_start"] = auto_start;
+    j["vl_config_file"] = vl_config_file;
+    j["vit_backend"] = vit_backend;
+    j["chat_markers"] = {
+        {"im_start", im_start}, {"im_end", im_end},
+        {"vision_start", vision_start}, {"vision_end", vision_end},
+    };
+    return j;
+}
+
 LlamacppModelConfig LlamacppModelConfig::FromJson(const nlohmann::json& json) {
     LlamacppModelConfig config;
-    config.model_path = Platform::NormalizePath(json.value("model_path", ""));
-    config.mmproj_path = Platform::NormalizePath(json.value("mmproj_path", ""));
+    config.model_path = Platform::NormalizePath(ExpandHome(json.value("model_path", "")));
+    config.mmproj_path = Platform::NormalizePath(ExpandHome(json.value("mmproj_path", "")));
     config.port = json.value("port", 8080);
     // Backward compat: gpu_enable=true → -1, gpu_enable=false → 0; else use n_gpu_layers directly
     if (json.contains("gpu_enable")) {
@@ -398,49 +438,72 @@ nlohmann::ordered_json LlamacppModelConfig::ToJson() const {
     return j;
 }
 
-TtsConfig TtsConfig::FromJson(const nlohmann::json& json) {
-    TtsConfig config;
-    config.enabled = json.value("enabled", true);
-
-    // Read from provider array (preferred) or flat fields (legacy)
-    if (json.contains("provider") && json["provider"].is_array() && !json["provider"].empty()) {
-        const auto& p = json["provider"][0];
-        config.backend = p.value("backend", "edge-tts");
-        config.gs_auto_start = p.value("auto_start", config.gs_auto_start);
-        if (p.contains("voice_list") && p["voice_list"].is_array()) {
-            for (const auto& v : p["voice_list"])
-                config.voice_list.push_back(v.get<std::string>());
-        }
-    } else {
-        config.backend = json.value("backend", "edge-tts");
-        config.voice = json.value("voice", "zh-CN-XiaoxiaoNeural");
-        if (json.contains("voice_list") && json["voice_list"].is_array()) {
-            for (const auto& v : json["voice_list"])
-                config.voice_list.push_back(v.get<std::string>());
-        }
-    }
-    // Always include "none" option to disable TTS per role
-    config.voice_list.push_back("none");
-    config.gs_url = json.value("gs_url", json.value("gsUrl", "http://127.0.0.1:9880"));
-    config.gs_install_path = json.value("gs_install_path", json.value("gsInstallPath", ""));
-    config.gs_auto_start = json.value("gs_auto_start", json.value("gsAutoStart", true));
-    config.gs_port = json.value("gs_port", json.value("gsPort", 9880));
-    config.gs_ref_audio_path = json.value("gs_ref_audio_path", json.value("gsRefAudioPath", ""));
-    config.gs_ref_audio_text = json.value("gs_ref_audio_text", json.value("gsRefAudioText", ""));
-    config.gs_ref_audio_lang = json.value("gs_ref_audio_lang", json.value("gsRefAudioLang", "zh"));
-    config.gs_text_lang = json.value("gs_text_lang", json.value("gsTextLang", "zh"));
-    // sherpa-onnx TTS
-    config.sherpa_model_dir  = json.value("sherpa_model_dir",  "");
-    config.sherpa_speaker_id = json.value("sherpa_speaker_id", 0);
-    config.sherpa_speed      = json.value("sherpa_speed",       1.0f);
+CameraConfig CameraConfig::FromJson(const nlohmann::json& json) {
+    CameraConfig config;
+    config.device      = json.value("device", config.device);
+    config.output_dir  = ExpandHome(json.value("output_dir", config.output_dir));
+    config.interval_ms = json.value("interval_ms", config.interval_ms);
+    config.perception_interval_ms =
+        json.value("perception_interval_ms", config.perception_interval_ms);
+    config.idle_interval_ms = json.value("idle_interval_ms", config.idle_interval_ms);
+    config.timeout_ms  = json.value("timeout_ms", config.timeout_ms);
+    config.keep_frames = json.value("keep_frames", config.keep_frames);
     return config;
 }
 
-AsrConfig AsrConfig::FromJson(const nlohmann::json& json) {
-    AsrConfig config;
-    config.enabled        = json.value("enabled",        false);
-    config.push_to_talk   = json.value("push_to_talk",   true);
-    config.server_url     = json.value("server_url",     std::string("http://127.0.0.1:9100"));
+MealConfig MealConfig::FromJson(const nlohmann::json& json) {
+    MealConfig config;
+    config.announce = json.value("announce", config.announce);
+    if (json.contains("windows") && json["windows"].is_array()) {
+        config.windows.clear();   // 配置给出的窗口整体替换默认三餐
+        for (const auto& w : json["windows"]) {
+            if (!w.is_object()) continue;
+            MealWindowConfig window;
+            window.name  = w.value("name", std::string(""));
+            window.start = w.value("start", std::string(""));
+            window.end   = w.value("end", std::string(""));
+            config.windows.push_back(std::move(window));
+        }
+    }
+    return config;
+}
+
+namespace {
+
+// 读取字符串数组：非法/空项跳过；字段缺失或全空时保留默认值。
+void ReadStringList(const nlohmann::json& json, const char* key,
+                    std::vector<std::string>& out) {
+    if (!json.contains(key) || !json[key].is_array()) return;
+    std::vector<std::string> values;
+    for (const auto& item : json[key]) {
+        if (!item.is_string()) continue;
+        std::string value = item.get<std::string>();
+        if (!value.empty()) values.push_back(std::move(value));
+    }
+    if (!values.empty()) out = std::move(values);
+}
+
+}  // namespace
+
+NutribotConfig NutribotConfig::FromJson(const nlohmann::json& json) {
+    NutribotConfig config;
+    config.member_store_dir = json.value("member_store_dir", config.member_store_dir);
+    config.nutrition_file   = json.value("nutrition_file", config.nutrition_file);
+    ReadStringList(json, "wake_words", config.wake_words);
+    config.wake_ack_text = json.value("wake_ack_text", config.wake_ack_text);
+    config.awake_window_ms = json.value("awake_window_ms", config.awake_window_ms);
+    ReadStringList(json, "thinking_fillers", config.thinking_fillers);
+    ReadStringList(json, "vision_fillers", config.vision_fillers);
+    return config;
+}
+
+RobotControlConfig RobotControlConfig::FromJson(const nlohmann::json& json) {
+    RobotControlConfig config;
+    config.enabled            = json.value("control_enabled", config.enabled);
+    config.base_url           = json.value("base_url", config.base_url);
+    config.default_speed      = json.value("default_speed", config.default_speed);
+    config.move_pulse_ms      = json.value("move_pulse_ms", config.move_pulse_ms);
+    config.command_timeout_ms = json.value("command_timeout_ms", config.command_timeout_ms);
     return config;
 }
 
@@ -453,6 +516,12 @@ WebConfig WebConfig::FromJson(const nlohmann::json& json) {
     config.role           = json.value("role", "default");
     config.data_dir       = json.value("data_dir", "");
     config.token_ttl_hours = json.value("token_ttl_hours", 168);
+    return config;
+}
+
+ActiveTriggerConfig ActiveTriggerConfig::FromJson(const nlohmann::json& json) {
+    ActiveTriggerConfig config;
+    config.role = json.value("role", "");
     return config;
 }
 
@@ -522,10 +591,10 @@ ProsophorConfig ProsophorConfig::FromJson(const nlohmann::json& json) {
         for (const auto& [key, value] : expanded["llm_providers"].items()) {
             if (value.is_array()) {
                 // Array format: keep all entries, key models by provider_name/model_name
-                ProviderConfig merged_config;
+                LlmProviderConfig merged_config;
                 bool first = true;
                 for (const auto& entry : value) {
-                    ProviderConfig entry_config = ProviderConfig::FromJson(entry);
+                    LlmProviderConfig entry_config = LlmProviderConfig::FromJson(entry);
 
                     if (first) {
                         merged_config = entry_config;
@@ -549,7 +618,7 @@ ProsophorConfig ProsophorConfig::FromJson(const nlohmann::json& json) {
                     }
 
                     // Store entry for lookup by FindEntryForModel
-                    ProviderEntryConfig e;
+                    LlmProviderEntryConfig e;
                     e.api_key = entry_config.api_key;
                     e.base_url = entry_config.base_url;
                     e.timeout = entry_config.timeout;
@@ -568,7 +637,7 @@ ProsophorConfig ProsophorConfig::FromJson(const nlohmann::json& json) {
                 config.llm_providers[key] = merged_config;
             } else {
                 // Object format: use directly
-                config.llm_providers[key] = ProviderConfig::FromJson(value);
+                config.llm_providers[key] = LlmProviderConfig::FromJson(value);
             }
         }
     }
@@ -587,8 +656,26 @@ ProsophorConfig ProsophorConfig::FromJson(const nlohmann::json& json) {
     if (expanded.contains("asr") && expanded["asr"].is_object()) {
         config.asr = AsrConfig::FromJson(expanded["asr"]);
     }
+    if (expanded.contains("voice") && expanded["voice"].is_object()) {
+        config.voice = VoiceConfig::FromJson(expanded["voice"]);
+    }
+    if (expanded.contains("camera") && expanded["camera"].is_object()) {
+        config.camera = CameraConfig::FromJson(expanded["camera"]);
+    }
+    if (expanded.contains("meal") && expanded["meal"].is_object()) {
+        config.meal = MealConfig::FromJson(expanded["meal"]);
+    }
+    if (expanded.contains("nutribot") && expanded["nutribot"].is_object()) {
+        config.nutribot = NutribotConfig::FromJson(expanded["nutribot"]);
+    }
+    if (expanded.contains("robot") && expanded["robot"].is_object()) {
+        config.robot = RobotControlConfig::FromJson(expanded["robot"]);
+    }
     if (expanded.contains("web") && expanded["web"].is_object()) {
         config.web = WebConfig::FromJson(expanded["web"]);
+    }
+    if (expanded.contains("active_trigger") && expanded["active_trigger"].is_object()) {
+        config.active_trigger = ActiveTriggerConfig::FromJson(expanded["active_trigger"]);
     }
     return config;
 }
@@ -776,6 +863,11 @@ void ProsophorConfig::CreateDefaultConfig(const std::string& filepath) {
     "role": "default",
     "data_dir": "",
     "token_ttl_hours": 168
+  },
+
+  // Active triggers (plugins under active/; role empty = default_role[0])
+  "active_trigger": {
+    "role": ""
   }
 }
 )";
@@ -901,15 +993,10 @@ nlohmann::ordered_json ProsophorConfig::ToJson() const {
     }
     json["llm_providers"] = llm_providers_json;
 
-    // Serialize TTS (simplified)
-    nlohmann::ordered_json tts_json;
-    tts_json["enabled"] = tts.enabled;
-    nlohmann::ordered_json tts_provider;
-    tts_provider["backend"] = tts.backend;
-    tts_provider["auto_start"] = tts.gs_auto_start;
-    tts_provider["voice_list"] = tts.voice_list;
-    tts_json["provider"] = nlohmann::ordered_json::array({tts_provider});
-    json["tts"] = tts_json;
+    // Serialize voice sections fully：设置面板 Save 不能丢失 asr/voice 或新后端键
+    json["tts"] = tts.ToJson();
+    json["asr"] = asr.ToJson();
+    json["voice"] = voice.ToJson();
 
     // Serialize security
     nlohmann::ordered_json security_json;
@@ -928,7 +1015,12 @@ nlohmann::ordered_json ProsophorConfig::ToJson() const {
     web_json["token_ttl_hours"] = web.token_ttl_hours;
     json["web"] = web_json;
 
-    // Note: tools and asr sections intentionally omitted from settings output
+    // Serialize active_trigger (role only; owner is a reserved constant)
+    nlohmann::ordered_json active_trigger_json;
+    active_trigger_json["role"] = active_trigger.role;
+    json["active_trigger"] = active_trigger_json;
+
+    // Note: tools 段仍不写回（由独立配置文件管理）
 
     return json;
 }

@@ -144,6 +144,14 @@ bool RemoveFile(const std::string& path) {
     return std::filesystem::remove(path, ec);
 }
 
+bool CopyFile(const std::string& from, const std::string& to) {
+    std::error_code ec;
+    return std::filesystem::copy_file(from, to,
+                                      std::filesystem::copy_options::overwrite_existing,
+                                      ec) &&
+           !ec;
+}
+
 uintmax_t FileSize(const std::string& path) {
     std::error_code ec;
     auto size = std::filesystem::file_size(path, ec);
@@ -160,6 +168,54 @@ std::string FindFileInDirs(const std::string& base_dir, const std::string& filen
         }
     }
     return {};
+}
+
+// ============================================================================
+// Binary / Raw Tensor Loading
+// ============================================================================
+
+bool LoadBinaryFile(const std::string& path, std::vector<uint8_t>& out) {
+    out.clear();
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f) {
+        LOG_ERROR("LoadBinaryFile: cannot open: {}", path);
+        return false;
+    }
+    const std::streamsize size = f.tellg();
+    if (size < 0) {
+        LOG_ERROR("LoadBinaryFile: cannot size: {}", path);
+        return false;
+    }
+    f.seekg(0, std::ios::beg);
+    out.resize(static_cast<size_t>(size));
+    if (size > 0 && !f.read(reinterpret_cast<char*>(out.data()), size)) {
+        LOG_ERROR("LoadBinaryFile: short read: {}", path);
+        out.clear();
+        return false;
+    }
+    return true;
+}
+
+bool LoadRawFloats(const std::string& path, std::vector<float>& out) {
+    out.clear();
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f) {
+        LOG_ERROR("LoadRawFloats: cannot open: {}", path);
+        return false;
+    }
+    const std::streamsize size = f.tellg();
+    if (size < 0 || size % static_cast<std::streamsize>(sizeof(float)) != 0) {
+        LOG_ERROR("LoadRawFloats: size {} not a multiple of float: {}", size, path);
+        return false;
+    }
+    f.seekg(0, std::ios::beg);
+    out.resize(static_cast<size_t>(size) / sizeof(float));
+    if (size > 0 && !f.read(reinterpret_cast<char*>(out.data()), size)) {
+        LOG_ERROR("LoadRawFloats: short read: {}", path);
+        out.clear();
+        return false;
+    }
+    return true;
 }
 
 // ============================================================================

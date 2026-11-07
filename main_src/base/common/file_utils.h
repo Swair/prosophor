@@ -61,6 +61,18 @@ nlohmann::json ReadJsonOrFail(const std::string& path);
 /// @return PCM samples (mono, mixed down if stereo), empty on error
 std::vector<int16_t> LoadWav(const std::string& path);
 
+/// LoadBinaryFile - 整份读入二进制文件到字节缓冲（无解释、无对齐要求）
+/// @param path 文件路径
+/// @param out 输出缓冲；失败时保持为空
+/// @return true 表示读取成功
+bool LoadBinaryFile(const std::string& path, std::vector<uint8_t>& out);
+
+/// LoadRawFloats - 把 .raw 权重文件按 float32 整份读入（TensorFlow/ONNX 导出的裸张量常见格式）
+/// @param path 文件路径
+/// @param out 输出缓冲，长度 = 文件字节数 / sizeof(float)；失败时保持为空
+/// @return true 表示读取成功（文件大小为 float 整数倍且完整读入）
+bool LoadRawFloats(const std::string& path, std::vector<float>& out);
+
 /// WriteWav - Write 16-bit PCM mono data to WAV file
 /// @param path Output WAV file path
 /// @param samples PCM samples (int16)
@@ -118,6 +130,12 @@ bool DirExists(const std::string& path);
 /// @param path File path
 /// @return true if file was deleted
 bool RemoveFile(const std::string& path);
+
+/// CopyFile - Copy a file, overwriting the destination if it exists
+/// @param from Source path
+/// @param to Destination path
+/// @return true if copied
+bool CopyFile(const std::string& from, const std::string& to);
 
 /// FileSize - Get file size in bytes
 /// @param path File path

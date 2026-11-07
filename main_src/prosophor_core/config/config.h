@@ -9,13 +9,15 @@
 
 #include <nlohmann/json.hpp>
 
+#include "voice_interaction/voice_config.h"
+
 namespace prosophor {
 
 // Forward declarations
 struct ModelConfig;
 struct ModelCost;
 struct ModelDefinition;
-struct ProviderConfig;
+struct LlmProviderConfig;
 struct ToolConfig;
 struct SkillEntryConfig;
 struct SkillsLoadConfig;
@@ -70,12 +72,33 @@ struct ModelConfig {
 };
 
 /// Configuration for a single provider entry (each array item keeps its own api_key/base_url)
-struct ProviderEntryConfig {
+struct LlmProviderEntryConfig {
     std::string api_key;
     std::string base_url;
     int timeout = 30;
     bool thinking = false;
     std::unordered_map<std::string, ModelConfig> models;
+};
+
+/// Configuration for local NPU model (aidgen in-process, QCS8550 等)
+/// aidgen-vl 与纯文本同构：多一份 vlm_model 段与视觉后端，由配置内容分流。
+struct AidGenModelConfig {
+    static AidGenModelConfig FromJson(const nlohmann::json& json);
+    nlohmann::ordered_json ToJson() const;
+
+    std::string config_file;        // aidgen 模型配置 JSON 路径
+    std::string backend = "auto";   // aidgen 推理后端: "auto"|"qnn236"|"qnn240"|"qnn248"
+    bool auto_start = true;         // Load model on startup
+
+    // aidgen-vl 专用：VL 模型配置 JSON（含 vlm_model 段）；空则回落 config_file
+    std::string vl_config_file;
+    std::string vit_backend = "auto";   // 视觉编码器(aidlite)后端
+
+    // 提示词标记覆盖点：默认 ChatML + Qwen-VL 视觉界标
+    std::string im_start     = "<|im_start|>";
+    std::string im_end       = "<|im_end|>";
+    std::string vision_start = "<|vision_start|>";
+    std::string vision_end   = "<|vision_end|>";
 };
 
 /// Configuration for local model (llama.cpp in-process)
@@ -127,7 +150,8 @@ struct LlamacppModelConfig {
 
 /// Configuration for an LLM provider
 /// models key format: "{provider_name}/{model_name}" → model params
-struct ProviderConfig {
+struct LlmProviderConfig {
+    bool enabled = true;   // false = 保留配置但不创建/装载 provider
     std::string api_key;
     std::string base_url;
     int timeout = 30;
@@ -138,13 +162,16 @@ struct ProviderConfig {
     std::vector<ModelDefinition> models;
 
     // llamacpp-specific config (model_path, gpu_enable, etc.) — only valid
-    // when this ProviderConfig is for the "llamacpp" provider type.
+    // when this LlmProviderConfig is for the "llamacpp" provider type.
     LlamacppModelConfig llamacpp_cfg;
 
-    // All entries from the config array (each keeps its own api_key/base_url)
-    std::vector<ProviderEntryConfig> entries;
+    // aidgen(NPU) 专用配置 — only valid when provider type is "aidgen"/"aidgen-vl"
+    AidGenModelConfig aidgen_cfg;
 
-    static ProviderConfig FromJson(const nlohmann::json& json);
+    // All entries from the config array (each keeps its own api_key/base_url)
+    std::vector<LlmProviderEntryConfig> entries;
+
+    static LlmProviderConfig FromJson(const nlohmann::json& json);
 
     // Get default model config
     const ModelConfig& GetDefaultModel() const;
@@ -207,40 +234,70 @@ struct SecurityConfig {
     }
 };
 
-/// Configuration for TTS (Text-to-Speech)
-struct TtsConfig {
-    bool enabled = true;
-    std::string backend = "edge-tts";  // "edge-tts" | "gpt-sovits" | "sherpa-onnx"
-    std::string voice = "zh-CN-XiaoxiaoNeural";
+/// 摄像头抓帧配置（nutribot 常驻形态：ffmpeg 定期单帧抓拍落盘，供 VL 看菜）
+struct CameraConfig {
+    std::string device = "/dev/video2";                          // v4l2 节点（Astra Pro 板上为 video2）
+    std::string output_dir = "~/.prosophor/nutribot_camera";   // 帧落盘目录（~ 启动时展开）
+    int interval_ms = 1500;                                      // 抓帧节拍（帧新鲜度；抓拍本身 ~1.2s）
+    int perception_interval_ms = 3000;                           // 看菜（VL）节拍（用餐/备餐态）
+    int idle_interval_ms = 15000;                                // 空闲/餐后态的看菜（VL）节拍
+    int timeout_ms = 8000;                                       // 单次抓拍超时（含设备唤醒）
+    int keep_frames = 3;                                         // 落盘保留帧数（防 VL 读时被删）
 
-    // GPT-SoVITS settings
-    std::string gs_url = "http://127.0.0.1:9880";
-    std::string gs_install_path;
-    bool gs_auto_start = true;
-    int gs_port = 9880;
-    std::string gs_ref_audio_path;
-    std::string gs_ref_audio_text;
-    std::string gs_ref_audio_lang = "zh";
-    std::string gs_text_lang = "zh";
-
-    // sherpa-onnx VITS settings
-    std::string sherpa_model_dir;   // dir with model.onnx + tokens.txt [+ lexicon.txt]
-    int   sherpa_speaker_id = 0;
-    float sherpa_speed      = 1.0f;
-
-    // edge-tts voice list
-    std::vector<std::string> voice_list;
-
-    static TtsConfig FromJson(const nlohmann::json& json);
+    static CameraConfig FromJson(const nlohmann::json& json);
 };
 
-/// Configuration for ASR (Automatic Speech Recognition)
-struct AsrConfig {
-    bool enabled = false;
-    bool push_to_talk = true;         // true: hold M to talk; false: VAD full-duplex always-on
-    std::string server_url = "http://127.0.0.1:9100";  // whisper server endpoint
+/// 饭点窗口配置（"HH:MM" 原文；解析与判定在 main_src/nutribot/meal_schedule）
+struct MealWindowConfig {
+    std::string name;
+    std::string start;
+    std::string end;
+};
 
-    static AsrConfig FromJson(const nlohmann::json& json);
+/// 饭点日程配置（进入窗口时主动播报问候）
+struct MealConfig {
+    bool announce = true;
+    std::vector<MealWindowConfig> windows = {
+        {"早餐", "07:00", "09:00"},
+        {"午餐", "11:30", "13:30"},
+        {"晚餐", "17:30", "19:30"},
+    };
+
+    static MealConfig FromJson(const nlohmann::json& json);
+};
+
+/// nutribot 特有装配：成员档案目录与菜品营养库
+struct NutribotConfig {
+    std::string member_store_dir;            // 空 = <BaseDir>/nutribot_members
+    std::string nutrition_file;              // 菜品营养库；空 = <BaseDir>/nutribot_dishes.json
+
+    // 唤醒词：整句归一化匹配；应答后进入聆听窗口，窗口内可直接追问
+    std::vector<std::string> wake_words = {"你好瓦力"};
+    std::string wake_ack_text = "我在";
+    int awake_window_ms = 8000;
+
+    // 思考填充语：语音派发后、LLM 首句到手前先播的固定话术（空 = 关闭）。
+    // vision_fillers 用于看菜类问题；两组各自轮转，只进 TTS，不进对话历史。
+    std::vector<std::string> thinking_fillers = {
+        "嗯……我想想", "让我想想啊", "嗯，我看看"};
+    std::vector<std::string> vision_fillers = {
+        "让我看看桌上有什么", "我瞅瞅这盘菜", "嗯，我瞧瞧"};
+
+    static NutribotConfig FromJson(const nlohmann::json& json);
+};
+
+/// 机器人底盘/舵机控制（远程主控的 HTTP 接口）
+///
+/// 安全默认：enabled=false —— 运动是物理动作，不配就不注册工具。
+/// move_pulse_ms 是固定脉冲（工具内计时自动 stop），模型改不了这个数。
+struct RobotControlConfig {
+    bool enabled = false;                            // 总开关：关则控制工具不注册
+    std::string base_url = "http://192.168.0.202";   // 主控地址（无尾斜杠）
+    int default_speed = 50;                          // speed 缺省值（0~100）
+    int move_pulse_ms = 1000;                        // 每次移动的固定脉冲时长
+    long command_timeout_ms = 2000;                  // 单次 HTTP 超时（毫秒）
+
+    static RobotControlConfig FromJson(const nlohmann::json& json);
 };
 
 /// Configuration for the Web server (multi-user browser frontend)
@@ -255,6 +312,13 @@ struct WebConfig {
     int token_ttl_hours = 168;        // 认证 token TTL(小时,默认 7 天)
 
     static WebConfig FromJson(const nlohmann::json& json);
+};
+
+/// Configuration for active triggers (plugins under ~/.prosophor/active)
+struct ActiveTriggerConfig {
+    std::string role;   // 缺省角色；空 = default_role[0]，插件 trigger_mode.cfg 可覆盖
+
+    static ActiveTriggerConfig FromJson(const nlohmann::json& json);
 };
 
 /// Top-level Prosophor configuration
@@ -273,12 +337,18 @@ struct ProsophorConfig {
     float font_scale = kFontScaleLarge;      // 当前字体缩放倍率
 
     SecurityConfig security;
-    std::unordered_map<std::string, ProviderConfig> llm_providers;
+    std::unordered_map<std::string, LlmProviderConfig> llm_providers;
     ToolConfig tools;
     SkillsConfig skills;
     TtsConfig tts;
     AsrConfig asr;
+    VoiceConfig voice;
+    CameraConfig camera;
+    MealConfig meal;
+    NutribotConfig nutribot;
+    RobotControlConfig robot;
     WebConfig web;
+    ActiveTriggerConfig active_trigger;
     std::vector<LlamacppModelConfig> llamacpp_models;
 
     /// Get singleton instance
@@ -288,7 +358,7 @@ struct ProsophorConfig {
     const ModelConfig& GetModelConfig() const;
 
     /// Get provider config
-    const ProviderConfig& GetProvider(const std::string& name = "anthropic") const;
+    const LlmProviderConfig& GetProvider(const std::string& name = "anthropic") const;
 
     /// Load config from file
     static ProsophorConfig FromJson(const nlohmann::json& json);

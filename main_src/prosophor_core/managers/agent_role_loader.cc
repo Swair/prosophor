@@ -254,6 +254,7 @@ AgentRole AgentRoleLoader::ParseFromJson(const nlohmann::json& j, const std::str
     role.enable_tools = llm_config->value("enable_tools", true);
     role.auto_confirm_tools = llm_config->value("auto_confirm_tools", false);
     role.enable_streaming = llm_config->value("enable_streaming", true);
+    role.enable_agent_chat = llm_config->value("enable_agent_chat", false);
     role.enable_summary = llm_config->value("enable_summary", true);
 
     role.memory_dir = llm_config->value("memory_dir", std::string(""));

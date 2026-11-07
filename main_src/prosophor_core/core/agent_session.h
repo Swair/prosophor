@@ -16,8 +16,7 @@
 #include "core/agent_role.h"
 #include "core/messages_schema.h"
 #include "providers/llm/llm_provider.h"
-#include "providers/provider_router/llm_provider_router.h"
-#include "common/list_buffer.h"
+#include "providers/llm_provider_router.h"
 #include "common/time_wrapper.h"
 #include "core/agent_types.h"
 
@@ -41,12 +40,6 @@ using SessionOutputCallback = std::function<void(const std::string& session_id,
                                                   const std::optional<MessageSchema>& reply,
                                                   const std::string& delta)>;
 
-/// TTS speak callback - fires when the session has accumulated enough text to speak.
-/// Parameters: text, backend, voice
-using TtsSpeakCallback = std::function<void(const std::string& text,
-                                             const std::string& backend,
-                                             const std::string& voice)>;
-
 /// Agent 会话实例（运行时）
 class AgentSession {
 public:
@@ -55,6 +48,8 @@ public:
     inline void SetRole(AgentRole* r) { role_ = r; }
     inline bool GetUseTools() const { return use_tools_; }
     inline void SetUseTools(bool v) { use_tools_ = v; }
+    inline bool IsStateless() const { return stateless_; }
+    inline void SetStateless(bool v) { stateless_ = v; }
     inline bool GetAutoConfirmTools() const { return auto_confirm_tools_; }
     inline void SetAutoConfirmTools(bool v) { auto_confirm_tools_ = v; }
     inline const std::string& GetWorkingDirectory() const { return working_directory_; }
@@ -63,11 +58,6 @@ public:
     // ── 回调（直接读写）─────────────────────────────────────
     ToolExecutorCallback tool_executor_;
     SessionOutputCallback output_callback_;
-
-    /// Set the callback invoked when the session has text ready for TTS synthesis.
-    inline void SetTtsSpeakCallback(TtsSpeakCallback cb) {
-        tts_speak_callback_ = std::move(cb);
-    }
 
     inline const std::vector<std::string>& GetRelatedFiles() const { return related_files_; }
     inline void SetRelatedFiles(std::vector<std::string> v) { related_files_ = std::move(v); }
@@ -126,10 +116,18 @@ public:
                    const std::optional<MessageSchema>& reply = std::nullopt,
                    const std::string& delta = "");
     RenderSnapshot GetSnapshot() const;
-    /// 设置本条用户消息的发送者(消费式瞬时状态)
-    /// 由 StartChain 在持会话锁、Loop 之前调用;AddUserMessage 读取后自动清空
+    /// 设置本条用户消息的发送者(消费式瞬时状态):群聊中即发言的群成员用户,
+    /// 不是会话归属 owner;由 StartChain 在持会话锁、Loop 之前调用,
+    /// AddUserMessage 读取后自动清空
     void SetCurrentSender(const std::string& sender_id,
                           const std::string& sender_name = "");
+    /// 设置本条用户消息随附的图片(消费式瞬时状态, 语义同 SetCurrentSender)
+    /// 由调用方在 Loop 之前调用;AddUserMessage 读取后自动清空 —— 用户随时给图,
+    /// 图只属于它跟的那一条消息, 不会泄漏到后续轮次
+    void SetNextImages(std::vector<std::string> image_paths);
+    /// 清除历史消息里的 image 块，只保留文本（NutriBot 每轮视觉输入后调用）：
+    /// 图片只服务当前轮；长期保留会让每轮 prefill 重编码整段视觉历史。
+    void ClearHistoryImages();
     void AddUserMessage(const std::string& text);
     /// 准备开始新 Loop：如果上一个 Loop 被打断留下孤立的 user 消息，清理掉
     /// 在持 session_mutex 后、ClearStopRequested + Loop 之前调用
@@ -162,6 +160,7 @@ private:
     // ── 输入/配置 ──────────────────────────────────────────
     AgentRole* role_ = nullptr;
     bool use_tools_ = true;
+    bool stateless_ = false;   // 每轮清空历史/图片/记忆，用于感知类无状态会话
     bool auto_confirm_tools_ = false;
     std::string working_directory_;
     std::vector<std::string> related_files_;
@@ -192,6 +191,9 @@ private:
     std::string current_sender_id_;
     std::string current_sender_name_;
 
+    // ── 本条消息随附图片(瞬时输入,AddUserMessage 消费后清空)──
+    std::vector<std::string> next_image_paths_;
+
     // ── 会话锁 ────────────────────────────────────────────
     std::mutex session_mutex_;
 
@@ -206,9 +208,6 @@ private:
     std::string state_message_;
     std::string streaming_text_;
     std::string streaming_thinking_;
-    // ── TTS pending chunks ──────────────────────────────
-    ListBuffer<std::string> tts_chunks_;
-    TtsSpeakCallback tts_speak_callback_;
     mutable std::mutex render_mutex_;
 
     // ── 内部实现 ──────────────────────────────────────────

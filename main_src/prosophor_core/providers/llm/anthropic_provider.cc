@@ -3,10 +3,19 @@
 
 #include "providers/llm/anthropic_provider.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cstdint>
+#include <string>
+#include <vector>
+
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
+#include "common/crypto_utils.h"
+#include "common/file_utils.h"
 #include "common/log_wrapper.h"
 #include "common/string_utils.h"
+#include "platform/platform.h"
 
 #include "network/curl_client.h"
 #include "providers/llm/llm_provider.h"
@@ -18,7 +27,7 @@ namespace prosophor {
 // Internal helper functions for Anthropic serialization (static to avoid linkage conflicts)
 
 // Applies thinking parameters to payload_json
-static void ApplyThinkingParams(nlohmann::json& payload_json,
+static void SerializeThinking(nlohmann::json& payload_json,
      const ChatRequest& request) {
     if (request.thinking) {
         int budget = request.thinking_budget_tokens;
@@ -38,11 +47,40 @@ static void ApplyThinkingParams(nlohmann::json& payload_json,
     }
 }
 
+static bool ReadImageBase64(const std::string& path, std::string& out) {
+    std::vector<uint8_t> bytes;
+    if (!prosophor::LoadBinaryFile(path, bytes) || bytes.empty()) return false;
+    out = prosophor::Base64Encode(bytes);
+    return true;
+}
+
+static std::string ImageMediaType(const std::string& path) {
+    const size_t dot = path.rfind('.');
+    std::string ext = dot == std::string::npos ? "" : path.substr(dot + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (ext == "png") return "image/png";
+    if (ext == "webp") return "image/webp";
+    if (ext == "gif") return "image/gif";
+    return "image/jpeg";
+}
+
+static size_t CountImageBlocks(const std::vector<MessageSchema>& messages) {
+    size_t count = 0;
+    for (const auto& message : messages) {
+        for (const auto& block : message.content) {
+            if (block.type == "image") ++count;
+        }
+    }
+    return count;
+}
+
 // Serialize message content to Anthropic format
 static nlohmann::json SerializeMessageContent(const std::vector<ContentSchema>& content) {
     // Check if message has tool-related content
     bool has_tool_content = false;
     bool has_thinking = false;
+    bool has_image = false;
     for (const auto& block : content) {
         if (block.type == "tool_use" || block.type == "tool_result") {
             has_tool_content = true;
@@ -50,10 +88,13 @@ static nlohmann::json SerializeMessageContent(const std::vector<ContentSchema>& 
         if (block.type == "thinking") {
             has_thinking = true;
         }
+        if (block.type == "image") {
+            has_image = true;
+        }
     }
 
-    if (has_tool_content || has_thinking) {
-        // Use array format for tool messages or thinking blocks
+    if (has_tool_content || has_thinking || has_image) {
+        // Use array format for tool / thinking / image messages
         nlohmann::json content_arr = nlohmann::json::array();
         for (const auto& block : content) {
             if (block.type == "thinking") {
@@ -72,6 +113,21 @@ static nlohmann::json SerializeMessageContent(const std::vector<ContentSchema>& 
                     block_json["text"] = block.text;
                     content_arr.push_back(block_json);
                 }
+            } else if (block.type == "image") {
+                const std::string path = block.input.value("path", "");
+                std::string data;
+                if (!ReadImageBase64(path, data)) {
+                    LOG_ERROR("[anthropic] 图片读取失败: {}", path.c_str());
+                    continue;
+                }
+                LOG_INFO("[anthropic] 图片编码: {} ({} KB base64)", path.c_str(),
+                         data.size() / 1024);
+                nlohmann::json block_json;
+                block_json["type"] = "image";
+                block_json["source"] = {{"type", "base64"},
+                                        {"media_type", ImageMediaType(path)},
+                                        {"data", std::move(data)}};
+                content_arr.push_back(std::move(block_json));
             } else if (block.type == "tool_use") {
                 nlohmann::json block_json;
                 block_json["type"] = "tool_use";
@@ -238,11 +294,12 @@ std::string AnthropicProvider::Serialize(const ChatRequest& request) const {
         }
     }
 
-    ApplyThinkingParams(payload_json, request);
+    SerializeThinking(payload_json, request);
 
-    // LOG_DEBUG("Request body:\n {}", payload_json.dump(4));
-
-    return payload_json.dump();
+    const std::string body = payload_json.dump();
+    LOG_INFO("[anthropic] request {} bytes, image={}", body.size(),
+             body.find("\"type\":\"image\"") != std::string::npos);
+    return body;
 }
 
 /**
@@ -288,7 +345,7 @@ ChatResponse AnthropicProvider::Deserialize(const std::string& json_str) const {
 
     try {
         // Convert to UTF-8 if necessary
-        std::string utf8_json = ConvertToUtf8(json_str);
+        std::string utf8_json = Platform::NativeToUtf8(json_str);
         response_json = nlohmann::json::parse(utf8_json);
 	
         LOG_DEBUG(" response body: {}", response_json.dump(4));
@@ -321,6 +378,11 @@ ChatResponse AnthropicProvider::Deserialize(const std::string& json_str) const {
 
     // tool use end turn
     result.stop_reason = response_json.value("stop_reason", "");
+    LOG_INFO("[anthropic] 回复: text={}字 thinking={}字 tools={}", result.content_text.size(),
+             result.content_thinking.size(), result.tool_calls.size());
+    for (const auto& tc : result.tool_calls) {
+        LOG_INFO("[anthropic] tool_use {} {}", tc.name, tc.arguments.dump());
+    }
 
     // Parse usage
     if (response_json.contains("usage")) {
@@ -337,6 +399,9 @@ ChatResponse AnthropicProvider::Deserialize(const std::string& json_str) const {
 // --- Provider-specific implementations ---
 
 void AnthropicProvider::PrintRequestLog(const ChatRequest& request) const {
+    LOG_INFO("[anthropic] POST {} model={} messages={} images={}", request.base_url,
+             request.model, request.messages.size(),
+             CountImageBlocks(request.messages));
     LOG_DEBUG("=== Sending request to Anthropic API ===");
     LOG_DEBUG("URL: {}", request.base_url);
     LOG_DEBUG("Model: {}", request.model);

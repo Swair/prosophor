@@ -14,7 +14,7 @@ namespace prosophor {
 struct HistoryMessage {
     int64_t ts = 0;
     std::string role;      // "user" | "assistant" | "tool" | ...
-    std::string sender;    // IM sender(可空)
+    std::string sender;    // 发言成员用户 ID(群聊=群成员,非群 ID;可空)
     std::string content;   // 消息文本(不含 tool 内部字段)
     std::string raw_json;  // 原行(前端可透传展示附加字段)
 };

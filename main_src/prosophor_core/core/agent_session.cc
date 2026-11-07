@@ -3,6 +3,7 @@
 
 #include "core/agent_session.h"
 
+#include <algorithm>
 #include <unordered_map>
 #include <memory>
 
@@ -28,36 +29,6 @@ std::unique_lock<std::mutex> GetFlushLock(const std::string& path) {
 }
 
 
-std::vector<std::string> TtsSplitSentences(const std::string& text, size_t min_chars) {
-    std::vector<std::string> segments;
-    std::string buf;
-    for (size_t i = 0; i < text.size(); i++) {
-        unsigned char c = static_cast<unsigned char>(text[i]);
-        bool is_split = false;
-        if (c < 0x80) {
-            buf += text[i];
-            is_split = (c == '.' || c == '!' || c == '?' || c == ',' || c == '\n');
-        } else if ((c & 0xF0) == 0xE0 && i + 2 < text.size()) {
-            unsigned char c2 = static_cast<unsigned char>(text[i + 1]);
-            unsigned char c3 = static_cast<unsigned char>(text[i + 2]);
-            buf.append(text, i, 3);
-            i += 2;
-            is_split = ((c == 0xE3 && c2 == 0x80 && c3 == 0x82) ||
-                        (c == 0xEF && c2 == 0xBC && (c3 == 0x81 || c3 == 0x8C || c3 == 0x9F)));
-        } else {
-            buf += text[i];
-        }
-        if (is_split && buf.size() >= min_chars) {
-            segments.push_back(buf);
-            buf.clear();
-        }
-    }
-    if (!buf.empty()) {
-        segments.push_back(buf);
-    }
-    return segments;
-}
-
 }  // anonymous namespace
 
 namespace prosophor {
@@ -82,6 +53,7 @@ AgentSession::AgentSession(AgentSession&& other) noexcept
       output_callback_(std::move(other.output_callback_)),
       role_(other.role_),
       use_tools_(other.use_tools_),
+      stateless_(other.stateless_),
       auto_confirm_tools_(other.auto_confirm_tools_),
       working_directory_(std::move(other.working_directory_)),
       related_files_(std::move(other.related_files_)),
@@ -109,8 +81,6 @@ AgentSession::AgentSession(AgentSession&& other) noexcept
       state_message_(std::move(other.state_message_)),
       streaming_text_(std::move(other.streaming_text_)),
       streaming_thinking_(std::move(other.streaming_thinking_)),
-      tts_chunks_(std::move(other.tts_chunks_)),
-      tts_speak_callback_(std::move(other.tts_speak_callback_)),
       mutable_role_(std::move(other.mutable_role_)) {
 }
 
@@ -121,6 +91,7 @@ AgentSession& AgentSession::operator=(AgentSession&& other) noexcept {
     output_callback_ = std::move(other.output_callback_);
     role_ = other.role_;
     use_tools_ = other.use_tools_;
+    stateless_ = other.stateless_;
     auto_confirm_tools_ = other.auto_confirm_tools_;
     working_directory_ = std::move(other.working_directory_);
     related_files_ = std::move(other.related_files_);
@@ -148,8 +119,6 @@ AgentSession& AgentSession::operator=(AgentSession&& other) noexcept {
     state_message_ = std::move(other.state_message_);
     streaming_text_ = std::move(other.streaming_text_);
     streaming_thinking_ = std::move(other.streaming_thinking_);
-    tts_chunks_ = std::move(other.tts_chunks_);
-    tts_speak_callback_ = std::move(other.tts_speak_callback_);
     mutable_role_ = std::move(other.mutable_role_);
     return *this;
 }
@@ -168,7 +137,6 @@ void AgentSession::SetOutput(AgentRuntimeState new_state,
         // 流式帧:增量从 delta 取(类型由 state 决定),不再借用 MessageSchema
         if (new_state == AgentRuntimeState::STREAM_CONTENT_TYPING) {
             streaming_text_ += delta;
-            tts_chunks_.Push(delta);
             // Token/s tracking: count chars, estimate ~4 chars per token
             streaming_char_count_ += delta.size();
             auto elapsed = std::chrono::duration<float>(
@@ -182,7 +150,6 @@ void AgentSession::SetOutput(AgentRuntimeState new_state,
             streaming_char_count_ = 0;
             streaming_token_speed_ = 0.0f;
             streaming_text_.clear();
-            tts_chunks_.Clear();
         }
         if (new_state == AgentRuntimeState::STREAM_THINKING) {
             streaming_thinking_ += delta;
@@ -208,50 +175,6 @@ void AgentSession::SetOutput(AgentRuntimeState new_state,
     if (output_callback_) {
         output_callback_(session_id_, role_ ? role_->id : "",
                         new_state, state_msg, reply, delta);
-    }
-
-    // ── TTS: pop chunks, join, split, send complete sentences ──
-    if (tts_speak_callback_) {
-        // Determine effective voice — if "none", discard all chunks and skip TTS
-        std::string voice = role_ && !role_->tts_voice.empty()
-            ? role_->tts_voice : "zh-CN-XiaoxiaoNeural";
-        if (voice == "none") {
-            tts_chunks_.Clear();
-            return;
-        }
-
-        auto items = tts_chunks_.PopAll();
-        if (items.empty()) return;
-
-        std::string pending;
-        for (auto& c : items) pending += std::move(c);
-
-        bool done = (new_state == AgentRuntimeState::COMPLETE ||
-                     new_state == AgentRuntimeState::STREAM_MODE_COMPLETE);
-        std::string to_send;
-
-        if (done) {
-            // 流式结束：整段 flush，无需分句
-            to_send = std::move(pending);
-        } else {
-            // 流式进行中：分句，完整句子发送，末尾不完整句保留到下次
-            auto segments = TtsSplitSentences(pending, 5);
-            if (segments.size() >= 2) {
-                // 至少有两段 → 前面的都是完整句子，最后一段可能不完整，因为还没有done结束
-                for (size_t i = 0; i + 1 < segments.size(); ++i)
-                    to_send += segments[i];
-                tts_chunks_.Push(segments.back());
-            } else {
-                // 只有一段且不完整 → 全部保留等后续 chunk
-                tts_chunks_.Push(std::move(pending));
-            }
-        }
-
-        if (to_send.empty()) return;
-
-        std::string backend = role_ && !role_->tts_backend.empty()
-            ? role_->tts_backend : "edge-tts";
-        tts_speak_callback_(to_send, backend, voice);
     }
 }
 
@@ -282,12 +205,35 @@ void AgentSession::SetCurrentSender(const std::string& sender_id,
     current_sender_name_ = sender_name;
 }
 
+void AgentSession::SetNextImages(std::vector<std::string> image_paths) {
+    std::lock_guard<std::mutex> lock(render_mutex_);
+    next_image_paths_ = std::move(image_paths);
+}
+
+void AgentSession::ClearHistoryImages() {
+    std::lock_guard<std::mutex> lock(render_mutex_);
+    for (auto& message : messages_) {
+        message.content.erase(
+            std::remove_if(message.content.begin(), message.content.end(),
+                           [](const ContentSchema& block) {
+                               return block.type == "image";
+                           }),
+            message.content.end());
+    }
+}
+
 void AgentSession::AddUserMessage(const std::string& text) {
     std::lock_guard<std::mutex> lock(render_mutex_);
     // 消费式读取瞬时 sender:右值构造取走并清空,不会泄漏到下一条消息
-    messages_.push_back(MessageSchema("user", text,
-                                      std::move(current_sender_id_),
-                                      std::move(current_sender_name_)));
+    MessageSchema message("user", text,
+                          std::move(current_sender_id_),
+                          std::move(current_sender_name_));
+    // 同理消费随附图片:按内容块顺序追加在文本之后, 逐张挂上 image 块
+    for (auto& path : std::move(next_image_paths_)) {
+        message.AddImageContent(std::move(path));
+    }
+    next_image_paths_.clear();
+    messages_.push_back(std::move(message));
 }
 
 void AgentSession::CleanupInterruptedLoop() {
@@ -313,6 +259,7 @@ void AgentSession::SetSystemPrompt(const std::vector<SystemSchema>& prompt) {
 
 void AgentSession::FlushToDisk() {
     std::lock_guard<std::mutex> lock(render_mutex_);
+    if (stateless_) return;   // 无状态会话不落盘，避免感知历史写满 JSONL
     if (session_log_dir_.empty()) return;
     if (last_flushed_index_ >= static_cast<int>(messages_.size())) return;
 

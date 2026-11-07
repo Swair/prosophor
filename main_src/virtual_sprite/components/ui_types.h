@@ -6,8 +6,7 @@
 #include <vector>
 
 #include "media_engine/media/texture/colors.h"
-#include "core/agent_types.h"
-#include "core/messages_schema.h"
+#include "prosophor_core/public/core_types.h"
 
 namespace prosophor {
 

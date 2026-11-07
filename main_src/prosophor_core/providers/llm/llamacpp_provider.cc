@@ -50,18 +50,19 @@ LlamacppProvider::~LlamacppProvider() {
     Release();
 }
 
-bool LlamacppProvider::Load() {
+void LlamacppProvider::Load() {
     bool expected = false;
     if (!loading_.compare_exchange_strong(expected, true)) {
         LOG_WARN("[local] Load already in progress");
-        return false;
+        return;
     }
 
     if (loaded_) {
         loading_ = false;
-        return true;
+        return;
     }
 
+    // 为了初始化不阻塞，异步加载模型。首次 Chat 时会等待加载完成。
     load_future_ = GetGlobalThreadPool().SubmitWithFuture([this]() {
         try {
             const std::string& path = cfg_.model_path;
@@ -188,8 +189,6 @@ bool LlamacppProvider::Load() {
             loading_ = false;
         }
     });
-
-    return true;
 }
 
 void LlamacppProvider::Unload() {
@@ -216,6 +215,68 @@ void LlamacppProvider::Release() {
 bool LlamacppProvider::IsLoaded() const { return loaded_; }
 bool LlamacppProvider::IsLoading() const { return loading_; }
 std::string LlamacppProvider::GetLoadError() const { return load_error_msg_; }
+
+// ── Prompt 步骤 ───────────────────────────────────────────────────────
+//
+// 纯数据变换，不依赖类成员，故为文件内 static。只有 BuildChatParams 调用，
+// 不进头文件。
+
+// ── BuildSystemPrompt ────────────────────────────────────────────────
+
+static void BuildSystemPrompt(std::vector<common_chat_msg>& out,
+                              const std::vector<SystemSchema>& system) {
+    for (const auto& s : system) {
+        if (s.text.empty()) { continue; }
+        common_chat_msg m;
+        m.role    = "system";
+        m.content = s.text;
+        out.push_back(std::move(m));
+    }
+}
+
+// ── BuildMessagePrompt ──────────────────────────────────────────────
+
+static void BuildMessagePrompt(std::vector<common_chat_msg>& out,
+                               const std::vector<MessageSchema>& messages) {
+    for (const auto& m : messages) {
+        common_chat_msg cm;
+        cm.role = m.role;
+        bool has_structured = false;
+        for (const auto& b : m.content) {
+            if (b.type == "text" || b.type == "thinking") {
+                cm.content += b.text;
+            } else if (b.type == "tool_use") {
+                common_chat_tool_call tc;
+                tc.name      = b.name;
+                tc.arguments = b.input.dump();
+                tc.id        = b.tool_use_id;
+                cm.tool_calls.push_back(std::move(tc));
+                has_structured = true;
+            } else if (b.type == "tool_result") {
+                cm.tool_call_id = b.tool_use_id;
+                cm.content      = b.content;
+                cm.role         = "tool";
+                has_structured = true;
+            }
+        }
+        if (!cm.empty() || has_structured) {
+            out.push_back(std::move(cm));
+        }
+    }
+}
+
+// ── BuildToolsPrompt ─────────────────────────────────────────────────
+
+static void BuildToolsPrompt(std::vector<common_chat_tool>& out,
+                             const std::vector<ToolsSchema>& tools) {
+    for (const auto& t : tools) {
+        common_chat_tool ct;
+        ct.name        = t.name;
+        ct.description = t.description;
+        ct.parameters  = t.input_schema.dump();
+        out.push_back(std::move(ct));
+    }
+}
 
 common_chat_params LlamacppProvider::BuildChatParams(const ChatRequest& request) const {
     common_chat_params result;
@@ -563,66 +624,6 @@ ChatResponse LlamacppProvider::ChatStream(
 
 ChatResponse LlamacppProvider::Chat(const ChatRequest& request) {
     return ChatStream(request, [](StreamEvent, std::string) {});
-}
-
-// ── BuildSystemPrompt ────────────────────────────────────────────────
-
-void LlamacppProvider::BuildSystemPrompt(
-    std::vector<common_chat_msg>& out,
-    const std::vector<SystemSchema>& system) const {
-    for (const auto& s : system) {
-        if (s.text.empty()) { continue; }
-        common_chat_msg m;
-        m.role    = "system";
-        m.content = s.text;
-        out.push_back(std::move(m));
-    }
-}
-
-// ── BuildMessagePrompt ──────────────────────────────────────────────
-
-void LlamacppProvider::BuildMessagePrompt(
-    std::vector<common_chat_msg>& out,
-    const std::vector<MessageSchema>& messages) const {
-    for (const auto& m : messages) {
-        common_chat_msg cm;
-        cm.role = m.role;
-        bool has_structured = false;
-        for (const auto& b : m.content) {
-            if (b.type == "text" || b.type == "thinking") {
-                cm.content += b.text;
-            } else if (b.type == "tool_use") {
-                common_chat_tool_call tc;
-                tc.name      = b.name;
-                tc.arguments = b.input.dump();
-                tc.id        = b.tool_use_id;
-                cm.tool_calls.push_back(std::move(tc));
-                has_structured = true;
-            } else if (b.type == "tool_result") {
-                cm.tool_call_id = b.tool_use_id;
-                cm.content      = b.content;
-                cm.role         = "tool";
-                has_structured = true;
-            }
-        }
-        if (!cm.empty() || has_structured) {
-            out.push_back(std::move(cm));
-        }
-    }
-}
-
-// ── BuildToolsPrompt ─────────────────────────────────────────────────
-
-void LlamacppProvider::BuildToolsPrompt(
-    std::vector<common_chat_tool>& out,
-    const std::vector<ToolsSchema>& tools) const {
-    for (const auto& t : tools) {
-        common_chat_tool ct;
-        ct.name        = t.name;
-        ct.description = t.description;
-        ct.parameters  = t.input_schema.dump();
-        out.push_back(std::move(ct));
-    }
 }
 
 // ── BuildFallbackPrompt ─────────────────────────────────────────────

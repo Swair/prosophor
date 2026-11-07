@@ -8,11 +8,10 @@
 #include "media_engine/media_engine.h"
 #include "common/log_wrapper.h"
 #include "common/i18n.h"
-#include "agent_engine.h"
-#include "config/config.h"
-#include "managers/token_tracker.h"
+#include "prosophor_core/public/agent_engine.h"
+#include "prosophor_core/public/config.h"
+#include "prosophor_core/public/token_tracker.h"
 
-#include "providers/provider_router/asr_provider_router.h"
 #include "platform/platform.h"
 #include "updater/update_checker.h"
 #include <memory>
@@ -106,20 +105,18 @@ void VirtualSprite::GlobalInit() {
                                    ? "default"
                                    : engine.GetConfig().default_role[0], "");
             }
-            engine.SendUserMessage(sid, msg);
+            // 异步：同步版本会在 UI 线程跑完整个 AgentCore::Loop，渲染循环停摆
+            engine.SendUserMessageAsync(sid, msg);
         });
 
         LOG_INFO("Central window created (primary)");
     }
 
-    // ── Initialize ASR if enabled ──────────────────────
+    // ── ASR 状态日志（provider 由 VoiceEngine 首次使用时创建） ──
     {
-        auto& asr_config = ProsophorConfig::GetInstance().asr;
+        const auto& asr_config = ProsophorConfig::GetInstance().asr;
         if (asr_config.enabled) {
-            auto& asr = AsrProviderRouter::GetInstance();
-            asr.SetServerUrl(asr_config.server_url);
-            asr.Initialize();
-            LOG_INFO("ASR initialized (server={})", asr_config.server_url);
+            LOG_INFO("ASR enabled (backend={})", asr_config.backend);
         } else {
             LOG_INFO("ASR disabled in config");
         }
@@ -127,11 +124,11 @@ void VirtualSprite::GlobalInit() {
 
     // Route session state changes to the matching sprite
     AgentEngine::GetInstance().SetOutputCallback(
-        [](const std::string& session_id, const std::string& /*role_id*/,
+        [](const std::string& session_id, const std::string& role_id,
                AgentRuntimeState state, const std::string& state_msg,
-               const std::optional<MessageSchema>& /*reply*/, const std::string& /*delta*/) {
+               const std::optional<MessageSchema>& /*reply*/, const std::string& delta) {
             if (auto* s = SpriteManager::GetInstance().FindBySessionId(session_id)) {
-                s->SetAgentState(state, state_msg);
+                s->HandleAgentOutput(state, role_id, state_msg, delta);
             }
         });
 

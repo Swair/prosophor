@@ -12,6 +12,15 @@ namespace prosophor {
 // IM 多用户身份净化与路径安全(ADR-IM9)
 // ============================================================================
 
+/// 主动触发会话的保留 owner：与本地单用户、Web 用户/群隔离。
+/// 来自 active/ 插件的会话统一使用该 owner（日志 sessions/{role}/active/，
+/// 记忆 memory/users/active/），并需要从空闲检测/历史列表中排除。
+inline constexpr const char* kActiveOwner = "active";
+
+inline bool IsActiveOwner(const std::string& owner) {
+    return owner == kActiveOwner;
+}
+
 /// 将外部输入(用户 ID/群 ID,如飞书 ou_xxx/oc_xxx)净化为安全的目录名。
 /// 规则:小写 + 白名单字符 [a-z0-9_-] + 长度 ≤ 64;非法返回 nullopt。
 /// 所有记忆目录路径都必须经过净化后再拼接,防止路径注入。

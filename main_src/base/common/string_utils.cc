@@ -3,11 +3,27 @@
 
 #include "common/string_utils.h"
 
-#include <iostream>
-
-#include "platform/platform.h"
+#include <algorithm>
+#include <cctype>
 
 namespace prosophor {
+
+std::string ToLower(std::string text) {
+    // 必须经 unsigned char：直接传 char 给 std::tolower 对负值（非 ASCII 字节）是 UB
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return text;
+}
+
+std::string ToUpper(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return text;
+}
+
+bool EqualsIgnoreCase(const std::string& lhs, const std::string& rhs) {
+    return lhs.size() == rhs.size() && ToLower(lhs) == ToLower(rhs);
+}
 
 bool IsUtf8(const std::string& input) {
     for (size_t i = 0; i < input.size(); ++i) {
@@ -22,14 +38,6 @@ bool IsUtf8(const std::string& input) {
         } else return false;
     }
     return true;
-}
-
-std::string ConvertToUtf8(const std::string& input) {
-    return Platform::NativeToUtf8(input);
-}
-
-std::string ReadLine() {
-    return Platform::ReadLine();
 }
 
 }  // namespace prosophor

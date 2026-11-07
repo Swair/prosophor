@@ -359,9 +359,9 @@ The configuration file has these top-level sections:
 - **enable_summary**: Toggle Bellman-decay dialog summarization
 - **providers**: Each provider type (anthropic, openai, ollama, llamacpp) maps to an **array** of entries. Each entry has its own api_key, base_url, timeout, and a map of agent configs keyed by name. Each agent config specifies model name, temperature, max_tokens, context_window, and whether thinking is enabled.
 - **local_models**: For llamacpp provider: model_path, n_gpu_layers (-1 = all layers on GPU, 0 = CPU only), n_threads (0 = auto-detect), context_size, auto_start, start_timeout_ms
-- **tts**: Edge-TTS configuration (voice, language, speed)
-- **asr**: Whisper ASR configuration (model path, language, threads, push-to-talk key)
-- **vad**: Silero VAD model path
+- **tts**: Local TTS configuration — MeloTTS via sherpa-onnx (Windows), aidvoice NPU (NutriBot)
+- **asr**: Local ASR configuration — SenseVoice via sherpa-onnx (Windows), aidvoice NPU (NutriBot); model dir, language, threads, push-to-talk
+- **vad**: VAD backend/tuning (WebRTC on desktop, energy on NutriBot)
 - **security**: Contains permission_level (auto, default, or bypass) and allow_local_execute toggle
 
 ### Local Model Setup
@@ -440,8 +440,8 @@ VirtualSprite (Singleton)
 | **Multi-sprite** | Each sprite is a transparent overlay window with its own AgentEngine session |
 | **SpeechBubble** | Cloud-shaped dialog bubble with title bar, messages, input area, send button, resize handle |
 | **Character animations** | State-driven pet animations via `StateToAction()` mapping (9 action types) |
-| **TTS audio** | Edge-TTS speech synthesis for character voice output |
-| **Voice input** | Whisper ASR with push-to-talk and VAD (Silero) |
+| **TTS audio** | Offline MeloTTS speech synthesis (sherpa-onnx, Windows) |
+| **Voice input** | Offline SenseVoice ASR with push-to-talk and VAD (sherpa-onnx, Windows) |
 | **SDL chat window** | Central chat panel with message history + input |
 
 ### UI Component Architecture (Three-Layer)
@@ -688,16 +688,17 @@ At minimum, set up at least one provider with your API key and model. The config
 ```
 git clone https://github.com/Swair/prosophor.git
 cd prosophor
-make build          # Linux/macOS
-make build_win      # Windows (MinGW, Vulkan, no SDL)
+make build_tui            # TUI (default full; _fast for remote-only)
+make build_sdl            # SDL desktop pet (default full; _fast for remote-only)
+make build_web            # web server
 ```
 
 Or manually:
 
 ```
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc) && make install
+mkdir -p build/tui_full && cd build/tui_full
+cmake ../.. -DCMAKE_BUILD_TYPE=Release
+cmake --build . --parallel $(nproc) && cmake --install .
 ```
 
 ### Build Options
@@ -707,32 +708,35 @@ make -j$(nproc) && make install
 | `PROSOPHOR_BUILD_LLAMA` | ON | Build in-process llama.cpp for local GGUF inference |
 | `PROSOPHOR_BUILD_LLAMA_CUDA` | Linux:ON, Win:OFF | CUDA GPU support for llama.cpp |
 | `PROSOPHOR_BUILD_LLAMA_VULKAN` | Win:ON, else:OFF | Vulkan GPU support for llama.cpp |
-| `PROSOPHOR_BUILD_ASR` | ON | Build whisper.cpp ASR support |
+| `PROSOPHOR_BUILD_SHERPA_VOICE` | Win SDL:ON, else:OFF | sherpa-onnx local TTS/ASR (MeloTTS + SenseVoice) |
 | `PROSOPHOR_SDL_UI` | OFF | Build SDL desktop pet UI (requires SDL3 dev libs) |
 
-### Build Variants (Windows Makefile)
+### Build Variants (Makefile)
 
 | Target | Description |
 |--------|-------------|
-| `build_win_tui_fast` | Terminal only, remote API only (no llama/ASR), fastest build |
-| `build_win_tui_full` | Terminal + local model + ASR |
-| `build_win_sdl_fast` | Desktop pet, remote API only |
-| `build_win_sdl_full` | Desktop pet + full features |
+| `build_tui_fast` | Terminal, remote API only (no local model), fastest build |
+| `build_tui_full` | Terminal + local model |
+| `build_sdl_fast` | Desktop pet, remote API only |
+| `build_sdl_full` | Desktop pet + local model |
+| `build_web` | Web server |
 
-### Package & Deploy
+Target names are platform-neutral: the Makefile detects the host automatically (Unix → CMake + make with CUDA GPU defaults, Windows → MSYS2/MinGW + Ninja with Vulkan GPU defaults). Each variant has matching `run_<variant>` and `clean_<variant>` targets, e.g. `make run_sdl_full`.
+
+### Package & Deploy (Windows only)
 
 | Target | Description |
 |--------|-------------|
-| `package` | Build + NSIS installer (requires MSYS2/MinGW) |
-| `deploy` | Package + publish to GitHub Releases (`gh` CLI required) |
-| `deploy_all` | Deploy to GitHub + Gitee (Gitee requires `GITEE_TOKEN`) |
+| `package_sdl_full` / `package_sdl_fast` | Build + NSIS installer (requires MSYS2/MinGW) |
+| `deploy_sdl_full` / `deploy_sdl_fast` | Package + publish to GitHub Releases (`gh` CLI required) |
+| `deploy_all_sdl_full` / `deploy_all_sdl_fast` | Deploy to GitHub + Gitee (Gitee requires `GITEE_TOKEN`) |
 
 Release notes are automatically extracted from `CHANGELOG.md` for the matching version. Fallback to `--generate-notes` if no entry found.
 
 ### Tests
 
 ```
-make test
+make tests
 ```
 
 Or:

@@ -6,7 +6,7 @@
 #include "media_engine/media_engine.h"
 #include "virtual_sprite/sprite.h"
 #include "virtual_sprite/sprite_manager.h"
-#include "managers/agent_session_manager.h"
+#include "prosophor_core/public/agent_engine.h"
 
 namespace prosophor {
 
@@ -51,15 +51,14 @@ void UIRenderer::RenderContextMenu(media_engine::Window* current_win) {
     {
         auto* sprite = SpriteManager::GetInstance().FindByWindow(current_win);
         if (sprite) {
-            auto* session = AgentSessionManager::GetInstance().GetSession(sprite->GetSessionId());
-            if (session) {
-                bool tools_on = session->GetUseTools();
-                const char* tools_label = tools_on
-                    ? L.Get("ctx_disable_tools").c_str()
-                    : L.Get("ctx_enable_tools").c_str();
-                if (media_engine::Popup::MenuItem(tools_label)) {
-                    session->SetUseTools(!tools_on);
-                }
+            auto& engine = AgentEngine::GetInstance();
+            const std::string& session_id = sprite->GetSessionId();
+            bool tools_on = engine.GetSessionUseTools(session_id);
+            const char* tools_label = tools_on
+                ? L.Get("ctx_disable_tools").c_str()
+                : L.Get("ctx_enable_tools").c_str();
+            if (media_engine::Popup::MenuItem(tools_label)) {
+                engine.SetSessionUseTools(session_id, !tools_on);
             }
         }
     }

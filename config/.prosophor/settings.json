@@ -3,190 +3,291 @@
     "default",
     "ayaka"
   ],
-  "log_level": "info",
-  "enable_summary": false,
-  "sprite_assets_dir": "~/.prosophor/assets",
-  "llm_providers": {
-    "anthropic": [
-      {
-        "api_key": "sk-sp-198786439e234d0abc2ffexxxxxxxx",
-        "base_url": "https://coding.dashscope.aliyuncs.com/apps/anthropic/v1/messages",
-        "timeout": 60,
-        "models": [
-          {
-            "model": "qwen3.5-plus",
-            "temperature": 0.7,
-            "max_tokens": 8192,
-            "context_window": 128000
-          }
+    "log_level": "info",
+    "enable_summary": false,
+    "sprite_assets_dir": "~/.prosophor/assets",
+    "llm_providers": {
+        "anthropic": [
+            {
+                "api_key": "sk-sp-198786439e234d0abc2ffexxxxxxxx",
+                "base_url": "https://coding.dashscope.aliyuncs.com/apps/anthropic/v1/messages",
+                "timeout": 60,
+                "models": [
+                    {
+                        "model": "qwen3.5-plus",
+                        "temperature": 0.7,
+                        "max_tokens": 8192,
+                        "context_window": 128000
+                    }
+                ]
+            },
+            {
+                "api_key": "sk-198786439e234d0abc2ffexxxxxxxx",
+                "base_url": "https://api.deepseek.com/anthropic/v1/messages",
+                "timeout": 60,
+                "models": [
+                    {
+                        "model": "deepseek-v4-pro",
+                        "temperature": 0.7,
+                        "max_tokens": 8192,
+                        "context_window": 128000
+                    },
+                    {
+                        "model": "deepseek-v4-flash",
+                        "temperature": 0.1,
+                        "max_tokens": 1024,
+                        "context_window": 128000
+                    },
+                    {
+                        "model": "deepseek-v4-flash[1m]",
+                        "temperature": 0.1,
+                        "max_tokens": 1024,
+                        "context_window": 1000000
+                    }
+                ]
+            }
+        ],
+        "ollama": [
+            {
+                "api_key": "",
+                "base_url": "http://localhost:11434/api/chat",
+                "timeout": 180,
+                "models": [
+                    {
+                        "model": "qwen3:8b",
+                        "temperature": 0.7,
+                        "max_tokens": 8192,
+                        "context_window": 32768
+                    },
+                    {
+                        "model": "gemma4:e4b",
+                        "temperature": 0.1,
+                        "max_tokens": 4096,
+                        "context_window": 128000
+                    }
+                ]
+            }
+        ],
+        "openai": [
+            {
+                "api_key": "sk-sp-MjA4LTIyMDcwMjA1MjEyLTE3Nzg5ODkzMDE2MDI=",
+                "base_url": "https://api.scnet.cn/api/llm/v1/chat/completions",
+                "timeout": 60,
+                "models": [
+                    {
+                        "model": "MiniMax-M2.5",
+                        "temperature": 0.7,
+                        "max_tokens": 8192,
+                        "context_window": 128000
+                    }
+                ]
+            },
+            {
+                "api_key": "sk-be7c5ed396474c3fa6841214cfxxxx",
+                "base_url": "https://api.deepseek.com/chat/completions",
+                "timeout": 60,
+                "models": [
+                    {
+                        "model": "deepseek-v4-pro",
+                        "temperature": 0.7,
+                        "max_tokens": 8192,
+                        "context_window": 128000
+                    },
+                    {
+                        "model": "deepseek-v4-flash",
+                        "temperature": 0.1,
+                        "max_tokens": 1024,
+                        "context_window": 128000
+                    }
+                ]
+            }
+        ],
+        "llamacpp": [
+            {
+                "api_key": "local",
+                "base_url": "local",
+                "timeout": 60,
+                "auto_start": true,
+                "models": [
+                    {
+                        "model": "google_gemma-4-E4B-it-Q4_K_M",
+                        "model_path": "/e/ai_ws/llama_cpp_model/google_gemma-4-E4B-it-Q4_K_M.gguf",
+                        "mmproj_path": "",
+                        "n_gpu_layers": -1,
+                        "threads": 2,
+                        "context_window": 128000,
+                        "max_tokens": 8192,
+                        "temperature": 0.7,
+                        "top_p": 0.95,
+                        "type_k": "q4_0",
+                        "type_v": "q4_0",
+                        "n_batch": 1024,
+                        "n_ubatch": 512,
+                        "offload_kqv": true,
+                        "flash_attn": true,
+                        "min_p": 0.05,
+                        "seed": -1,
+                        "thinking_start": "<|channel>",
+                        "thinking_end": "<channel|>",
+                        "end_of_turn": "<end_of_turn>",
+                        "start_of_turn": "<start_of_turn>",
+                        "tool_call_start": "<|tool_call>",
+                        "tool_call_end": "<tool_call|>"
+                    }
+                ]
+            }
+        ],
+        "aidgen": {
+            "enabled": false,
+            "api_key": "local",
+            "base_url": "local",
+            "config_file": "/home/aidlux/models/qwen3vl_8b/qnn248_qcs8550_cl4096/aidgen_config.json",
+            "backend": "auto",
+            "vit_backend": "qnn248",
+            "models": [
+                {
+                    "model": "Qwen3-VL-8B-Instruct",
+                    "temperature": 0.3,
+                    "max_tokens": 512,
+                    "context_window": 4096
+                }
+            ]
+        }
+    },
+    "tts": {
+        "enabled": true,
+        "provider": [
+            {
+                "backend": "sherpa-onnx",
+                "auto_start": false,
+                "voice_list": [
+                    "zh-CN-XiaoxiaoNeural",
+                    "zh-CN-XiaoyiNeural",
+                    "zh-CN-YunjianNeural",
+                    "zh-CN-YunxiNeural",
+                    "zh-CN-YunxiaNeural",
+                    "zh-CN-YunyangNeural",
+                    "zh-CN-liaoning-XiaobeiNeural",
+                    "zh-CN-shaanxi-XiaoniNeural",
+                    "zh-HK-HiuGaaiNeural",
+                    "zh-HK-HiuMaanNeural",
+                    "zh-HK-WanLungNeural",
+                    "zh-TW-HsiaoChenNeural",
+                    "zh-TW-HsiaoYuNeural",
+                    "zh-TW-YunJheNeural",
+                    "en-US-AriaNeural",
+                    "en-US-JennyNeural",
+                    "en-US-GuyNeural",
+                    "ja-JP-NanamiNeural",
+                    "ja-JP-KeitaNeural",
+                    "ko-KR-SunHiNeural",
+                    "ko-KR-InJoonNeural",
+                    "fr-FR-DeniseNeural",
+                    "fr-FR-HenriNeural",
+                    "de-DE-KatjaNeural",
+                    "de-DE-ConradNeural"
+                ]
+            }
+        ],
+        "backend": "sherpa-onnx",
+        "aidvoice_model_dir": "~/models/melotts-zh/models/QCS8550/FP16",
+        "aidvoice_speed": 1.0,
+        "sherpa_model_dir": "~/models/sherpa-onnx/vits-melo-tts-zh_en",
+        "sherpa_speaker_id": 0,
+        "sherpa_speed": 1.0,
+        "sherpa_num_threads": 0
+    },
+    "asr": {
+        "enabled": true,
+        "backend": "sherpa-onnx",
+        "model_dir": "~/models/sensevoicesmall/models/QCS8550/FP16",
+        "echo_ms": 15000,
+        "timeout_ms": 20000,
+        "reuse_instance": true,
+        "sherpa_model_dir": "~/models/sherpa-onnx/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17",
+        "sherpa_num_threads": 0,
+        "sherpa_prefer_fp32": true
+    },
+    "security": {
+        "allow_local_execute": true,
+        "permission_level": "auto"
+    },
+    "web": {
+        "enabled": false,
+        "host": "0.0.0.0",
+        "port": 19654,
+        "web_root": "",
+        "role": "default",
+        "data_dir": "",
+        "token_ttl_hours": 168
+    },
+    "voice": {
+        "capture_device": "plughw:CARD=PowerConf,DEV=0",
+        "playback_device": "plughw:0,0",
+        "vad_rms_dbfs": -38.0,
+        "start_confirm_frames": 3,
+        "end_silence_ms": 700,
+        "max_utterance_ms": 12000,
+        "pre_roll_frames": 5,
+        "warmup_discard_frames": 8,
+        "speak_max_chars": 120,
+        "speak_min_gap_ms": 10000,
+        "max_pending_speech": 32,
+        "tts_cache_bytes": 33554432
+    },
+    "camera": {
+        "device": "/dev/video2",
+        "output_dir": "~/.prosophor/nutribot_camera",
+        "interval_ms": 1500,
+        "perception_interval_ms": 10000,
+        "idle_interval_ms": 30000,
+        "timeout_ms": 8000,
+        "keep_frames": 20
+    },
+    "meal": {
+        "announce": true,
+        "windows": [
+            {
+                "name": "早餐",
+                "start": "07:00",
+                "end": "08:00"
+            },
+            {
+                "name": "午餐",
+                "start": "12:00",
+                "end": "13:00"
+            },
+            {
+                "name": "晚餐",
+                "start": "18:00",
+                "end": "19:00"
+            }
         ]
-      },
-      {
-        "api_key": "sk-198786439e234d0abc2ffexxxxxxxx",
-        "base_url": "https://api.deepseek.com/anthropic/v1/messages",
-        "timeout": 60,
-        "models": [
-          {
-            "model": "deepseek-v4-pro",
-            "temperature": 0.7,
-            "max_tokens": 8192,
-            "context_window": 128000
-          },
-          {
-            "model": "deepseek-v4-flash",
-            "temperature": 0.1,
-            "max_tokens": 1024,
-            "context_window": 128000
-          }
+    },
+    "nutribot": {
+        "member_store_dir": "",
+        "nutrition_file": "",
+        "wake_words": [
+            "你好大白"
+        ],
+        "wake_ack_text": "我在",
+        "awake_window_ms": 8000,
+        "thinking_fillers": [
+            "嗯……我想想",
+            "让我想想啊",
+            "嗯，我看看"
+        ],
+        "vision_fillers": [
+            "让我看看桌上有什么",
+            "我瞅瞅这盘菜",
+            "嗯，我瞧瞧"
         ]
-      }
-    ],
-    "ollama": [
-      {
-        "api_key": "",
-        "base_url": "http://localhost:11434/api/chat",
-        "timeout": 180,
-        "models": [
-          {
-            "model": "qwen3:8b",
-            "temperature": 0.7,
-            "max_tokens": 8192,
-            "context_window": 32768
-          },
-          {
-            "model": "gemma4:e4b",
-            "temperature": 0.1,
-            "max_tokens": 4096,
-            "context_window": 128000
-          }
-        ]
-      }
-    ],
-    "openai": [
-      {
-        "api_key": "sk-sp-MjA4LTIyMDcwMjA1MjEyLTE3Nzg5ODkzMDE2MDI=",
-        "base_url": "https://api.scnet.cn/api/llm/v1/chat/completions",
-        "timeout": 60,
-        "models": [
-          {
-            "model": "MiniMax-M2.5",
-            "temperature": 0.7,
-            "max_tokens": 8192,
-            "context_window": 128000
-          }
-        ]
-      },
-      {
-        "api_key": "sk-be7c5ed396474c3fa6841214cfxxxx",
-        "base_url": "https://api.deepseek.com/chat/completions",
-        "timeout": 60,
-        "models": [
-          {
-            "model": "deepseek-v4-pro",
-            "temperature": 0.7,
-            "max_tokens": 8192,
-            "context_window": 128000
-          },
-          {
-            "model": "deepseek-v4-flash",
-            "temperature": 0.1,
-            "max_tokens": 1024,
-            "context_window": 128000
-          }
-        ]
-      }
-    ],
-    "llamacpp": [
-      {
-        "api_key": "local",
-        "base_url": "local",
-        "timeout": 60,
-        "auto_start": true,
-        "models": [
-          {
-            "model": "google_gemma-4-E4B-it-Q4_K_M",
-            "model_path": "/e/ai_ws/llama_cpp_model/google_gemma-4-E4B-it-Q4_K_M.gguf",
-            "mmproj_path": "",
-            "n_gpu_layers": -1,
-            "threads": 2,
-            "context_window": 128000,
-            "max_tokens": 8192,
-            "temperature": 0.7,
-            "top_p": 0.95,
-            "type_k": "q4_0",
-            "type_v": "q4_0",
-            "n_batch": 1024,
-            "n_ubatch": 512,
-            "offload_kqv": true,
-            "flash_attn": true,
-            "min_p": 0.05,
-            "seed": -1,
-            "thinking_start": "<|channel>",
-            "thinking_end": "<channel|>",
-            "end_of_turn": "<end_of_turn>",
-            "start_of_turn": "<start_of_turn>",
-            "tool_call_start": "<|tool_call>",
-            "tool_call_end": "<tool_call|>"
-          }
-        ]
-      }
-    ]
-  },
-  "tts": {
-    "enabled": true,
-    "provider": [
-      {
-        "backend": "edge-tts",
-        "auto_start": false,
-        "voice_list": [
-          "zh-CN-XiaoxiaoNeural",
-          "zh-CN-XiaoyiNeural",
-          "zh-CN-YunjianNeural",
-          "zh-CN-YunxiNeural",
-          "zh-CN-YunxiaNeural",
-          "zh-CN-YunyangNeural",
-          "zh-CN-liaoning-XiaobeiNeural",
-          "zh-CN-shaanxi-XiaoniNeural",
-          "zh-HK-HiuGaaiNeural",
-          "zh-HK-HiuMaanNeural",
-          "zh-HK-WanLungNeural",
-          "zh-TW-HsiaoChenNeural",
-          "zh-TW-HsiaoYuNeural",
-          "zh-TW-YunJheNeural",
-          "en-US-AriaNeural",
-          "en-US-JennyNeural",
-          "en-US-GuyNeural",
-          "ja-JP-NanamiNeural",
-          "ja-JP-KeitaNeural",
-          "ko-KR-SunHiNeural",
-          "ko-KR-InJoonNeural",
-          "fr-FR-DeniseNeural",
-          "fr-FR-HenriNeural",
-          "de-DE-KatjaNeural",
-          "de-DE-ConradNeural"
-        ]
-      }
-    ]
-  },
-  "asr": {
-    "enabled": true,
-    "backend": "whisper",
-    "model_path": "/e/ai_ws/prosophor_dev/models/ggml-small.bin",
-    "vad_model_path": "/e/ai_ws/prosophor_dev/models/ggml-silero-vad.bin",
-    "language": "zh",
-    "threads": 4
-  },
-  "security": {
-    "allow_local_execute": true,
-    "permission_level": "auto"
-  },
-  "web": {
-    "enabled": false,
-    "host": "0.0.0.0",
-    "port": 19654,
-    "web_root": "",
-    "role": "default",
-    "data_dir": "",
-    "token_ttl_hours": 168
-  }
+    },
+    "robot": {
+        "control_enabled": true,
+        "base_url": "http://192.168.0.202",
+        "default_speed": 50,
+        "move_pulse_ms": 1000,
+        "command_timeout_ms": 2000
+    }
 }

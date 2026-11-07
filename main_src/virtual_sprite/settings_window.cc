@@ -5,8 +5,8 @@
 #include "common/i18n.h"
 #include "common/log_wrapper.h"
 #include "common/file_utils.h"
-#include "config/config.h"
-#include "config/role_config_manager.h"
+#include "prosophor_core/public/config.h"
+#include "prosophor_core/public/role_config.h"
 #include "virtual_sprite/voice_engine.h"
 #include "media_engine/media/texture/imgui_widget.h"
 #include "platform/platform.h"
@@ -418,7 +418,7 @@ void SettingsWindow::RenderProvidersTab() {
             }
             media_engine::Layout::Dummy(0, 4);
             if (media_engine::ImGuiWidget::Button("+ Add Entry", 0, 0)) {
-                ProviderEntryConfig new_entry;
+                LlmProviderEntryConfig new_entry;
                 new_entry.timeout = 30;
                 prov.entries.push_back(std::move(new_entry));
             }

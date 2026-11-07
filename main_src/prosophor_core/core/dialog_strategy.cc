@@ -68,20 +68,43 @@ bool DialogStrategy::NeedsCompaction(const std::vector<MessageSchema>& messages,
     return false;
 }
 
+namespace {
+
+// 分字符集估算 token：CJK 码点 ≈ 1 token，其余按 4 字符/token（英文经验值）。
+// 原来一律 chars/4 —— 对中文低估约 4 倍：小上下文模型（nutribot 用 cl2048，
+// 实测 role.context_window=2048）因此迟迟不触发压缩，直到 KV 溢出后模型退化
+// 成复读（实测：约 30 轮后只回 "I."）。
+int EstimateTextTokens(const std::string& text) {
+    size_t multibyte = 0;   // 多字节码点数（UTF-8：非续接字节各计一个码点）
+    size_t singlebyte = 0;
+    for (const unsigned char c : text) {
+        if ((c & 0xC0) == 0x80) continue;
+        if (c >= 0x80) {
+            ++multibyte;
+        } else {
+            ++singlebyte;
+        }
+    }
+    return static_cast<int>(multibyte + singlebyte / kCharsPerTokenEstimate);
+}
+
+}  // namespace
+
 int DialogStrategy::EstimateTokens(const std::vector<MessageSchema>& messages) {
-    int total_chars = 0;
+    int total = 0;
     for (const auto& msg : messages) {
         for (const auto& block : msg.content) {
             if (block.type == "text" || block.type == "thinking") {
-                total_chars += static_cast<int>(block.text.size());
+                total += EstimateTextTokens(block.text);
             } else if (block.type == "tool_use") {
-                total_chars += static_cast<int>(block.name.size() + block.input.dump().size());
+                total += EstimateTextTokens(block.name) +
+                         EstimateTextTokens(block.input.dump());
             } else if (block.type == "tool_result") {
-                total_chars += static_cast<int>(block.content.size());
+                total += EstimateTextTokens(block.content);
             }
         }
     }
-    return total_chars / kCharsPerTokenEstimate;
+    return total;
 }
 
 std::vector<MessageSchema> DialogStrategy::KeepRecentMessages(
@@ -125,24 +148,32 @@ void DialogStrategy::CompactIfNeeded(AgentSession& session) const {
     if (!role) return;
     int ctx = role->context_window;
     int reserve = role->max_tokens > 0 ? role->max_tokens : 4096;
-    // Safety margin: reserve 90% of available space for the prompt,
-    // leaving 10% headroom for chat template tokens and estimate error
-    int limit = static_cast<int>((ctx - reserve) * 0.9);
+    // Safety margin: 75% of available space for the prompt. 真实分词比字符集估算
+    // 高约 20%（模板标记/工具 JSON），90% 的余量不够 —— cl2048 实测真实
+    // 1800 token 附近就退化，预算须按最坏误差留足
+    int limit = static_cast<int>((ctx - reserve) * 0.75);
     if (limit <= 0) return;
 
+    // 静态 system（含工具段）同样占上下文；不计入会让小上下文模型在压缩触发前
+    // 就溢出 —— 实测 cl2048 模型 system ~1000 token，历史涨到 2000+ 后直接 EOS
+    int static_tokens = 0;
+    for (const auto& block : session.GetSystemPrompt()) {
+        static_tokens += EstimateTextTokens(block.text);
+    }
+
     auto messages = session.GetMessages();
-    int estimated = EstimateTokens(messages);
+    int estimated = EstimateTokens(messages) + static_tokens;
     if (estimated <= limit) return;
 
     int keep = config_.keep_recent;
-    LOG_WARN("Context window limit: ~{} tokens > {} (ctx={}, reserve={}), truncating to last {} messages",
-             estimated, limit, ctx, reserve, keep);
+    LOG_WARN("Context window limit: ~{} tokens > {} (ctx={}, reserve={}, system={}), truncating to last {} messages",
+             estimated, limit, ctx, reserve, static_tokens, keep);
 
     // Binary search for the largest keep count that fits within limit
     int lo = 1, hi = keep;
     while (lo < hi) {
         int mid = (lo + hi + 1) / 2;
-        if (EstimateTokens(KeepRecentMessages(messages, mid)) <= limit)
+        if (EstimateTokens(KeepRecentMessages(messages, mid)) + static_tokens <= limit)
             lo = mid;
         else
             hi = mid - 1;
@@ -285,7 +316,7 @@ DialogStrategy::Result DialogStrategy::CompactWithLLM(
     }
 
     int original_tokens = EstimateTokens(old_messages);
-    int summary_tokens = summary.empty() ? 0 : static_cast<int>(summary.size()) / kCharsPerTokenEstimate;
+    int summary_tokens = EstimateTextTokens(summary);   // 同口径（CJK 按码点）
     result.tokens_saved = original_tokens - summary_tokens;
 
     compaction_count_++;

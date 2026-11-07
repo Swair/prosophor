@@ -19,6 +19,9 @@ class AgentCore {
     /// Process a message - streaming mode is determined by session.role->enable_streaming
     /// @param message User message
     /// @param session Agent session (read/write) - contains tool_executor, stop_requested, role
+    /// 本轮结果通过 session 表达：
+    /// - 成功：最后一条 assistant 消息即本轮正文（调用方先看 state != STATE_ERROR 再读）
+    /// - 失败：SetOutput(STATE_ERROR, ...)，调用方不要读消息列表
     static void Loop(const std::string& message, AgentSession& session);
 
  private:
@@ -37,7 +40,8 @@ class AgentCore {
     /// Get max iterations from role or default
     static int GetMaxIterations(const AgentSession& session);
 
-    /// Execute tool calls and append to the given assistant message
+    /// Execute tool calls and append to the given assistant message.
+    /// 调用方保证 tool_calls 非空；返回 true = 全部工具执行成功。
     static bool ExecuteToolCalls(const std::vector<ToolUseSchema>& tool_calls,
                                  AgentSession& session,
                                  MessageSchema& assistant_msg,

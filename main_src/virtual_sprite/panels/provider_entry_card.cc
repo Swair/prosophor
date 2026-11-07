@@ -8,7 +8,7 @@ namespace prosophor {
 
 std::unordered_map<size_t, bool> ProviderEntryCard::s_models_open;
 
-ProviderEntryCard::ProviderEntryCard(ProviderEntryConfig& entry,
+ProviderEntryCard::ProviderEntryCard(LlmProviderEntryConfig& entry,
                                      size_t entry_idx,
                                      float width,
                                      float sm)

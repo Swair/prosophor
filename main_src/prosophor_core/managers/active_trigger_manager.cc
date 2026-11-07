@@ -63,10 +63,6 @@ void ActiveTriggerManager::SetUserInteractionCallback(UserInteractionCallback cb
     user_interaction_callback_ = std::move(cb);
 }
 
-void ActiveTriggerManager::SetSessionManager(AgentSessionManager* session_manager) {
-    session_manager_ = session_manager;
-}
-
 std::string ActiveTriggerManager::ExpandHome(const std::string& path) {
     return prosophor::ExpandHome(path);
 }
@@ -152,10 +148,10 @@ bool ActiveTriggerManager::LoadPlugin(const std::string& plugin_dir) {
         periodic_plugins_.push_back(plugin);
         LOG_DEBUG("Loaded periodic plugin: {} (interval={}s, priority={})",
                  plugin.name, plugin.interval, plugin.priority);
-    } else if (plugin.mode == "idle") {
+    } else if (plugin.mode == "idle" || plugin.mode == "idle_once") {
         idle_plugins_.push_back(plugin);
-        LOG_DEBUG("Loaded idle plugin: {} (threshold={}s, priority={})",
-                 plugin.name, plugin.threshold, plugin.priority);
+        LOG_DEBUG("Loaded idle plugin: {} (mode={}, threshold={}s, cooldown={}s)",
+                 plugin.name, plugin.mode, plugin.threshold, plugin.cooldown);
     }
 
     return true;
@@ -187,10 +183,14 @@ bool ActiveTriggerManager::ParseTriggerModeConfig(const std::string& config_path
 
         if (key == "mode") {
             plugin.mode = value;
+        } else if (key == "role") {
+            plugin.role = value;
         } else if (key == "interval") {
             plugin.interval = std::stoi(value);
         } else if (key == "threshold") {
             plugin.threshold = std::stoi(value);
+        } else if (key == "cooldown") {
+            plugin.cooldown = std::stoi(value);
         } else if (key == "priority") {
             plugin.priority = std::stoi(value);
         } else if (key == "timeout") {
@@ -208,15 +208,35 @@ bool ActiveTriggerManager::ParseTriggerModeConfig(const std::string& config_path
     return !plugin.mode.empty();
 }
 
-std::string ActiveTriggerManager::ReadPromptMd(const std::string& plugin_path) const {
-    std::string prompt_path = plugin_path + "/ACTIVE.md";
-    if (!FileExists(prompt_path)) {
-        LOG_WARN("ACTIVE.md not found in {}", plugin_path);
-        return "";
-    }
+namespace {
 
-    auto content = ReadFile(prompt_path);
-    return content.value_or("");
+/// SKILL.md 的 YAML frontmatter 只用于技能元数据，送模型时剥掉。
+std::string StripSkillFrontmatter(const std::string& content) {
+    if (content.compare(0, 3, "---") != 0) return content;
+    size_t end = content.find("\n---", 3);
+    if (end == std::string::npos) return content;
+    size_t body = end + 4;  // 跳过 "\n---"
+    if (body < content.size() && content[body] == '\r') ++body;
+    if (body < content.size() && content[body] == '\n') ++body;
+    return content.substr(body);
+}
+
+}  // namespace
+
+std::string ActiveTriggerManager::ReadPromptMd(const std::string& plugin_path) const {
+    // ACTIVE.md 为主；SKILLS.md/SKILL.md 沿用技能写法；prompt.md 兼容旧示例
+    for (const char* filename : {"ACTIVE.md", "SKILLS.md", "SKILL.md", "prompt.md"}) {
+        std::string prompt_path = plugin_path + "/" + filename;
+        if (!FileExists(prompt_path)) continue;
+        std::string content = ReadFile(prompt_path).value_or("");
+        std::string name(filename);
+        if (name == "SKILLS.md" || name == "SKILL.md") {
+            content = StripSkillFrontmatter(content);
+        }
+        return content;
+    }
+    LOG_WARN("No ACTIVE.md, SKILLS.md, SKILL.md or prompt.md in {}", plugin_path);
+    return "";
 }
 
 void ActiveTriggerManager::SchedulerLoop() {
@@ -253,13 +273,12 @@ void ActiveTriggerManager::SchedulerLoop() {
                 if (current_time - plugin.last_run >= plugin.interval) {
                     std::string trigger_reason;
                     if (ExecuteTrigger(plugin, trigger_reason)) {
-                        std::string prompt_md = ReadPromptMd(plugin.path);
-                        std::string session_id = GenerateSessionId();
-                        try {
-                            ExecuteLlmCallback(session_id, trigger_reason, prompt_md);
-                        } catch (const std::exception& e) {
-                            LOG_ERROR("LLM callback exception for periodic plugin {}: {}", plugin.name, e.what());
-                        }
+                        ActiveTriggerRequest request;
+                        request.plugin = plugin.name;
+                        request.role = plugin.role;
+                        request.reason = trigger_reason;
+                        request.prompt_md = ReadPromptMd(plugin.path);
+                        ExecuteLlmCallback(request);
                     }
                     // 更新原插件的 last_run
                     std::lock_guard<std::mutex> lock(mutex_);
@@ -307,17 +326,22 @@ void ActiveTriggerManager::SchedulerLoop() {
                         continue;
                     }
 
+                    // 冷却：同一插件在 cooldown 秒内不重复跑脚本/调 LLM
+                    if (plugin.last_run != 0 &&
+                        current_time - plugin.last_run < plugin.cooldown) {
+                        continue;
+                    }
+
                     // 检查是否达到阈值
                     if (idle_duration >= plugin.threshold) {
                         std::string trigger_reason;
                         if (ExecuteTrigger(plugin, trigger_reason)) {
-                            std::string prompt_md = ReadPromptMd(plugin.path);
-                            std::string session_id = GenerateSessionId();
-                            try {
-                                ExecuteLlmCallback(session_id, trigger_reason, prompt_md);
-                            } catch (const std::exception& e) {
-                                LOG_ERROR("LLM callback exception for idle plugin {}: {}", plugin.name, e.what());
-                            }
+                            ActiveTriggerRequest request;
+                            request.plugin = plugin.name;
+                            request.role = plugin.role;
+                            request.reason = trigger_reason;
+                            request.prompt_md = ReadPromptMd(plugin.path);
+                            ExecuteLlmCallback(request);
 
                             // idle_once 模式：触发成功后 auto-disable
                             if (plugin.mode == "idle_once") {
@@ -331,13 +355,14 @@ void ActiveTriggerManager::SchedulerLoop() {
                                 }
                                 LOG_INFO("idle_once plugin {} triggered once, auto-disabled", plugin.name);
                             }
-                        }
-                        // 更新原插件的 last_run
-                        std::lock_guard<std::mutex> lock(mutex_);
-                        for (auto& p : idle_plugins_) {
-                            if (p.name == plugin.name && p.path == plugin.path) {
-                                p.last_run = current_time;
-                                break;
+
+                            // 仅触发成功时进入冷却
+                            std::lock_guard<std::mutex> lock(mutex_);
+                            for (auto& p : idle_plugins_) {
+                                if (p.name == plugin.name && p.path == plugin.path) {
+                                    p.last_run = current_time;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -378,24 +403,17 @@ bool ActiveTriggerManager::ExecuteTrigger(const ActiveTriggerPlugin& plugin,
     return true;
 }
 
-std::string ActiveTriggerManager::ExecuteLlmCallback(const std::string& session_id,
-                                                      const std::string& trigger_reason,
-                                                      const std::string& prompt_md) {
+void ActiveTriggerManager::ExecuteLlmCallback(const ActiveTriggerRequest& request) {
     if (!llm_callback_) {
         LOG_ERROR("LLM callback not set");
-        return "";
+        return;
     }
 
     try {
-        return llm_callback_(session_id, trigger_reason, prompt_md);
+        llm_callback_(request);
     } catch (const std::exception& e) {
-        LOG_ERROR("LLM callback failed: {}", e.what());
-        return "";
+        LOG_ERROR("LLM callback failed (plugin={}): {}", request.plugin, e.what());
     }
-}
-
-std::string ActiveTriggerManager::GenerateSessionId() const {
-    return "active-" + std::to_string(SystemClock::GetCurrentTimeMillis());
 }
 
 void ActiveTriggerManager::ReloadPlugins() {
@@ -418,9 +436,11 @@ ActiveTriggerPlugin ActiveTriggerPlugin::FromJson(const nlohmann::json& json,
     ActiveTriggerPlugin plugin;
     plugin.path = path;
     plugin.name = json.value("name", "");
+    plugin.role = json.value("role", "");
     plugin.mode = json.value("mode", "");
     plugin.interval = json.value("interval", 0);
     plugin.threshold = json.value("threshold", 0);
+    plugin.cooldown = json.value("cooldown", 300);
     plugin.priority = json.value("priority", 50);
     plugin.timeout = json.value("timeout", 100);
     plugin.enabled = json.value("enabled", true);

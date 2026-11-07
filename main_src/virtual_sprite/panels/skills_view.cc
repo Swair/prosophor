@@ -4,10 +4,10 @@
 #include "virtual_sprite/components/item_list.h"
 #include "virtual_sprite/layout_config.h"
 #include "common/i18n.h"
-#include "prosophor_core/managers/skill_loader.h"
-#include "prosophor_core/agent_engine.h"
-#include "prosophor_core/core/agent_types.h"
-#include "prosophor_core/config/config.h"
+#include "prosophor_core/public/skill.h"
+#include "prosophor_core/public/agent_engine.h"
+#include "prosophor_core/public/core_types.h"
+#include "prosophor_core/public/config.h"
 #include <filesystem>
 #include <fstream>
 
@@ -208,7 +208,7 @@ void ChatWindow::RenderSkillsView(int cont_x, int cont_y, int cont_w, int cont_h
                         auto& engine = AgentEngine::GetInstance();
                         if (s_chat_session_id.empty())
                             s_chat_session_id = engine.CreateSession("skills_creator", "Help me create a new skill.");
-                        engine.SendUserMessage(s_chat_session_id, msg);
+                        engine.SendUserMessageAsync(s_chat_session_id, msg);
                         s_ai_chat_in.SetText("");
                     }
                 }

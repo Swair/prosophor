@@ -13,17 +13,17 @@
 
 #include <nlohmann/json.hpp>
 
-#include "managers/agent_session_manager.h"
-
 namespace prosophor {
 
 /// 主动触发插件信息
 struct ActiveTriggerPlugin {
     std::string name;
     std::string path;
+    std::string role;           // 覆盖 active_trigger.role；空 = 全局缺省
     std::string mode;           // "periodic" / "idle" / "idle_once"
     int interval = 0;           // periodic 模式：间隔秒数
     int threshold = 0;          // idle 模式：空闲阈值秒数
+    int cooldown = 300;         // idle 模式：两次触发的最小间隔（秒）
     int priority = 50;          // 优先级 0-100
     int timeout = 100;          // 脚本超时毫秒
     std::string script;         // 脚本文件名，默认 "trigger"
@@ -33,6 +33,14 @@ struct ActiveTriggerPlugin {
 
     /// 从 JSON 配置加载
     static ActiveTriggerPlugin FromJson(const nlohmann::json& json, const std::string& path);
+};
+
+/// 一次主动触发的上下文（交给 LLM 执行回调）
+struct ActiveTriggerRequest {
+    std::string plugin;         // 插件名，用于会话隔离与投递来源
+    std::string role;           // 插件配置的角色；空 = 全局缺省
+    std::string reason;         // 触发脚本 stdout（或兜底文案）
+    std::string prompt_md;      // ACTIVE.md / prompt.md
 };
 
 /// 主动触发管理器 - 调度层核心
@@ -55,19 +63,12 @@ public:
     void Stop();
 
     /// 设置 LLM 执行回调
-    using LlmExecuteCallback = std::function<std::string(
-        const std::string& session_id,
-        const std::string& trigger_reason,
-        const std::string& prompt_md
-    )>;
+    using LlmExecuteCallback = std::function<void(const ActiveTriggerRequest& request)>;
     void SetLlmExecuteCallback(LlmExecuteCallback cb);
 
     /// 设置用户交互回调（用于空闲检测）
     using UserInteractionCallback = std::function<bool()>;
     void SetUserInteractionCallback(UserInteractionCallback cb);
-
-    /// 设置会话管理器（用于获取会话）
-    void SetSessionManager(AgentSessionManager* session_manager);
 
     /// 重新扫描插件目录（热加载）
     void ReloadPlugins();
@@ -92,7 +93,7 @@ private:
     /// 解析 trigger_mode.cfg
     bool ParseTriggerModeConfig(const std::string& config_path, ActiveTriggerPlugin& plugin);
 
-    /// 读取 ACTIVE.md
+    /// 读取 prompt：ACTIVE.md → SKILLS.md/SKILL.md（剥 frontmatter）→ prompt.md
     std::string ReadPromptMd(const std::string& plugin_path) const;
 
     /// 调度器循环
@@ -101,19 +102,13 @@ private:
     /// 执行插件触发脚本
     bool ExecuteTrigger(const ActiveTriggerPlugin& plugin, std::string& trigger_reason);
 
-    /// 执行 LLM 回调
-    std::string ExecuteLlmCallback(const std::string& session_id,
-                                   const std::string& trigger_reason,
-                                   const std::string& prompt_md);
-
-    /// 生成会话 ID（用于主动触发）
-    std::string GenerateSessionId() const;
+    /// 执行 LLM 回调（结果由 ProactiveMessageCallback 投递）
+    void ExecuteLlmCallback(const ActiveTriggerRequest& request);
 
     std::string active_dir_;
     std::vector<ActiveTriggerPlugin> periodic_plugins_;  // 周期性插件池
     std::vector<ActiveTriggerPlugin> idle_plugins_;      // 空闲插件池
 
-    AgentSessionManager* session_manager_ = nullptr;
     LlmExecuteCallback llm_callback_;
     UserInteractionCallback user_interaction_callback_;
 

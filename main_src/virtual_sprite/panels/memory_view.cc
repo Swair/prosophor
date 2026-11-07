@@ -9,10 +9,10 @@
 #include "common/i18n.h"
 #include "common/file_utils.h"
 #include "common/log_wrapper.h"
-#include "config/config.h"
+#include "prosophor_core/public/config.h"
 #include "media_engine/media_engine.h"
-#include "prosophor_core/agent_engine.h"
-#include "prosophor_core/core/memory_manager.h"
+#include "prosophor_core/public/agent_engine.h"
+#include "prosophor_core/public/memory.h"
 
 #include <filesystem>
 #include <fstream>

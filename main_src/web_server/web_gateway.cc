@@ -3,10 +3,10 @@
 
 #include "web_server/web_gateway.h"
 
-#include "agent_engine.h"
+#include "prosophor_core/public/agent_engine.h"
 #include "common/log_wrapper.h"
-#include "config/config.h"
-#include "core/session_key.h"
+#include "prosophor_core/public/config.h"
+#include "prosophor_core/public/core_types.h"
 #include "web_server/web_channel.h"
 
 namespace prosophor {

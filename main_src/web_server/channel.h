@@ -6,8 +6,7 @@
 #include <optional>
 #include <string>
 
-#include "core/agent_types.h"
-#include "core/messages_schema.h"
+#include "prosophor_core/public/core_types.h"
 
 namespace prosophor {
 
@@ -24,8 +23,8 @@ struct ImMessage {
     std::string bot_name;     // 渠道内账号名(飞书 bot 名),用于同群多账号隔离
     std::string chat_id;      // 会话标识(飞书 oc_xxx)
     std::string chat_type;    // "p2p" | "group"
-    std::string sender_id;    // 发言者 ID(群聊必填;飞书 ou_xxx)
-    std::string sender_name;  // 展示名,可空
+    std::string sender_id;    // 发言的群成员用户 ID(群聊必填;飞书 ou_xxx),不是群 ID
+    std::string sender_name;  // 发言成员展示名,可空
     std::string text;         // 去 @ 后的消息文本
     std::string message_id;   // 回引用(回复挂载),可空
 };

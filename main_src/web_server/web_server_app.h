@@ -8,7 +8,7 @@
 #include <httplib.h>
 
 #include "common/noncopyable.h"
-#include "config/config.h"
+#include "prosophor_core/public/config.h"
 
 namespace prosophor {
 

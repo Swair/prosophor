@@ -7,7 +7,7 @@
 #include <iostream>
 #include <sstream>
 #include "banner.h"
-#include "agent_engine.h"
+#include "prosophor_core/public/agent_engine.h"
 #include "common/constants.h"
 #include "common/log_wrapper.h"
 #include "platform/platform.h"
@@ -43,9 +43,11 @@ void AiCoding::RegisterCallbacks() {
     auto& engine = AgentEngine::GetInstance();
 
     engine.SetOutputCallback(
-        [](const std::string& /*session_id*/, const std::string& /*role_id*/,
-           AgentRuntimeState state, const std::string& state_msg,
-           const std::optional<MessageSchema>& reply, const std::string& delta) {
+        [this](const std::string& session_id, const std::string& /*role_id*/,
+               AgentRuntimeState state, const std::string& state_msg,
+               const std::optional<MessageSchema>& reply, const std::string& delta) {
+            // 主动触发会话在后台运行，不把它的流式帧混进用户终端
+            if (session_id != session_id_) return;
             switch (state) {
                 case AgentRuntimeState::BEGINNING:
                     break;
@@ -93,6 +95,13 @@ void AiCoding::RegisterCallbacks() {
                 default:
                     break;
             }
+        });
+
+    engine.SetProactiveMessageCallback(
+        [](const std::string& source, const std::string& role_id,
+           const std::string& /*session_id*/, const std::string& text) {
+            std::cout << "\n" << ColorCode::kCyan << "[主动] " << ColorCode::kReset
+                      << "(" << source << " / " << role_id << ") " << text << std::endl;
         });
 
     engine.SetPermissionCallback(

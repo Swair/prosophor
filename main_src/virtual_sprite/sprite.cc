@@ -8,11 +8,9 @@
 #include "virtual_sprite/asset_define.h"
 #include "virtual_sprite/components/speech_bubble.h"
 #include "media_engine/media_engine.h"
-#include "agent_engine.h"
+#include "prosophor_core/public/agent_engine.h"
 #include "common/log_wrapper.h"
 #include "common/file_utils.h"
-#include "managers/agent_role_loader.h"
-#include "managers/agent_session_manager.h"
 #include "common/time_wrapper.h"
 #include "virtual_sprite/voice_engine.h"
 #include <nlohmann/json.hpp>
@@ -87,22 +85,9 @@ bool Sprite::Create() {
     LOG_INFO("[Sprite] Session '{}' created for '{}' (role='{}')", session_id_, name_, effective_role);
 
     // Load role TTS config once (doesn't change at runtime)
-    {
-        const auto role_path = (ProsophorConfig::BaseDir() / "roles" / (effective_role + ".json")).string();
-        if (FileExists(role_path)) {
-            const auto role = AgentRoleLoader::GetInstance().LoadRole(role_path);
-            if (!role.tts_backend.empty()) role_tts_backend_ = role.tts_backend;
-            if (!role.tts_voice.empty()) role_tts_voice_ = role.tts_voice;
-        }
-    }
-
-    // Register per-session TTS speak callback
-    if (auto* session = AgentSessionManager::GetInstance().GetSession(session_id_)) {
-        session->SetTtsSpeakCallback([](const std::string& text,
-                                         const std::string& backend,
-                                         const std::string& voice) {
-            VoiceEngine::GetInstance().Speak(text, backend, voice);
-        });
+    if (auto tts = engine.GetRoleTtsConfig(effective_role)) {
+        if (!tts->backend.empty()) role_tts_backend_ = tts->backend;
+        if (!tts->voice.empty()) role_tts_voice_ = tts->voice;
     }
 
     // ── Pet loading (textures tied to this sprite window's renderer) ──
@@ -142,7 +127,8 @@ bool Sprite::Create() {
 
     // ── SpeechBubble onSubmit callback ──
     speech_bubble_->SetOnSubmit([this](const std::string& msg) {
-        AgentEngine::GetInstance().SendUserMessage(session_id_, msg);
+        // 异步：同步版本会在 UI 线程跑完整个 Loop，阻塞渲染
+        AgentEngine::GetInstance().SendUserMessageAsync(session_id_, msg);
     });
 
     // ── Global VoiceEngine singleton (ASR + TTS) ──
@@ -563,6 +549,34 @@ void Sprite::UpdateAnimation(float delta_time) {
 void Sprite::SetAgentState(AgentRuntimeState state, const std::string& details) {
     agent_state_ = state;
     state_details_ = details;
+}
+
+void Sprite::HandleAgentOutput(AgentRuntimeState state, const std::string& role_id,
+                                const std::string& details, const std::string& delta) {
+    SetAgentState(state, details);
+
+    if (state == AgentRuntimeState::STREAM_CONTENT_START) {
+        // 每轮重新读角色 TTS：设置面板热切换或 /role 后立即生效
+        if (auto tts = AgentEngine::GetInstance().GetRoleTtsConfig(role_id)) {
+            if (!tts->backend.empty()) role_tts_backend_ = tts->backend;
+            if (!tts->voice.empty()) role_tts_voice_ = tts->voice;
+        }
+        tts_chunker_.Reset();   // 新一轮正文：丢弃上一轮残留
+    }
+    if (role_tts_voice_ == "none") {
+        tts_chunker_.Reset();
+        return;
+    }
+    if (state == AgentRuntimeState::STREAM_CONTENT_TYPING) {
+        tts_chunker_.Push(delta);
+    }
+
+    const bool done = (state == AgentRuntimeState::COMPLETE ||
+                       state == AgentRuntimeState::STREAM_MODE_COMPLETE);
+    const std::string ready = tts_chunker_.TakeReady(done);
+    if (!ready.empty()) {
+        VoiceEngine::GetInstance().Speak(ready, role_tts_backend_, role_tts_voice_);
+    }
 }
 
 

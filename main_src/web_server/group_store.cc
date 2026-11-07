@@ -11,7 +11,7 @@
 #include "common/file_utils.h"
 #include "common/log_wrapper.h"
 #include "common/time_wrapper.h"
-#include "core/session_key.h"
+#include "prosophor_core/public/core_types.h"
 
 namespace prosophor {
 

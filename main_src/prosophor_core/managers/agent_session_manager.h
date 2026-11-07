@@ -9,6 +9,8 @@
 #include <memory>
 #include <functional>
 #include <atomic>
+#include <optional>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -37,8 +39,15 @@ public:
     /// 从目录加载所有角色配置
     void LoadRolesFromDirectory(const std::string& roles_dir);
 
-    /// 获取角色定义
+    /// 获取角色定义（指针；调用方不得在角色重载后长期持有）
     const AgentRole* GetRole(const std::string& role_id) const;
+
+    /// 角色 TTS 配置副本（仅两个字符串，加锁；角色不存在返回 nullopt）
+    std::optional<std::pair<std::string, std::string>> GetRoleTtsConfig(
+        const std::string& role_id) const;
+
+    /// 角色绑定的 provider 名（加锁；空表示使用默认）
+    std::string GetRoleProviderName(const std::string& role_id) const;
 
     /// 列出所有角色
     std::vector<std::string> ListRoles() const;
@@ -55,11 +64,23 @@ public:
                               const std::string& owner_id = "",
                               SessionType session_type = SessionType::kDirect);
 
-    /// 向指定会话发送消息（同步）
-    std::string SendToSession(const std::string& session_id,
-                              const std::string& message,
-                              const std::string& sender_id = "",
-                              const std::string& sender_name = "");
+    /// 向指定会话发送消息（同步，结果通过 output callback / session 状态获取）
+    void SendToSession(const std::string& session_id,
+                       const std::string& message,
+                       const std::string& sender_id = "",
+                       const std::string& sender_name = "");
+
+    /// 向指定会话发送消息（同步，随附图片）
+    /// image_paths 在本调用内、持会话锁设置给瞬时附件位 —— 与 Loop 取图同锁，
+    /// 不留给调用方先设后发的竞态窗口
+    void SendToSession(const std::string& session_id,
+                       const std::string& message,
+                       const std::vector<std::string>& image_paths,
+                       const std::string& sender_id = "",
+                       const std::string& sender_name = "");
+
+    /// 每轮结束后是否清掉历史图片块（NutriBot 打开；图片只服务当轮）
+    void SetClearImagesAfterTurn(bool enabled) { clear_images_after_turn_ = enabled; }
 
     /// 向指定会话发送消息（异步，不阻塞）
     void SendToSessionAsync(const std::string& session_id,
@@ -131,8 +152,9 @@ public:
 
     void Initialize(ToolExecutorCallback tool_executor);
 
-    /// 设置工具执行器
-    void SetToolExecutor(ToolExecutorCallback tool_executor);
+    /// 重新从配置目录加载角色（重算 role.tools）。
+    /// 产品在注册完外部工具、创建会话之前调用；运行期不要调用。
+    void ReloadRoles();
 
     /// 设置输出回调（清空已有回调后添加——兼容旧调用，单前端语义）
     void SetOutputCallback(SessionOutputCallback callback);
@@ -148,6 +170,7 @@ private:
     std::unordered_map<std::string, std::unique_ptr<AgentSession>> sessions_;
 
     ToolExecutorCallback tool_executor_;
+    bool clear_images_after_turn_ = false;
 
     /// 多前端输出回调注册表（session 通过扇出 lambda 遍历）
     std::vector<SessionOutputCallback> output_callbacks_;

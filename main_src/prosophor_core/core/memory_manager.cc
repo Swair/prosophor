@@ -561,7 +561,7 @@ void MemoryManager::SaveDailyMemory(const std::string& content) {
     auto file = mem_dir / (date_str + ".md");
     if (!WriteFile(file.string(), e.str(), true))
         throw std::runtime_error("Failed to write to memory file: " + file.string());
-    spdlog::debug("Saved memory entry to {}", file.string());
+    LOG_DEBUG("Saved memory entry to {}", file.string());
 }
 
 void MemoryManager::StartFileWatcher() {

@@ -9,7 +9,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "config/config.h"
+#include "prosophor_core/public/config.h"
 #include "web_server/group_store.h"
 #include "web_server/user_store.h"
 

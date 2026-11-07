@@ -10,10 +10,10 @@ namespace prosophor {
 
 /// Represents a content block in a message
 struct ContentSchema {
-    std::string type;        // "text" | "tool_use" | "tool_result" | "thinking"
+    std::string type;        // "text" | "tool_use" | "tool_result" | "thinking" | "image"
     std::string text;        // For text/thinking blocks
     std::string name;        // For tool_use blocks
-    nlohmann::json input;    // For tool_use blocks
+    nlohmann::json input;    // For tool_use blocks; image 块存 {"path": <文件路径>}
     std::string tool_use_id; // For tool_result blocks
     std::string content;     // For tool_result blocks
     std::string signature;   // For thinking blocks (required by API)
@@ -32,8 +32,9 @@ struct MessageSchema {
     std::string role;
     std::vector<ContentSchema> content;
     std::string summary;  // Running summary carried across requests (updated by LLM on each turn)
-    std::string sender_id;    // IM 发送者 ID(飞书 open_id);群聊必填,私聊可空(空按 owner 兜底)
-    std::string sender_name;  // 展示名,可空
+    std::string sender_id;    // 本条消息的发言成员用户 ID(群聊=发言的群成员,非群 ID;飞书 open_id);
+                              // 群聊必填,私聊/本地可空(空=未提供 IM 身份,记忆按 owner 兜底)
+    std::string sender_name;  // 发言成员展示名,可空(当前不写入 prompt/JSONL)
 
     MessageSchema() = default;
     MessageSchema(std::string r, std::string text) : role(std::move(r)) {
@@ -61,6 +62,17 @@ struct MessageSchema {
         return r;
     }
 
+    /// 仅正文 text 块（不含 thinking），用于把回复交给调用方/TTS。
+    std::string reply_text() const {
+        std::string r;
+        for (const auto& b : content) {
+            if (b.type != "text" || b.text.empty()) continue;
+            if (!r.empty()) r += "\n\n";
+            r += b.text;
+        }
+        return r;
+    }
+
     // Convenience methods for building message content
     void AddTextContent(std::string text) {
         content.push_back({"text", std::move(text), "", "", {}, "", "", false});
@@ -68,6 +80,14 @@ struct MessageSchema {
 
     void AddThinkingContent(std::string text, std::string sig = "") {
         content.push_back({"thinking", std::move(text), "", "", {}, "", std::move(sig), false});
+    }
+
+    /// 图像内容块（多模态模型专用）：path 为本地图像文件路径。
+    /// 纯文本 provider 的序列化路径不识别本块 —— 由调用方保证只发给多模态 provider。
+    void AddImageContent(std::string path) {
+        content.push_back({"image", "", "",
+                           nlohmann::json{{"path", std::move(path)}},
+                           "", "", "", false});
     }
 
     void AddToolUseContent(const std::string& id, const std::string& name, nlohmann::json input) {

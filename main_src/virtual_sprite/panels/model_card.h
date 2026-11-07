@@ -1,7 +1,7 @@
 #pragma once
 
 #include <string>
-#include "config/config.h"
+#include "prosophor_core/public/config.h"
 #include "media_engine/media_engine.h"
 
 namespace prosophor {

@@ -358,9 +358,9 @@ Prosophor 将所有 LLM 供应商抽象到统一接口之后，支持在会话�
 - **enable_summary**：贝尔曼衰减对话摘要开关
 - **providers**：每个供应商类型（anthropic、openai、ollama、llamacpp）映射到一个**条目数组**。每个条目有自己的 api_key、base_url、timeout 和按名称索引的 agent 配置映射。每个 agent 配置指定模型名、温度、max_tokens、context_window 以及是否启用思考模式。
 - **local_models**：llamacpp 供应商配置：model_path、n_gpu_layers（-1=全部 GPU，0=仅 CPU）、n_threads（0=自动检测）、context_size、auto_start 等
-- **tts**：Edge-TTS 配置（语音、语言、速度）
-- **asr**：Whisper ASR 配置（模型路径、语言、线程数、按键说话键）
-- **vad**：Silero VAD 模型路径
+- **tts**：本地 TTS 配置 —— MeloTTS（Windows 走 sherpa-onnx；NutriBot 走 aidvoice NPU）
+- **asr**：本地 ASR 配置 —— SenseVoice（Windows 走 sherpa-onnx；NutriBot 走 aidvoice NPU），含模型目录、语言、线程数、按键说话
+- **vad**：VAD 后端与参数（桌面 WebRTC，NutriBot 能量 VAD）
 - **security**：包含 permission_level（auto、default 或 bypass）和 allow_local_execute 开关
 
 ### 本地模型设置
@@ -439,8 +439,8 @@ VirtualSprite（单例）
 | **多精灵** | 每个精灵是一个透明叠加窗口，拥有独立的 AgentEngine 会话 |
 | **语音气泡** | 云状对话框，含标题栏、消息、输入区、发送按钮、调整手柄 |
 | **角色动画** | 状态驱动的宠物动画（9 种动作类型） |
-| **TTS 音频** | Edge-TTS 语音合成，角色语音输出 |
-| **语音输入** | Whisper ASR，按键说话 + VAD（Silero） |
+| **TTS 音频** | 离线 MeloTTS 语音合成（Windows 走 sherpa-onnx），角色语音输出 |
+| **语音输入** | 离线 SenseVoice ASR，按键说话 + VAD（Windows 走 sherpa-onnx） |
 | **SDL 聊天窗** | 中央聊天面板，消息历史 + 输入 |
 
 ### UI 组件
@@ -667,16 +667,17 @@ prosophor
 ```
 git clone https://github.com/Swair/prosophor.git
 cd prosophor
-make build          # Linux/macOS
-make build_win      # Windows（MinGW，Vulkan，无 SDL）
+make build_tui            # TUI（默认 full；仅远程 API 用 _fast）
+make build_sdl            # SDL 桌面精灵（默认 full；仅远程 API 用 _fast）
+make build_web            # Web 服务端
 ```
 
 或手动：
 
 ```
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc) && make install
+mkdir -p build/tui_full && cd build/tui_full
+cmake ../.. -DCMAKE_BUILD_TYPE=Release
+cmake --build . --parallel $(nproc) && cmake --install .
 ```
 
 ### 构建选项
@@ -686,32 +687,35 @@ make -j$(nproc) && make install
 | `PROSOPHOR_BUILD_LLAMA` | ON | 构建进程内 llama.cpp 以支持本地 GGUF 推理 |
 | `PROSOPHOR_BUILD_LLAMA_CUDA` | Linux:ON, Win:OFF | llama.cpp CUDA GPU 支持 |
 | `PROSOPHOR_BUILD_LLAMA_VULKAN` | Win:ON, else:OFF | llama.cpp Vulkan GPU 支持 |
-| `PROSOPHOR_BUILD_ASR` | ON | 构建 whisper.cpp ASR 支持 |
+| `PROSOPHOR_BUILD_SHERPA_VOICE` | Win SDL:ON, 其他:OFF | sherpa-onnx 本地 TTS/ASR（MeloTTS + SenseVoice） |
 | `PROSOPHOR_SDL_UI` | OFF | 构建 SDL 桌面精灵 UI（需要 SDL3 开发库） |
 
-### 构建变体（Windows Makefile）
+### 构建变体（Makefile）
 
 | 目标 | 说明 |
 |------|------|
-| `build_win_tui_fast` | 仅终端，仅远程 API（无 llama/ASR），最快构建 |
-| `build_win_tui_full` | 终端 + 本地模型 + ASR |
-| `build_win_sdl_fast` | 桌面精灵，仅远程 API |
-| `build_win_sdl_full` | 桌面精灵 + 全部功能 |
+| `build_tui_fast` | 仅终端，仅远程 API（无本地模型），最快构建 |
+| `build_tui_full` | 终端 + 本地模型 |
+| `build_sdl_fast` | 桌面精灵，仅远程 API |
+| `build_sdl_full` | 桌面精灵 + 本地模型 |
+| `build_web` | Web 服务端 |
 
-### 打包与发布
+目标名不区分平台：Makefile 按主机自动选择实现（Unix → CMake + make，默认 CUDA；Windows → MSYS2/MinGW + Ninja，默认 Vulkan）。每个变体都有配套的 `run_<变体>` 和 `clean_<变体>` 目标，例如 `make run_sdl_full`。
+
+### 打包与发布（仅 Windows）
 
 | 目标 | 说明 |
 |------|------|
-| `package` | 构建 + NSIS 安装包（需要 MSYS2/MinGW） |
-| `deploy` | 打包 + 发布到 GitHub Releases（需要 `gh` CLI） |
-| `deploy_all` | 发布到 GitHub + Gitee（Gitee 需要 `GITEE_TOKEN`） |
+| `package_sdl_full` / `package_sdl_fast` | 构建 + NSIS 安装包（需要 MSYS2/MinGW） |
+| `deploy_sdl_full` / `deploy_sdl_fast` | 打包 + 发布到 GitHub Releases（需要 `gh` CLI） |
+| `deploy_all_sdl_full` / `deploy_all_sdl_fast` | 发布到 GitHub + Gitee（Gitee 需要 `GITEE_TOKEN`） |
 
 发布说明自动从 `CHANGELOG.md` 提取对应版本的内容，找不到时回退到 `--generate-notes`。
 
 ### 测试
 
 ```
-make test
+make tests
 ```
 
 或：

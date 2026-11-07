@@ -5,7 +5,7 @@
 
 #include <algorithm>
 
-#include "agent_engine.h"
+#include "prosophor_core/public/agent_engine.h"
 #include "common/log_wrapper.h"
 #include "web_server/web_gateway.h"
 #include "web_server/web_channel.h"
